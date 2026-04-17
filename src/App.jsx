@@ -569,10 +569,10 @@ export default function App(){
   // Sidebar inputs display and accept values in the currently selected unit system,
   // converting to/from SI via uv()/uvI(). This guarantees that toggling SI↔ENG
   // leaves calculations and chart axes self-consistent.
-  const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.57);const[T0,setT0]=useState(600);const[P,setP]=useState(10);const[units,setUnits]=useState("SI");
+  const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.52);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("English");
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
-  const[tau_psr,setTauPsr]=useState(2);const[L_pfr,setLpfr]=useState(0.5);const[V_pfr,setVpfr]=useState(20);
-  const[measO2,setMeasO2]=useState(3.0);const[measCO2,setMeasCO2]=useState(10.0);
+  const[tau_psr,setTauPsr]=useState(2);const[L_pfr,setLpfr]=useState(0.1036);const[V_pfr,setVpfr]=useState(20);
+  const[measO2,setMeasO2]=useState(14.0);const[measCO2,setMeasCO2]=useState(3.0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
   const[showPricing,setShowPricing]=useState(false);
