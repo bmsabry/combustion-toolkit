@@ -587,7 +587,7 @@ export default function App(){
 
   return(
     <UnitCtx.Provider value={units}>
-      <div style={{fontFamily:"'Barlow','Segoe UI',sans-serif",background:C.bg,color:C.txt,minHeight:"100vh"}}>
+      <div style={{fontFamily:"'Barlow','Segoe UI',sans-serif",background:C.bg,color:C.txt,minHeight:"100vh",display:"flex",flexDirection:"column"}}>
         <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700;800&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet"/>
         <HelpModal show={showHelp} onClose={()=>setShowHelp(false)}/>
         <PricingModal show={showPricing} onClose={()=>setShowPricing(false)}/>
@@ -620,9 +620,9 @@ export default function App(){
           <button onClick={()=>setShowPricing(true)} style={{padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",color:C.bg,background:C.accent,border:"none",borderRadius:6,cursor:"pointer",letterSpacing:".7px",whiteSpace:"nowrap"}}>VIEW PRICING →</button>
         </div>
 
-        <div style={{display:"flex",minHeight:"calc(100vh - 150px)"}}>
+        <div style={{display:"flex",flex:"1 1 auto",minHeight:0}}>
           {/* SIDEBAR */}
-          <div style={{width:255,flexShrink:0,borderRight:`1px solid ${C.border}`,padding:"12px 10px",overflowY:"auto",maxHeight:"calc(100vh - 150px)",background:`${C.bg}CC`}}>
+          <div style={{width:255,flexShrink:0,borderRight:`1px solid ${C.border}`,padding:"12px 10px",overflowY:"auto",background:`${C.bg}CC`}}>
             <div style={{...hs.box,marginBottom:10,background:`${C.accent2}08`,borderColor:`${C.accent2}18`}}>
               <strong style={{color:C.accent2,fontSize:11}}>📌 Quick Start:</strong> <span style={{fontSize:10}}>Select a fuel preset below (e.g., "Pipeline NG"), set your equivalence ratio and conditions, then explore each tab. All panels share these settings.</span></div>
             <CompEditor title="Fuel (mol%)" comp={fuel} setComp={setFuel} presets={FUEL_PRESETS} speciesList={FUEL_SP} accent={C.accent2} initialPreset="Pipeline NG (US)"
@@ -658,7 +658,7 @@ export default function App(){
           </div>
 
           {/* CONTENT */}
-          <div style={{flex:1,padding:"12px 16px",overflowY:"auto",maxHeight:"calc(100vh - 150px)"}}>
+          <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
             {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar}/>}
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr}/>}
@@ -668,10 +668,10 @@ export default function App(){
         </div>
 
         {/* FOOTER */}
-        <div style={{borderTop:`1px solid ${C.border}`,background:C.bg}}>
+        <div style={{borderTop:`1px solid ${C.border}`,background:C.bg,flexShrink:0}}>
           <div style={{padding:"10px 20px",borderBottom:`1px solid ${C.border}`}}>
-            <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.5,textAlign:"justify"}}>
-              <span style={{color:C.accent,fontWeight:700}}>DISCLAIMER & LIMITATION OF LIABILITY:</span> This software and all calculations, results, charts, and outputs generated herein ("the Software") are provided on an <span style={{fontWeight:700}}>"AS IS"</span> and <span style={{fontWeight:700}}>"AS AVAILABLE"</span> basis for <span style={{fontWeight:700}}>educational, informational, and preliminary-estimation purposes only</span>. All results are best-effort engineering approximations derived from reduced-order models, simplified kinetics, and correlations that may deviate materially from real-world behavior, detailed CFD, or high-fidelity chemistry solvers. ProReadyEngineer LLC and its owners, officers, employees, affiliates, and contributors make <span style={{fontWeight:700}}>NO REPRESENTATIONS OR WARRANTIES</span> of any kind, express or implied, including but not limited to warranties of accuracy, completeness, reliability, merchantability, fitness for a particular purpose, or non-infringement. Under <span style={{fontWeight:700}}>NO CIRCUMSTANCES</span> shall ProReadyEngineer LLC or any associated party be liable for any direct, indirect, incidental, special, consequential, exemplary, or punitive damages, losses, injuries, costs, or claims (including lost profits, equipment damage, design failures, regulatory non-compliance, or safety incidents) arising from or related to the use of, reliance upon, or inability to use the Software, even if advised of the possibility of such damages. The Software is <span style={{fontWeight:700}}>NOT CERTIFIED</span> for design, construction, permitting, regulatory compliance, emissions reporting, safety-critical, or commercial decision-making. Users assume all risk and are solely responsible for independently verifying every result with qualified licensed engineers, validated software, experimental measurements, and applicable codes and standards before making any engineering, operational, financial, or safety decision. By using the Software you acknowledge and agree to these terms.
+            <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.55,textAlign:"justify",maxWidth:1400,margin:"0 auto"}}>
+              <span style={{color:C.accent,fontWeight:700,letterSpacing:".5px"}}>DISCLAIMER &amp; LIMITATION OF LIABILITY —</span> This software and all results herein (&quot;the Software&quot;) are provided <span style={{fontWeight:700}}>&quot;AS IS&quot;</span> without warranties of any kind, express or implied, for <span style={{fontWeight:700}}>educational and preliminary-estimation purposes only</span>. Outputs are best-effort approximations from reduced-order models and may deviate materially from real-world behavior or high-fidelity CFD / chemistry solvers. ProReadyEngineer LLC, its owners, employees, and contributors disclaim all liability for any direct, indirect, incidental, consequential, or punitive damages, losses, or claims arising from use of or reliance on the Software. Not certified for design, permitting, regulatory, emissions-reporting, or safety-critical decisions. Users assume all risk and must independently verify every result with qualified licensed engineers, validated software, and applicable codes and standards before any engineering or operational decision. By using the Software you accept these terms.
             </div>
           </div>
           <div style={{padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
