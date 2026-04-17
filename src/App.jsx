@@ -310,10 +310,10 @@ function CompEditor({title,comp,setComp,presets,speciesList,accent,helpText,init
       {helpText&&<div style={{fontSize:9.5,color:C.txtMuted,lineHeight:1.5,marginBottom:6,fontStyle:"italic"}}>{helpText}</div>}
       <select style={S.sel} value={preset} onChange={e=>loadPreset(e.target.value)}>
         <option value="">— Select a Preset or Enter Custom —</option>{Object.keys(presets).map(k=><option key={k} value={k}>{k}</option>)}</select>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 8px",marginTop:7}}>
-        {speciesList.map(sp=>(<div key={sp} style={{display:"flex",alignItems:"center",gap:4}}>
-          <label style={{fontSize:11.5,color:C.txtDim,fontFamily:"monospace",width:40,textAlign:"right",flexShrink:0}}>{fmt(sp)}</label>
-          <input type="number" step="0.1" min="0" max="100" value={comp[sp]||""} placeholder="0" onChange={e=>{setComp(prev=>({...prev,[sp]:Math.max(0,parseFloat(e.target.value)||0)}));setPreset("");}} style={{...S.inp,padding:"4px 5px",fontSize:11,width:"100%"}}/></div>))}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 6px",marginTop:7}}>
+        {speciesList.map(sp=>(<div key={sp} style={{display:"flex",alignItems:"center",gap:3,minWidth:0}}>
+          <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",width:30,textAlign:"right",flexShrink:0}}>{fmt(sp)}</label>
+          <input type="number" step="0.1" min="0" max="100" value={comp[sp]||""} placeholder="0" onChange={e=>{setComp(prev=>({...prev,[sp]:Math.max(0,parseFloat(e.target.value)||0)}));setPreset("");}} style={{...S.inp,padding:"4px 4px",fontSize:11,width:"100%",minWidth:0,textAlign:"right"}}/></div>))}
       </div>
       <div style={{marginTop:5,fontSize:10,fontFamily:"monospace",color:Math.abs(total-100)<0.1?C.good:C.accent2,textAlign:"right"}}>Σ={total.toFixed(1)}%{Math.abs(total-100)>0.1?" ⚠ Must sum to 100%":""}</div>
     </div>}</div>);}
