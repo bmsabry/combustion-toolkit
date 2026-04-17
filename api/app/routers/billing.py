@@ -44,6 +44,17 @@ TIER_TO_PRICE = {
 
 @router.get("/subscription", response_model=SubscriptionOut)
 def get_subscription(user: User = Depends(get_current_user)) -> SubscriptionOut:
+    # Admins get a synthetic "admin" tier that unlocks everything regardless of
+    # the underlying Stripe subscription state.
+    if user.is_admin:
+        return SubscriptionOut(
+            tier="admin",
+            status="active",
+            current_period_end=None,
+            cancel_at_period_end=False,
+            has_online_access=True,
+            has_download_access=True,
+        )
     sub = user.subscription
     if not sub:
         return SubscriptionOut(
@@ -133,18 +144,22 @@ def generate_new_license(
     db: Session = Depends(get_db),
 ) -> LicenseKeyWithValue:
     sub = user.subscription
-    if not sub or not sub.has_download_access:
+    if not user.is_admin and (not sub or not sub.has_download_access):
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail="An active subscription with download access is required.",
         )
+    # Admins: use FULL tier with a generous 1-year expiry.
+    tier = SubscriptionTier.FULL if user.is_admin else sub.tier
+    default_expiry = datetime.now(timezone.utc) + timedelta(days=365)
+    sub_expiry = sub.current_period_end if sub else None
     key = generate_license_key()
     lk = LicenseKey(
         user_id=user.id,
         key_hash=hash_license_key(key),
         key_prefix=key[:8],
-        tier=sub.tier,
-        expires_at=sub.current_period_end or (datetime.now(timezone.utc) + timedelta(days=365)),
+        tier=tier,
+        expires_at=sub_expiry or default_expiry,
     )
     db.add(lk)
     db.commit()

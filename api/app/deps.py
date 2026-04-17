@@ -50,6 +50,8 @@ def get_current_user_optional(
 
 
 def require_full_subscription(user: User = Depends(get_current_user)) -> User:
+    if user.is_admin:
+        return user
     sub = user.subscription
     if not sub or not sub.has_online_access:
         raise HTTPException(
@@ -60,6 +62,8 @@ def require_full_subscription(user: User = Depends(get_current_user)) -> User:
 
 
 def require_any_paid(user: User = Depends(get_current_user)) -> User:
+    if user.is_admin:
+        return user
     sub = user.subscription
     if not sub or not sub.is_active:
         raise HTTPException(

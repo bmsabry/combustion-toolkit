@@ -92,7 +92,8 @@ export function AccountPanel({ C }) {
           </div>
         </div>
         <div style={{fontSize:18,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",color:tier === "free" ? C.txtMuted : C.accent,marginBottom:4}}>
-          {tier === "full" ? "Download + Online — $150/yr"
+          {tier === "admin" ? "Admin — Free Lifetime Access"
+            : tier === "full" ? "Download + Online — $150/yr"
             : tier === "download" ? "Accurate Download — $100/yr"
             : "Free Tier"}
         </div>
@@ -101,6 +102,7 @@ export function AccountPanel({ C }) {
           {tier === "free" && "Upgrade to unlock accurate Cantera-backed calculations and the downloadable desktop app."}
           {tier === "download" && "You can download the desktop app. Upgrade to Full for online Cantera API access as well."}
           {tier === "full" && "Full access enabled. Use Accurate Mode in any panel to run exact Cantera chemistry."}
+          {tier === "admin" && "Admin account — all features unlocked (online Cantera API + desktop license keys) at no charge."}
         </div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {tier === "free" && (
@@ -112,7 +114,7 @@ export function AccountPanel({ C }) {
           {tier === "download" && (
             <Btn primary onClick={() => subscribe("full")}>Upgrade to Full ($150/yr)</Btn>
           )}
-          {active && <Btn onClick={manage}>Manage Billing</Btn>}
+          {active && tier !== "admin" && <Btn onClick={manage}>Manage Billing</Btn>}
         </div>
       </Box>
 

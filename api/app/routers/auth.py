@@ -29,6 +29,16 @@ def _token_response(user_id: str) -> TokenResponse:
     )
 
 
+def _maybe_promote_admin(user: User) -> bool:
+    """If the user's email is in settings.admin_emails_list, flip is_admin on. Returns whether it changed."""
+    if user.is_admin:
+        return False
+    if user.email.lower() in settings.admin_emails_list:
+        user.is_admin = True
+        return True
+    return False
+
+
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def signup(body: SignupRequest, db: Session = Depends(get_db)) -> TokenResponse:
     existing = db.query(User).filter(User.email == body.email.lower()).first()
@@ -39,6 +49,7 @@ def signup(body: SignupRequest, db: Session = Depends(get_db)) -> TokenResponse:
         password_hash=hash_password(body.password),
         full_name=body.full_name,
     )
+    _maybe_promote_admin(user)
     db.add(user)
     db.flush()  # get user.id
     sub = Subscription(
@@ -58,6 +69,8 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
+    if _maybe_promote_admin(user):
+        db.commit()
     return _token_response(user.id)
 
 

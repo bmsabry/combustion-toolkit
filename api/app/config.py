@@ -42,9 +42,17 @@ class Settings(BaseSettings):
     # Desktop license signing
     license_signing_key: str = Field(default="")  # HMAC secret for offline license validation
 
+    # Admin (free lifetime access, bypasses the Stripe gate)
+    admin_emails: str = Field(default="")  # comma-separated list; auto-promoted on signup/login
+    admin_secret: str = Field(default="")  # shared secret for /admin/promote runtime endpoint
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [o.strip() for o in self.backend_cors_origins.split(",") if o.strip()]
+
+    @property
+    def admin_emails_list(self) -> List[str]:
+        return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
 
     @property
     def stripe_configured(self) -> bool:
