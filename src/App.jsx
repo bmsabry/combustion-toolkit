@@ -267,7 +267,7 @@ function calcCombustorNetwork(fuel,ox,phi,T_in,P_atm,tau_psr_ms,L_pfr,v_pfr){
   const fin=pfr[pfr.length-1];
   return{T_psr,conv_psr:conv_psr*100,T_ad:T_eq,
     NO_ppm_exit:fin.NO_ppm,NO_ppm_15O2:fin.NO_ppm*corrF,
-    CO_ppm_exit:fin.CO_ppm,O2_pct:O2_dry,pfr,tau_psr_ms};
+    CO_ppm_exit:fin.CO_ppm,O2_pct:O2_dry,pfr,tau_psr_ms,tau_pfr_ms:L_pfr/Math.max(v_pfr,1e-6)*1000,tau_total_ms:tau_psr_ms+L_pfr/Math.max(v_pfr,1e-6)*1000};
 }
 
 /* ══════════════════ EXCEL EXPORT ══════════════════ */
@@ -472,6 +472,8 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV}){
         <M l="NOx @ 15% O₂" v={net.NO_ppm_15O2.toFixed(1)} u="ppmvd" c={C.strong} tip="NOx corrected to 15% O₂ dry — the standard regulatory reporting basis for gas turbines and boilers."/>
         <M l="CO at Exit" v={net.CO_ppm_exit.toFixed(1)} u="ppm" c={C.accent2} tip="Carbon monoxide at exit. High CO indicates incomplete combustion — reduce φ, increase τ, or lengthen PFR."/>
         <M l="Exhaust O₂ (dry)" v={net.O2_pct.toFixed(1)} u="%" c={C.accent3} tip="Residual oxygen in exhaust on a dry basis. Used for emissions correction and combustion efficiency."/>
+        <M l="τ_PFR" v={net.tau_pfr_ms.toFixed(2)} u="ms" c={C.accent} tip="PFR residence time = L_PFR / V_PFR. Sets the time available for CO burnout and post-flame NOx growth."/>
+        <M l="τ_total (PSR+PFR)" v={net.tau_total_ms.toFixed(2)} u="ms" c={C.accent2} tip="Total combustor residence time = τ_PSR + τ_PFR. Typical industrial gas turbine: 5–30 ms."/>
       </div></div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>PFR Temperature Profile</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Temperature along the PFR. Slight decline from radiative/convective heat losses.</div><Chart data={pfrDisp} xK="x" yK="T" xL={`Position (${uu(units,"lenSmall")})`} yL={`Temperature (${uu(units,"T")})`} color={C.accent2}/></div>
