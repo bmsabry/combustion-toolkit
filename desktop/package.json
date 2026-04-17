@@ -1,0 +1,70 @@
+{
+  "name": "combustion-toolkit-desktop",
+  "version": "0.1.0",
+  "description": "Combustion Toolkit — desktop edition with bundled Cantera solver",
+  "author": "Bassam Sabry <bmsabry@gmail.com>",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "CTK_DEV_UI=http://localhost:5173 electron .",
+    "build:ui": "cd .. && npm run build && rm -rf desktop/ui && cp -r dist desktop/ui",
+    "build:solver": "bash build-solver.sh",
+    "build:all": "npm run build:ui && npm run build:solver",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:all": "electron-builder -mwl"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {},
+  "build": {
+    "appId": "com.bmsabry.combustion-toolkit",
+    "productName": "Combustion Toolkit",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "activation.html",
+      "ui/**/*",
+      "!**/__pycache__",
+      "!**/.DS_Store"
+    ],
+    "extraResources": [
+      {
+        "from": "solver-dist/",
+        "to": "solver/",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] }
+      ],
+      "category": "public.app-category.education",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] }
+      ],
+      "category": "Science"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

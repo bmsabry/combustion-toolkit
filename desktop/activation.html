@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Activate Combustion Toolkit</title>
+  <style>
+    body { margin:0; background:#0a0e1a; color:#e8eaf0; font-family: 'Barlow','Segoe UI',sans-serif; padding:32px; }
+    h1 { font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:26px; letter-spacing:-.3px; color:#00d4ff; margin:0 0 4px; }
+    .sub { font-size:12px; color:#8890a3; margin:0 0 22px; }
+    label { display:block; font-size:10.5px; color:#8890a3; font-family:monospace; letter-spacing:1px; text-transform:uppercase; margin-bottom:4px; }
+    input { width:100%; box-sizing:border-box; padding:10px 12px; background:#151a28; color:#e8eaf0; border:1px solid #232a3a; border-radius:6px; font-family:monospace; font-size:14px; letter-spacing:1px; outline:none; }
+    input:focus { border-color:#00d4ff; }
+    button { margin-top:18px; width:100%; padding:11px; background:#00d4ff; color:#0a0e1a; border:none; border-radius:6px; font-family:'Barlow Condensed',sans-serif; font-size:13px; font-weight:700; letter-spacing:.8px; cursor:pointer; }
+    button:disabled { opacity:.55; cursor:wait; }
+    button.secondary { background:transparent; color:#8890a3; border:1px solid #232a3a; margin-top:10px; }
+    .err { margin-top:14px; padding:10px 12px; background:#ff6b6b15; border:1px solid #ff6b6b40; color:#ff6b6b; border-radius:6px; font-family:monospace; font-size:11.5px; }
+    .ok { margin-top:14px; padding:10px 12px; background:#00d4ff15; border:1px solid #00d4ff40; color:#00d4ff; border-radius:6px; font-family:monospace; font-size:11.5px; }
+    .hint { font-size:11px; color:#8890a3; margin-top:12px; line-height:1.55; }
+    a { color:#ff7b00; text-decoration:none; font-weight:600; }
+  </style>
+</head>
+<body>
+  <h1>Activate Combustion Toolkit</h1>
+  <p class="sub">Enter the license key from your account dashboard to unlock the offline Cantera solver.</p>
+
+  <label>License Key</label>
+  <input id="key" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" autofocus autocomplete="off" spellcheck="false" />
+
+  <button id="go">Activate</button>
+  <button id="skip" class="secondary">Cancel / Use Free Web Version</button>
+
+  <div id="msg"></div>
+
+  <p class="hint">
+    Don't have a key? Generate one from your
+    <a href="#" id="acct">account dashboard</a> after subscribing to the desktop tier.
+    Each key supports up to 3 device activations.
+  </p>
+
+  <script>
+    const keyEl = document.getElementById("key");
+    const goBtn = document.getElementById("go");
+    const skipBtn = document.getElementById("skip");
+    const msgEl = document.getElementById("msg");
+    const acctLink = document.getElementById("acct");
+
+    acctLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      window.ctk.openExternal("https://combustion-toolkit.onrender.com/#account");
+    });
+
+    skipBtn.addEventListener("click", () => window.ctk.skipActivation());
+
+    goBtn.addEventListener("click", async () => {
+      const key = keyEl.value.trim();
+      if (!key) { msgEl.innerHTML = '<div class="err">Enter a license key.</div>'; return; }
+      msgEl.innerHTML = '<div class="ok">Contacting server…</div>';
+      goBtn.disabled = true;
+      try {
+        const res = await window.ctk.activateLicense(key);
+        // res has { valid, tier, expires_at, signed_token, message }
+        msgEl.innerHTML = '<div class="ok">Activated. Launching app…</div>';
+        window.ctk.submitActivation(res);
+      } catch (e) {
+        msgEl.innerHTML = `<div class="err">${(e && e.message) || e}</div>`;
+        goBtn.disabled = false;
+      }
+    });
+    keyEl.addEventListener("keydown", (e) => { if (e.key === "Enter") goBtn.click(); });
+  </script>
+</body>
+</html>
