@@ -83,6 +83,8 @@ def calc_combustor(
         body.L_pfr_m,
         body.V_pfr_m_s,
         body.profile_points,
+        body.T_fuel_K,
+        body.T_air_K,
     )
     return CombustorResponse(**result)
 

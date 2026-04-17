@@ -510,15 +510,16 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,velocity,setVelocity,Lchar,setLchar})
       <div style={S.card}><div style={S.cardT}>Flame Speed vs Unburned Temperature</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>S_L increases strongly with preheat temperature (exponent α ≈ 1.5–2.0).</div><Chart data={tSw} xK="T" yK="SL" xL={`Unburned Temperature (${uu(units,"T")})`} yL={`Flame Speed (${uu(units,"SL")})`} color={C.accent}/></div>
     </div></div>);}
 
-function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV}){
+function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,setTfuel,Tair,setTair}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   const localNet=useMemo(()=>calcCombustorNetwork(fuel,ox,phi,T0,P,tau,Lpfr,Vpfr),[fuel,ox,phi,T0,P,tau,Lpfr,Vpfr]);
-  const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60},accurate);
+  const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60,T_fuel_K:Tfuel,T_air_K:Tair},accurate);
   // Adapt backend response to local combustor format.
   const backendNet=bk.data?{
     T_ad:bk.data.T_exit,T_psr:bk.data.T_psr,conv_psr:bk.data.conv_psr,
-    NO_ppm_exit:bk.data.NO_ppm_vd_exit,NO_ppm_15O2:bk.data.NO_ppm_15O2,
+    T_mixed_inlet_K:bk.data.T_mixed_inlet_K??T0,
+    NO_ppm_exit:bk.data.NO_ppm_vd_exit,NO_ppm_psr:bk.data.NO_ppm_vd_psr,NO_ppm_15O2:bk.data.NO_ppm_15O2,
     CO_ppm_exit:bk.data.CO_ppm_vd_exit,CO_ppm_15O2:bk.data.CO_ppm_15O2,
     O2_pct:bk.data.O2_pct_dry_exit??0,  // dry-basis exhaust O2 from Cantera
     tau_pfr_ms:bk.data.tau_pfr_ms,tau_total_ms:bk.data.tau_total_ms,
@@ -544,7 +545,15 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV}){
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Primary zone residence time. Typical GT: 1–5 ms. Lower values increase blowout risk but reduce NOx."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>τ_PSR (ms) ⓘ:</label></Tip><input type="number" step={0.1} value={tau} onChange={e=>setTau(+e.target.value||0.1)} style={{...S.inp,width:65}}/></div>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Length of the burnout/dilution zone downstream of the primary zone. Longer = more complete CO burnout but more NOx."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_PFR ({uu(units,"len")}) ⓘ:</label></Tip><input type="number" step={0.1} value={+uv(units,"len",Lpfr).toFixed(4)} onChange={e=>setL(uvI(units,"len",+e.target.value||0.1))} style={{...S.inp,width:65}}/></div>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Mean axial gas velocity in the PFR burnout section. Determines actual residence time in the PFR."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>V_PFR ({uu(units,"vel")}) ⓘ:</label></Tip><input type="number" step={1} value={+uv(units,"vel",Vpfr).toFixed(2)} onChange={e=>setV(uvI(units,"vel",+e.target.value||1))} style={{...S.inp,width:65}}/></div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Fuel inlet temperature (before adiabatic mixing with air). Default = sidebar inlet T. Set lower than air T for cold-fuel / hot-air (e.g., compressor-discharge) designs."><label style={{fontSize:10.5,color:C.orange,fontFamily:"monospace",cursor:"help"}}>T_fuel ({uu(units,"T")}) ⓘ:</label></Tip><input type="number" step={1} value={+uv(units,"T",Tfuel).toFixed(1)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value||300))} style={{...S.inp,width:75,borderColor:`${C.orange}55`}}/></div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Air (oxidizer) inlet temperature before mixing with fuel. Default = sidebar inlet T. Typical hot-section: 550–900 K for compressor discharge."><label style={{fontSize:10.5,color:C.accent3,fontFamily:"monospace",cursor:"help"}}>T_air ({uu(units,"T")}) ⓘ:</label></Tip><input type="number" step={1} value={+uv(units,"T",Tair).toFixed(1)} onChange={e=>setTair(uvI(units,"T",+e.target.value||300))} style={{...S.inp,width:75,borderColor:`${C.accent3}55`}}/></div>
+        <button onClick={()=>{setTfuel(T0);setTair(T0);}} title="Reset T_fuel and T_air to the sidebar inlet T" style={{padding:"3px 10px",fontSize:10,fontWeight:600,color:C.txtDim,background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>=T₀</button>
       </div>
+      {accurate&&backendNet&&Math.abs(backendNet.T_mixed_inlet_K-Tfuel)>0.5&&Math.abs(backendNet.T_mixed_inlet_K-Tair)>0.5&&(
+        <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",marginBottom:8,padding:"4px 8px",background:`${C.accent}08`,border:`1px dashed ${C.accent}40`,borderRadius:4,display:"inline-block"}}>
+          adiabatic mix → T_inlet_PSR = <span style={{color:C.accent,fontWeight:700}}>{uv(units,"T",backendNet.T_mixed_inlet_K).toFixed(1)} {uu(units,"T")}</span>
+        </div>
+      )}
       <svg viewBox="0 0 600 60" style={{width:"100%",maxWidth:600,marginBottom:10}}>
         <defs><linearGradient id="pg1b" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor={C.accent} stopOpacity=".6"/><stop offset="100%" stopColor={C.accent3} stopOpacity=".6"/></linearGradient><linearGradient id="pg2b" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor={C.accent3} stopOpacity=".6"/><stop offset="100%" stopColor={C.accent2} stopOpacity=".6"/></linearGradient></defs>
         <rect x="16" y="10" width="40" height="40" rx="4" fill="none" stroke={C.border} strokeWidth="1.5"/><text x="36" y="28" fill={C.txtDim} fontSize="7.5" textAnchor="middle" fontFamily="monospace">FUEL</text><text x="36" y="38" fill={C.txtDim} fontSize="7.5" textAnchor="middle" fontFamily="monospace">+OX</text><polygon points="58,26 70,30 58,34" fill={C.border}/>
@@ -557,6 +566,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV}){
         <M l="Adiabatic Flame Temperature" v={uv(units,"T",net.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="Adiabatic flame temperature — the theoretical maximum temperature if combustion were complete with no heat loss."/>
         <M l="PSR Exit Temperature" v={uv(units,"T",net.T_psr).toFixed(0)} u={uu(units,"T")} c={C.accent3} tip="Exit temperature of the perfectly stirred reactor (primary zone). Lower than T_ad if residence time is too short."/>
         <M l="PSR Conversion" v={net.conv_psr.toFixed(1)} u="%" c={C.good} tip="Fuel conversion in the PSR. 100% = complete combustion. Values below ~90% indicate approaching blowout."/>
+        {accurate&&backendNet&&<M l="NOx at PSR Exit" v={(backendNet.NO_ppm_psr??0).toFixed(1)} u="ppmvd" c={C.orange} tip="NO concentration leaving the PSR (entering the PFR). Growth between this value and 'NOx at Exit' is pure PFR-stage Zeldovich — small PSR/exit gap means most NOx is formed in the primary zone."/>}
         <M l="NOx at Exit" v={net.NO_ppm_exit.toFixed(1)} u="ppm" c={C.warm} tip="Nitric oxide concentration at combustor exit (wet, actual O₂). Primarily thermal NOx from the Zeldovich mechanism."/>
         <M l="NOx @ 15% O₂" v={net.NO_ppm_15O2.toFixed(1)} u="ppmvd" c={C.strong} tip="NOx corrected to 15% O₂ dry — the standard regulatory reporting basis for gas turbines and boilers."/>
         <M l="CO at Exit" v={net.CO_ppm_exit.toFixed(1)} u="ppm" c={C.accent2} tip="Carbon monoxide at exit (wet, actual O₂). High CO indicates incomplete combustion — reduce φ, increase τ, or lengthen PFR."/>
@@ -671,6 +681,9 @@ export default function App(){
   const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.52);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("ENG");
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
   const[tau_psr,setTauPsr]=useState(2);const[L_pfr,setLpfr]=useState(0.1036);const[V_pfr,setVpfr]=useState(20);
+  // Separate fuel & air inlet temperatures for the combustor (K). Default both to T0 so the
+  // mix degenerates to the single-inlet case until the user overrides either field.
+  const[T_fuel,setTfuel]=useState(810.93);const[T_air,setTair]=useState(810.93);
   const[measO2,setMeasO2]=useState(14.0);const[measCO2,setMeasCO2]=useState(3.0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
@@ -803,7 +816,7 @@ export default function App(){
           <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
             {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar}/>}
-            {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr}/>}
+            {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} Tair={T_air} setTair={setTair}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="props"&&<PropsPanel/>}
             {tab==="account"&&auth.isAuthenticated&&<AccountPanel C={C}/>}

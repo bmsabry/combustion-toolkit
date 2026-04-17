@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Dict, Tuple
 
 import cantera as ct
+import numpy as np
 
 # Species we always want available in the mechanism for typical fuels + air + products
 GRI_MECH = "gri30.yaml"
@@ -64,6 +65,84 @@ def make_gas(fuel_pct: Dict[str, float], ox_pct: Dict[str, float], phi: float, T
     gas.TP = float(T), float(P_bar) * 1e5  # bar -> Pa
     gas.set_equivalence_ratio(float(phi), fuel=fuel_str, oxidizer=ox_str)
     return gas, fuel_str, ox_str
+
+
+def make_gas_mixed(
+    fuel_pct: Dict[str, float],
+    ox_pct: Dict[str, float],
+    phi: float,
+    T_fuel_K: float,
+    T_air_K: float,
+    P_bar: float,
+):
+    """Build a Cantera Solution representing fuel (at T_fuel) and air (at T_air)
+    adiabatically mixed at the target equivalence ratio.
+
+    Returns (gas, fuel_str, ox_str, T_mixed_K). `gas` is at the mixed state
+    (T=T_mixed, composition at phi, pressure=P). If T_fuel == T_air, T_mixed
+    equals that value (degenerate case = previous behavior).
+    """
+    gas = ct.Solution(GRI_MECH)
+    fuel_x = _normalize_to_gri(fuel_pct)
+    ox_x = _normalize_to_gri(ox_pct)
+    fuel_str = ", ".join(f"{k}:{v:.10f}" for k, v in fuel_x.items())
+    ox_str = ", ".join(f"{k}:{v:.10f}" for k, v in ox_x.items())
+    P_Pa = float(P_bar) * 1e5
+
+    # Target mixture composition at phi (composition is T-independent via set_equivalence_ratio)
+    gas.TP = 298.15, P_Pa
+    gas.set_equivalence_ratio(float(phi), fuel=fuel_str, oxidizer=ox_str)
+    X_mix = gas.X.copy()
+
+    # If both streams are at the same temperature, skip enthalpy mixing
+    if abs(float(T_fuel_K) - float(T_air_K)) < 1e-6:
+        gas.TPX = float(T_fuel_K), P_Pa, X_mix
+        return gas, fuel_str, ox_str, float(T_fuel_K)
+
+    # Fuel-stream composition vector (only fuel species, normalized)
+    X_fuel_vec = np.zeros(gas.n_species)
+    for s, v in fuel_x.items():
+        idx = gas.species_index(s)
+        if idx >= 0:
+            X_fuel_vec[idx] = v
+    if X_fuel_vec.sum() <= 0:
+        raise ValueError("Empty fuel composition")
+    X_fuel_vec /= X_fuel_vec.sum()
+
+    # Air-stream composition vector (only oxidizer species, normalized)
+    X_air_vec = np.zeros(gas.n_species)
+    for s, v in ox_x.items():
+        idx = gas.species_index(s)
+        if idx >= 0:
+            X_air_vec[idx] = v
+    if X_air_vec.sum() <= 0:
+        raise ValueError("Empty oxidizer composition")
+    X_air_vec /= X_air_vec.sum()
+
+    # Specific enthalpies of each stream at its own inlet T
+    g_f = ct.Solution(GRI_MECH)
+    g_f.TPX = float(T_fuel_K), P_Pa, X_fuel_vec
+    h_fuel = g_f.enthalpy_mass  # J/kg
+
+    g_a = ct.Solution(GRI_MECH)
+    g_a.TPX = float(T_air_K), P_Pa, X_air_vec
+    h_air = g_a.enthalpy_mass
+
+    # Mass fraction of fuel-stream in the combined mixture (via Cantera's mixture_fraction).
+    # Note: set_equivalence_ratio was already called; mixture_fraction reports Z for the phi mixture.
+    try:
+        Z = float(gas.mixture_fraction(fuel=fuel_str, oxidizer=ox_str, basis="mass"))
+    except Exception:
+        # approximate for unreachable mechs — shouldn't happen with GRI
+        Z = 0.0
+    Y_fuel = Z
+    Y_air = 1.0 - Z
+    h_mix = Y_fuel * h_fuel + Y_air * h_air
+
+    # Mixed state: given (h_mix, P, X_mix) solve for T
+    gas.HPX = h_mix, P_Pa, X_mix
+    T_mixed = float(gas.T)
+    return gas, fuel_str, ox_str, T_mixed
 
 
 def compute_ratios(fuel_pct: Dict[str, float], ox_pct: Dict[str, float], phi: float) -> Tuple[float, float, float, float]:

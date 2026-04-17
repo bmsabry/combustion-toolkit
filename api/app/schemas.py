@@ -150,6 +150,11 @@ class CombustorRequest(BaseCalcRequest):
     L_pfr_m: float = Field(gt=0, description="PFR length in meters")
     V_pfr_m_s: float = Field(gt=0, description="PFR velocity in m/s")
     profile_points: int = Field(default=60, ge=5, le=500)
+    # Optional separate fuel / air inlet temperatures. If provided, the two
+    # streams are mixed adiabatically before entering the PSR. If omitted,
+    # both default to T0 (previous single-inlet behavior).
+    T_fuel_K: Optional[float] = Field(default=None, gt=0, description="Fuel inlet T in K")
+    T_air_K: Optional[float] = Field(default=None, gt=0, description="Air inlet T in K")
 
 
 class CombustorProfilePoint(BaseModel):
@@ -163,6 +168,7 @@ class CombustorProfilePoint(BaseModel):
 class CombustorResponse(BaseModel):
     T_psr: float
     T_exit: float
+    T_mixed_inlet_K: float = 0.0  # adiabatic mix T of fuel+air at PSR inlet
     NO_ppm_vd_psr: float
     NO_ppm_vd_exit: float
     CO_ppm_vd_psr: float
