@@ -164,6 +164,8 @@ def run(
         "CO_ppm_vd_exit": CO_exit,
         "NO_ppm_15O2": NO_15,
         "CO_ppm_15O2": CO_15,
+        "O2_pct_dry_psr": O2_psr,
+        "O2_pct_dry_exit": O2_exit,
         "conv_psr": conv_psr * 100.0,
         "conv_exit": conv_exit * 100.0,
         "tau_psr_ms": tau_psr_s * 1000.0,

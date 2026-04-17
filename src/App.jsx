@@ -520,7 +520,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV}){
     T_ad:bk.data.T_exit,T_psr:bk.data.T_psr,conv_psr:bk.data.conv_psr,
     NO_ppm_exit:bk.data.NO_ppm_vd_exit,NO_ppm_15O2:bk.data.NO_ppm_15O2,
     CO_ppm_exit:bk.data.CO_ppm_vd_exit,CO_ppm_15O2:bk.data.CO_ppm_15O2,
-    O2_pct:0,  // not always returned explicitly
+    O2_pct:bk.data.O2_pct_dry_exit??0,  // dry-basis exhaust O2 from Cantera
     tau_pfr_ms:bk.data.tau_pfr_ms,tau_total_ms:bk.data.tau_total_ms,
     L_psr_cm:bk.data.L_psr_cm,L_total_cm:bk.data.L_total_cm,
     pfr:bk.data.profile||[],fromBackend:true

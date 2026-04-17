@@ -169,6 +169,8 @@ class CombustorResponse(BaseModel):
     CO_ppm_vd_exit: float
     NO_ppm_15O2: float
     CO_ppm_15O2: float
+    O2_pct_dry_psr: float = 0.0
+    O2_pct_dry_exit: float = 0.0
     conv_psr: float
     conv_exit: float
     tau_psr_ms: float
