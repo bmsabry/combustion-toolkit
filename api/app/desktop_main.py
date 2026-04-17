@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import cantera as ct
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .schemas import (
@@ -116,7 +116,7 @@ def create_desktop_app() -> FastAPI:
         return HealthResponse(status="ok", cantera_version=ct.__version__, env="desktop", stripe_configured=False)
 
     @app.post("/calc/aft", response_model=AFTResponse)
-    def calc_aft(body: AFTRequest, _lic=_license_dep) -> AFTResponse:  # noqa: B008
+    def calc_aft(body: AFTRequest, _lic=Depends(_license_dep)) -> AFTResponse:  # noqa: B008
         r = _run(
             aft.run, body.fuel, body.oxidizer, body.phi, body.T0, body.P,
             body.heat_loss_fraction if body.mode == "heat_loss" else 0.0,
@@ -124,12 +124,12 @@ def create_desktop_app() -> FastAPI:
         return AFTResponse(**r)
 
     @app.post("/calc/flame-speed", response_model=FlameSpeedResponse)
-    def calc_flame(body: FlameSpeedRequest, _lic=_license_dep) -> FlameSpeedResponse:  # noqa: B008
+    def calc_flame(body: FlameSpeedRequest, _lic=Depends(_license_dep)) -> FlameSpeedResponse:  # noqa: B008
         r = _run(flame_speed.run, body.fuel, body.oxidizer, body.phi, body.T0, body.P, body.domain_length_m)
         return FlameSpeedResponse(**r)
 
     @app.post("/calc/combustor", response_model=CombustorResponse)
-    def calc_comb(body: CombustorRequest, _lic=_license_dep) -> CombustorResponse:  # noqa: B008
+    def calc_comb(body: CombustorRequest, _lic=Depends(_license_dep)) -> CombustorResponse:  # noqa: B008
         r = _run(
             combustor.run, body.fuel, body.oxidizer, body.phi, body.T0, body.P,
             body.tau_psr_s, body.L_pfr_m, body.V_pfr_m_s, body.profile_points,
@@ -137,7 +137,7 @@ def create_desktop_app() -> FastAPI:
         return CombustorResponse(**r)
 
     @app.post("/calc/exhaust", response_model=ExhaustResponse)
-    def calc_exh(body: ExhaustRequest, _lic=_license_dep) -> ExhaustResponse:  # noqa: B008
+    def calc_exh(body: ExhaustRequest, _lic=Depends(_license_dep)) -> ExhaustResponse:  # noqa: B008
         r = _run(
             exhaust.run, body.fuel, body.oxidizer, body.T0, body.P,
             body.measured_O2_pct_dry, body.measured_CO2_pct_dry, body.combustion_mode,
@@ -145,7 +145,7 @@ def create_desktop_app() -> FastAPI:
         return ExhaustResponse(**r)
 
     @app.post("/calc/props", response_model=PropsResponse)
-    def calc_props(body: PropsRequest, _lic=_license_dep) -> PropsResponse:  # noqa: B008
+    def calc_props(body: PropsRequest, _lic=Depends(_license_dep)) -> PropsResponse:  # noqa: B008
         r = _run(props.run, body.mixture, body.T, body.P)
         return PropsResponse(**r)
 
