@@ -1,10 +1,16 @@
-import { useState, useMemo, useCallback, createContext, useContext } from "react";
+import { useState, useMemo, useCallback, useEffect, createContext, useContext } from "react";
 import * as XLSX from "xlsx";
+import { useAuth, AuthModal } from "./auth.jsx";
+import { AccountPanel } from "./AccountPanel.jsx";
+import * as api from "./api.js";
 
 /* ══════════════════════════════════════════════════════════════
    UNIT SYSTEM
    ══════════════════════════════════════════════════════════════ */
 const UnitCtx = createContext("SI");
+// Accurate Mode: when on AND user has online access, panels route calcs to the backend (Cantera).
+// Otherwise they use the free in-browser models. Exposed via context to avoid prop-drilling.
+const AccurateCtx = createContext({ accurate:false, setAccurate:()=>{}, available:false });
 const UC = {
   SI: { T:{u:"K",from:v=>v,to:v=>v}, P:{u:"atm",from:v=>v,to:v=>v}, vel:{u:"m/s",from:v=>v,to:v=>v}, len:{u:"m",from:v=>v,to:v=>v}, lenSmall:{u:"cm",from:v=>v,to:v=>v}, SL:{u:"cm/s",from:v=>v,to:v=>v}, mass:{u:"kg",from:v=>v,to:v=>v}, energy_mass:{u:"MJ/kg",from:v=>v,to:v=>v}, energy_vol:{u:"MJ/m³",from:v=>v,to:v=>v}, cp:{u:"J/(mol·K)",from:v=>v,to:v=>v}, h_mol:{u:"kJ/mol",from:v=>v,to:v=>v}, s_mol:{u:"J/(mol·K)",from:v=>v,to:v=>v}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"kg/kg",from:v=>v,to:v=>v} },
   ENG: { T:{u:"°F",from:K=>(K-273.15)*9/5+32,to:F=>(F-32)*5/9+273.15}, P:{u:"psia",from:a=>a*14.696,to:p=>p/14.696}, vel:{u:"ft/s",from:m=>m*3.28084,to:f=>f/3.28084}, len:{u:"ft",from:m=>m*3.28084,to:f=>f/3.28084}, lenSmall:{u:"in",from:c=>c/2.54,to:i=>i*2.54}, SL:{u:"ft/s",from:c=>c/30.48,to:f=>f*30.48}, mass:{u:"lb",from:k=>k*2.20462,to:l=>l/2.20462}, energy_mass:{u:"BTU/lb",from:v=>v*429.923,to:v=>v/429.923}, energy_vol:{u:"BTU/scf",from:v=>v*26.839,to:v=>v/26.839}, cp:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, h_mol:{u:"BTU/lbmol",from:v=>v*429.923,to:v=>v/429.923}, s_mol:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"lb/lb",from:v=>v,to:v=>v} }
@@ -344,13 +350,22 @@ function HelpModal({show,onClose}){if(!show)return null;return(<div style={{posi
       <p style={{fontSize:10.5,color:C.txtMuted,marginTop:12}}>Calculations use NASA Glenn thermodynamic polynomials, Gülder flame speed correlations, global Arrhenius kinetics, and extended Zeldovich NOx mechanism. Results are for engineering estimation — detailed CFD and full chemical mechanisms (e.g., GRI-Mech) should be used for final design.</p>
     </div></div></div>);}
 
-function PricingModal({show,onClose}){if(!show)return null;
+function PricingModal({show,onClose,onRequestSignin}){if(!show)return null;
+  const {isAuthenticated,subscription}=useAuth();
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState(null);
+  const currentTier=subscription?.tier||"free";
   const tiers=[
-    {name:"Free",price:"$0",period:"",features:["Online use at combustion-toolkit.proreadyengineer.com","Simplified model — accurate for φ ≤ 1.0 only","All 5 calculation panels + Excel export","NOT suitable for RQL or SAC combustion"],accent:C.txtDim,current:true},
-    {name:"Accurate — Download",price:"$100",period:"/year",features:["Downloadable desktop app","macOS, Windows, and Linux","Bundles Cantera — runs fully offline","Exact results across all φ","Excel export","1-year license, renewable"],accent:C.accent,cta:"Get Download"},
-    {name:"Download + Online",price:"$150",period:"/year",features:["Everything in Download tier","PLUS access to the Cantera-powered online version","Runs at combustion-toolkit.proreadyengineer.com","Same exact accuracy as local","Use anywhere, no install required"],accent:C.accent2,cta:"Get Both",best:true}
+    {id:"free",name:"Free",price:"$0",period:"",features:["Online use at combustion-toolkit.proreadyengineer.com","Simplified model — accurate for φ ≤ 1.0 only","All 5 calculation panels + Excel export","NOT suitable for RQL or SAC combustion"],accent:C.txtDim},
+    {id:"download",name:"Accurate — Download",price:"$100",period:"/year",features:["Downloadable desktop app","macOS, Windows, and Linux","Bundles Cantera — runs fully offline","Exact results across all φ","Excel export","1-year license, renewable"],accent:C.accent,cta:"Get Download"},
+    {id:"full",name:"Download + Online",price:"$150",period:"/year",features:["Everything in Download tier","PLUS access to the Cantera-powered online version","Runs at combustion-toolkit.proreadyengineer.com","Same exact accuracy as local","Use anywhere, no install required"],accent:C.accent2,cta:"Get Both",best:true}
   ];
-  const handleBuy=()=>alert("Stripe checkout is being configured. Email sales@proreadyengineer.com to be notified at launch.");
+  const handleBuy=async(tier)=>{
+    if(!isAuthenticated){onClose();onRequestSignin("signup");return;}
+    setBusy(true);setErr(null);
+    try{const {checkout_url}=await api.createCheckout(tier);window.location.href=checkout_url;}
+    catch(e){setErr(e.message||"Failed to start checkout. Please try again.");setBusy(false);}
+  };
   return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.8)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20,overflowY:"auto"}} onClick={onClose}>
     <div onClick={e=>e.stopPropagation()} style={{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:12,padding:"28px 28px 22px",maxWidth:1040,width:"100%",color:C.txt,fontFamily:"'Barlow',sans-serif"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
@@ -360,8 +375,9 @@ function PricingModal({show,onClose}){if(!show)return null;
         </div>
         <button onClick={onClose} style={{background:"transparent",border:"none",color:C.txtDim,fontSize:24,cursor:"pointer",padding:"0 8px",lineHeight:1}}>×</button>
       </div>
+      {err&&<div style={{padding:"10px 14px",fontSize:11.5,color:"#ff6b6b",background:"#ff6b6b15",border:"1px solid #ff6b6b40",borderRadius:6,marginBottom:14,fontFamily:"monospace"}}>{err}</div>}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(260px,1fr))",gap:14}}>
-        {tiers.map(t=>(<div key={t.name} style={{background:C.bg3,border:`1px solid ${t.best?t.accent:C.border}`,borderRadius:10,padding:"22px 20px",position:"relative"}}>
+        {tiers.map(t=>{const isCurrent=currentTier===t.id;const isUpgrade=currentTier==="download"&&t.id==="full";return(<div key={t.id} style={{background:C.bg3,border:`1px solid ${t.best?t.accent:C.border}`,borderRadius:10,padding:"22px 20px",position:"relative"}}>
           {t.best&&<div style={{position:"absolute",top:-11,right:16,background:t.accent,color:C.bg,padding:"3px 11px",fontSize:9,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",borderRadius:4,fontFamily:"'Barlow Condensed',sans-serif"}}>Best Value</div>}
           <div style={{fontSize:11,fontWeight:700,color:t.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:10,fontFamily:"'Barlow Condensed',sans-serif"}}>{t.name}</div>
           <div style={{marginBottom:16}}>
@@ -371,25 +387,72 @@ function PricingModal({show,onClose}){if(!show)return null;
           <ul style={{listStyle:"none",padding:0,margin:"0 0 18px",fontSize:11.5,lineHeight:1.7,color:C.txt}}>
             {t.features.map(f=>(<li key={f} style={{paddingLeft:18,position:"relative",marginBottom:5}}><span style={{position:"absolute",left:0,color:t.accent,fontWeight:700}}>✓</span>{f}</li>))}
           </ul>
-          {t.current
+          {isCurrent
             ?<div style={{padding:"10px 14px",fontSize:11,fontWeight:600,textAlign:"center",color:C.txtDim,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>CURRENT PLAN</div>
-            :<button onClick={handleBuy} style={{width:"100%",padding:"11px 14px",fontSize:12,fontWeight:700,color:C.bg,background:t.accent,border:"none",borderRadius:6,cursor:"pointer",letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif"}}>{t.cta} →</button>}
-        </div>))}
+            :t.id==="free"
+              ?<div style={{padding:"10px 14px",fontSize:11,fontWeight:600,textAlign:"center",color:C.txtDim,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>INCLUDED — NO SIGNUP NEEDED</div>
+              :<button disabled={busy} onClick={()=>handleBuy(t.id)} style={{width:"100%",padding:"11px 14px",fontSize:12,fontWeight:700,color:C.bg,background:t.accent,border:"none",borderRadius:6,cursor:busy?"wait":"pointer",opacity:busy?0.6:1,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif"}}>{busy?"...":(isUpgrade?"Upgrade to Full":t.cta)} →</button>}
+        </div>);})}
       </div>
       <div style={{marginTop:16,padding:"11px 14px",background:C.bg,borderRadius:6,fontSize:10.5,color:C.txtDim,fontFamily:"monospace",textAlign:"center"}}>All paid tiers: 1-year license, renew annually. Questions? Email <a href="mailto:sales@proreadyengineer.com" style={{color:C.accent}}>sales@proreadyengineer.com</a></div>
     </div>
   </div>);}
 
+/* ══════════════════ ACCURATE-MODE HOOK ══════════════════ */
+// Fires a backend Cantera call when `enabled`. Returns { data, loading, error }.
+// `args` is serialized as a key so changes trigger a new call.
+function useBackendCalc(kind, args, enabled){
+  const [data,setData]=useState(null);const[loading,setLoading]=useState(false);const[err,setErr]=useState(null);
+  const key=JSON.stringify(args||{});
+  useEffect(()=>{
+    if(!enabled){setData(null);setErr(null);setLoading(false);return;}
+    const fn={aft:api.calcAFT,flame:api.calcFlameSpeed,combustor:api.calcCombustor,exhaust:api.calcExhaust,props:api.calcProps}[kind];
+    if(!fn){return;}
+    let cancelled=false;setLoading(true);setErr(null);
+    fn(args).then(d=>{if(!cancelled){setData(d);setLoading(false);}})
+            .catch(e=>{if(!cancelled){setErr(e.message||String(e));setLoading(false);setData(null);}});
+    return()=>{cancelled=true;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[enabled,key,kind]);
+  return{data,loading,err};
+}
+
+// Only non-zero species so we don't ship a 30-key object for a 2-key input.
+function nonzero(obj){const o={};for(const k in obj){if(obj[k]>0)o[k]=obj[k];}return o;}
+
+// Atm -> bar
+const atmToBar=(P)=>P*1.01325;
+
+// Convert backend AFTResponse {mole_fractions:{CH4:0.0053,...}} to local format {products:{CH4:0.53,...}}
+function adaptBackendAFT(r){
+  if(!r)return null;
+  const products={};for(const[k,v]of Object.entries(r.mole_fractions||{})){if(v>1e-5)products[k]=v*100;}
+  return{T_ad:r.T_actual||r.T_ad,products,fromBackend:true};
+}
+
 /* ══════════════════ PANELS ══════════════════ */
 function AFTPanel({fuel,ox,phi,T0,P,combMode,setCombMode}){
-  const units=useContext(UnitCtx);const result=useMemo(()=>calcAFTx(fuel,ox,phi,T0,P,combMode),[fuel,ox,phi,T0,P,combMode]);const sweep=useMemo(()=>sweepAFT(fuel,ox,T0,P,combMode).map(d=>({phi:d.phi,T_ad:uv(units,"T",d.T_ad)})),[fuel,ox,T0,P,combMode,units]);const props=useMemo(()=>calcFuelProps(fuel,ox),[fuel,ox]);const mk=result?{x:phi,y:uv(units,"T",result.T_ad),label:`${uv(units,"T",result.T_ad).toFixed(0)} ${uu(units,"T")}`}:null;
-  const modeToggle=<div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:5,overflow:"hidden",marginBottom:10}}>
-    {["complete","equilibrium"].map(m=><button key={m} onClick={()=>setCombMode(m)} style={{padding:"6px 12px",fontSize:10.5,fontWeight:combMode===m?700:400,color:combMode===m?C.bg:C.txtDim,background:combMode===m?C.accent:"transparent",border:"none",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",transition:"all .15s"}}>{m==="complete"?"Complete Combustion":"Chemical Equilibrium"}</button>)}
+  const units=useContext(UnitCtx);
+  const {accurate}=useContext(AccurateCtx);
+  const localResult=useMemo(()=>calcAFTx(fuel,ox,phi,T0,P,combMode),[fuel,ox,phi,T0,P,combMode]);
+  const bk=useBackendCalc("aft",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),mode:"adiabatic",heat_loss_fraction:0},accurate);
+  const adapted=adaptBackendAFT(bk.data);
+  const result=accurate&&adapted?adapted:localResult;
+  const sweep=useMemo(()=>sweepAFT(fuel,ox,T0,P,combMode).map(d=>({phi:d.phi,T_ad:uv(units,"T",d.T_ad)})),[fuel,ox,T0,P,combMode,units]);
+  const props=useMemo(()=>calcFuelProps(fuel,ox),[fuel,ox]);
+  const mk=result?{x:phi,y:uv(units,"T",result.T_ad),label:`${uv(units,"T",result.T_ad).toFixed(0)} ${uu(units,"T")}`}:null;
+  const modeToggle=<div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:5,overflow:"hidden",marginBottom:10,opacity:accurate?0.4:1}}>
+    {["complete","equilibrium"].map(m=><button key={m} disabled={accurate} onClick={()=>setCombMode(m)} style={{padding:"6px 12px",fontSize:10.5,fontWeight:combMode===m?700:400,color:combMode===m?C.bg:C.txtDim,background:combMode===m?C.accent:"transparent",border:"none",cursor:accurate?"not-allowed":"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",transition:"all .15s"}}>{m==="complete"?"Complete Combustion":"Chemical Equilibrium"}</button>)}
   </div>;
+  const statusBadge=accurate?(
+    bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:
+    bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ BACKEND ERROR — {bk.err}</span>:
+    adapted?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA</span>:null
+  ):null;
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ Flame Temperature & Properties — How It Works"><p style={{margin:"0 0 6px"}}>This panel computes the <span style={hs.em}>adiabatic flame temperature</span> by solving an energy balance: total reactant enthalpy = total product enthalpy. Uses NASA 7-coefficient polynomials for temperature-dependent Cp and enthalpy.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Complete Combustion:</span> Assumes all C→CO₂, all H→H₂O. No dissociation — gives the theoretical maximum T. <span style={hs.em}>Chemical Equilibrium:</span> Solves 4 dissociation reactions (CO₂⇌CO+½O₂, H₂O⇌H₂+½O₂, ½N₂+½O₂⇌NO, ½H₂+½O₂⇌OH) via Gibbs free energy Kp iteration. Gives realistic T with dissociation species (CO, OH, NO, H₂) in products.</p><p style={{margin:0}}>All values use the <span style={hs.warn}>fuel and oxidizer compositions</span> defined in the sidebar.</p></HelpBox>
     {modeToggle}
-    <div style={S.card}><div style={S.cardT}>Fuel & Combustion Properties {combMode==="equilibrium"&&<span style={{color:C.accent,fontWeight:400}}> — Equilibrium Mode</span>}</div>
+    <div style={S.card}><div style={S.cardT}>Fuel & Combustion Properties {combMode==="equilibrium"&&!accurate&&<span style={{color:C.accent,fontWeight:400}}> — Equilibrium Mode</span>}{statusBadge}</div>
       <div style={{...S.row,gap:8}}>
         <M l="Adiabatic Flame Temperature" v={uv(units,"T",result?.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="Maximum theoretical temperature when fuel burns with no heat loss. Computed via enthalpy balance at constant pressure."/>
         <M l="LHV (mass basis)" v={uv(units,"energy_mass",props.LHV_mass).toFixed(2)} u={uu(units,"energy_mass")} c={C.accent2} tip="Lower Heating Value per unit mass. Water in products remains as vapor. Used for gas turbine calculations."/>
@@ -416,10 +479,15 @@ function AFTPanel({fuel,ox,phi,T0,P,combMode,setCombMode}){
     </div></div>);}
 
 function FlameSpeedPanel({fuel,ox,phi,T0,P,velocity,setVelocity,Lchar,setLchar}){
-  const units=useContext(UnitCtx);const sweep=useMemo(()=>{const r=[];for(let p=0.4;p<=1.01;p+=0.02)r.push({phi:+p.toFixed(2),SL:uv(units,"SL",calcSL(fuel,p,T0,P)*100)});return r;},[fuel,T0,P,units]);const SL=calcSL(fuel,phi,T0,P)*100;const mk={x:phi,y:uv(units,"SL",SL),label:`${uv(units,"SL",SL).toFixed(1)} ${uu(units,"SL")}`};const pSw=useMemo(()=>[0.5,1,2,5,10,20,40].map(p=>({P:uv(units,"P",p),SL:uv(units,"SL",calcSL(fuel,phi,T0,p)*100)})),[fuel,phi,T0,units]);const tSw=useMemo(()=>{const r=[];for(let t=250;t<=800;t+=25)r.push({T:uv(units,"T",t),SL:uv(units,"SL",calcSL(fuel,phi,t,P)*100)});return r;},[fuel,phi,P,units]);const bo=useMemo(()=>calcBlowoff(fuel,phi,T0,P,velocity,Lchar),[fuel,phi,T0,P,velocity,Lchar]);const daSw=useMemo(()=>{const r=[];for(let v=1;v<=200;v+=2){const b=calcBlowoff(fuel,phi,T0,P,v,Lchar);r.push({V:uv(units,"vel",v),Da:Math.min(b.Da,100)});}return r;},[fuel,phi,T0,P,Lchar,units]);
+  const units=useContext(UnitCtx);
+  const {accurate}=useContext(AccurateCtx);
+  const sweep=useMemo(()=>{const r=[];for(let p=0.4;p<=1.01;p+=0.02)r.push({phi:+p.toFixed(2),SL:uv(units,"SL",calcSL(fuel,p,T0,P)*100)});return r;},[fuel,T0,P,units]);
+  const localSL=calcSL(fuel,phi,T0,P)*100;
+  const bk=useBackendCalc("flame",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03},accurate);
+  const SL=accurate&&bk.data?bk.data.SL*100:localSL;  // bk.data.SL is m/s → cm/sconst mk={x:phi,y:uv(units,"SL",SL),label:`${uv(units,"SL",SL).toFixed(1)} ${uu(units,"SL")}`};const pSw=useMemo(()=>[0.5,1,2,5,10,20,40].map(p=>({P:uv(units,"P",p),SL:uv(units,"SL",calcSL(fuel,phi,T0,p)*100)})),[fuel,phi,T0,units]);const tSw=useMemo(()=>{const r=[];for(let t=250;t<=800;t+=25)r.push({T:uv(units,"T",t),SL:uv(units,"SL",calcSL(fuel,phi,t,P)*100)});return r;},[fuel,phi,P,units]);const bo=useMemo(()=>calcBlowoff(fuel,phi,T0,P,velocity,Lchar),[fuel,phi,T0,P,velocity,Lchar]);const daSw=useMemo(()=>{const r=[];for(let v=1;v<=200;v+=2){const b=calcBlowoff(fuel,phi,T0,P,v,Lchar);r.push({V:uv(units,"vel",v),Da:Math.min(b.Da,100)});}return r;},[fuel,phi,T0,P,Lchar,units]);
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works"><p style={{margin:"0 0 6px"}}><span style={hs.em}>Laminar Flame Speed (S_L)</span> is computed using Gülder/Metghalchi-Keck empirical correlations: S_L = S_L0 · f(φ) · (T_u/T_0)^α · (P/P_0)^β. For mixtures, species contributions are mole-fraction-weighted.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Blowoff Analysis:</span> τ_chem = α_th / S_L² (chemical timescale), τ_flow = L_char / V (flow timescale). The <span style={hs.em}>Damköhler number Da = τ_flow / τ_chem</span>. When Da &lt; 1, the flame cannot sustain itself and blows off.</p><p style={{margin:0}}><span style={hs.warn}>V_ref</span> is your reference approach velocity. <span style={hs.warn}>L_char</span> is the characteristic recirculation length (typically flameholder diameter or step height).</p></HelpBox>
-    <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis</div>
+    <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}</div>
       <div style={{...S.row,gap:8,marginBottom:10}}>
         <M l="Laminar Flame Speed (S_L)" v={uv(units,"SL",SL).toFixed(2)} u={uu(units,"SL")} c={C.violet} tip="Laminar burning velocity — the speed at which a planar flame front propagates into the unburned mixture."/>
         <M l="Chemical Timescale (τ_chem)" v={bo.tau_chem.toFixed(4)} u="ms" c={C.accent3} tip="Chemical timescale: time for the flame to propagate one thermal diffusion length. τ_chem = α_th / S_L²."/>
@@ -443,16 +511,35 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,velocity,setVelocity,Lchar,setLchar})
     </div></div>);}
 
 function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV}){
-  const units=useContext(UnitCtx);const net=useMemo(()=>calcCombustorNetwork(fuel,ox,phi,T0,P,tau,Lpfr,Vpfr),[fuel,ox,phi,T0,P,tau,Lpfr,Vpfr]);const pfrDisp=useMemo(()=>net.pfr.map(pt=>({x:uv(units,"lenSmall",pt.x),T:uv(units,"T",pt.T),NO_ppm:pt.NO_ppm,CO_ppm:pt.CO_ppm,conv:pt.conv})),[net,units]);const emSw=useMemo(()=>{const r=[];for(let p=0.4;p<=1.01;p+=0.02){const n=calcCombustorNetwork(fuel,ox,p,T0,P,tau,Lpfr,Vpfr);r.push({phi:+p.toFixed(2),NO:n.NO_ppm_15O2,CO:n.CO_ppm_exit});}return r;},[fuel,ox,T0,P,tau,Lpfr,Vpfr]);
+  const units=useContext(UnitCtx);
+  const {accurate}=useContext(AccurateCtx);
+  const localNet=useMemo(()=>calcCombustorNetwork(fuel,ox,phi,T0,P,tau,Lpfr,Vpfr),[fuel,ox,phi,T0,P,tau,Lpfr,Vpfr]);
+  const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60},accurate);
+  // Adapt backend response to local combustor format.
+  const backendNet=bk.data?{
+    T_ad:bk.data.T_exit,T_psr:bk.data.T_psr,conv_psr:bk.data.conv_psr,
+    NO_ppm_exit:bk.data.NO_ppm_vd_exit,NO_ppm_15O2:bk.data.NO_ppm_15O2,
+    CO_ppm_exit:bk.data.CO_ppm_vd_exit,CO_ppm_15O2:bk.data.CO_ppm_15O2,
+    O2_pct:0,  // not always returned explicitly
+    tau_pfr_ms:bk.data.tau_pfr_ms,tau_total_ms:bk.data.tau_total_ms,
+    L_psr_cm:bk.data.L_psr_cm,L_total_cm:bk.data.L_total_cm,
+    pfr:bk.data.profile||[],fromBackend:true
+  }:null;
+  const net=accurate&&backendNet?backendNet:localNet;
+  const pfrDisp=useMemo(()=>net.pfr.map(pt=>({x:uv(units,"lenSmall",pt.x),T:uv(units,"T",pt.T),NO_ppm:pt.NO_ppm,CO_ppm:pt.CO_ppm,conv:pt.conv})),[net,units]);
+  const emSw=useMemo(()=>{const r=[];for(let p=0.4;p<=1.01;p+=0.02){const n=calcCombustorNetwork(fuel,ox,p,T0,P,tau,Lpfr,Vpfr);r.push({phi:+p.toFixed(2),NO:n.NO_ppm_15O2,CO:n.CO_ppm_exit});}return r;},[fuel,ox,T0,P,tau,Lpfr,Vpfr]);
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
-    <div style={{padding:"12px 14px",background:`${C.strong}10`,border:`1.5px solid ${C.strong}60`,borderRadius:6,fontSize:11.5,lineHeight:1.55,color:C.txtDim,fontFamily:"'Barlow',sans-serif"}}>
+    {!accurate&&<div style={{padding:"12px 14px",background:`${C.strong}10`,border:`1.5px solid ${C.strong}60`,borderRadius:6,fontSize:11.5,lineHeight:1.55,color:C.txtDim,fontFamily:"'Barlow',sans-serif"}}>
       <div style={{fontSize:12.5,fontWeight:700,color:C.strong,marginBottom:6,letterSpacing:".3px"}}>⚠ APPROXIMATION — CASE-SPECIFIC REDUCED-ORDER MODEL</div>
       <p style={{margin:"0 0 6px"}}>This combustor network is <strong style={{color:C.strong}}>not a full chemical-kinetics solver</strong>. It is a calibrated reduced-order model whose CO and NOx kinetics were fit to Cantera (GRI-Mech 3.0) over a <strong style={{color:C.accent2}}>narrow operating envelope</strong>: natural-gas fuel + humid air, φ = 0.4–0.8, T_inlet = 700–900 K, P = 1–30 atm, τ_PSR = 0.3–10 ms. Inside that envelope, emissions are within ±15–35% of Cantera. The temperature and equilibrium composition are rigorous; the PSR/PFR kinetics are correlations.</p>
       <p style={{margin:"0 0 6px"}}><strong style={{color:C.strong}}>Do not use for:</strong> pure H₂ or H₂-rich syngas (prompt-NO correlation has no fuel dependence), rich operation (φ &gt; 0.85, Zeldovich back-reaction not modeled), oxy-fuel or high-EGR oxidizers, non-adiabatic combustors with significant heat loss, or design-level NOx predictions requiring detailed kinetics (LES/detailed-CRN). Outside the calibration envelope the results are <strong style={{color:C.accent2}}>order-of-magnitude estimates only</strong>.</p>
       <p style={{margin:0}}>A full-accuracy version with a server-side Cantera backend (detailed mechanisms, any fuel, heat-loss modeling, proper PSR bistability) is planned. <strong style={{color:C.accent}}>Contact ProReadyEngineer if you need design-grade combustor predictions.</strong></p>
-    </div>
+    </div>}
+    {accurate&&<div style={{padding:"10px 14px",background:`${C.accent}10`,border:`1px solid ${C.accent}50`,borderRadius:6,fontSize:11.5,color:C.txtDim,fontFamily:"'Barlow',sans-serif"}}>
+      <strong style={{color:C.accent}}>✓ CANTERA PSR + PFR</strong> — GRI-Mech 3.0 kinetics, detailed Zeldovich + prompt NO, proper ReactorNet integration. Valid across full φ range, any fuel in the GRI set, any pressure.
+    </div>}
     <HelpBox title="ℹ️ Combustor Network — Methodology"><p style={{margin:"0 0 6px"}}>Models the combustor as a <span style={hs.em}>PSR (primary zone)</span> feeding a <span style={hs.em}>PFR (burnout zone)</span>. The <strong>thermochemistry</strong> (T_ad, equilibrium composition) is computed by Newton-Raphson on 6 dissociation reactions with NASA 7-coefficient polynomials — rigorous to &lt;0.2% vs Cantera.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>PSR T:</span> hot-branch (T_eq) gated by a sigmoid in log(τ/τ_ig) — captures blowoff but not partial-conversion states. <span style={hs.em}>PSR NO:</span> empirical prompt/N₂O floor + thermal Zeldovich with partial-equilibrium [O]. <span style={hs.em}>PSR CO:</span> empirical A·exp(14000/T)/τ·(27/P). <span style={hs.em}>PFR:</span> first-order CO burnout (k = 1.44e6·exp(−125000/RT) /s) + Zeldovich NO growth at local T.</p><p style={{margin:0}}><span style={hs.warn}>τ_PSR</span> = primary-zone residence time (ms). <span style={hs.warn}>L_PFR</span> = burnout-zone length. <span style={hs.warn}>V_PFR</span> = mean axial velocity. NOx is corrected to 15% O₂ dry per regulatory standard (ISO 11042, 40 CFR §60).</p></HelpBox>
-    <div style={S.card}><div style={S.cardT}>PSR → PFR Combustor Network</div>
+    <div style={S.card}><div style={S.cardT}>PSR → PFR Combustor Network {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA</span>:null)}</div>
       <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:12}}>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Primary zone residence time. Typical GT: 1–5 ms. Lower values increase blowout risk but reduce NOx."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>τ_PSR (ms) ⓘ:</label></Tip><input type="number" step={0.1} value={tau} onChange={e=>setTau(+e.target.value||0.1)} style={{...S.inp,width:65}}/></div>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Length of the burnout/dilution zone downstream of the primary zone. Longer = more complete CO burnout but more NOx."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_PFR ({uu(units,"len")}) ⓘ:</label></Tip><input type="number" step={0.1} value={+uv(units,"len",Lpfr).toFixed(4)} onChange={e=>setL(uvI(units,"len",+e.target.value||0.1))} style={{...S.inp,width:65}}/></div>
@@ -486,16 +573,26 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV}){
   </div>);}
 
 function ExhaustPanel({fuel,ox,T0,P,measO2,setMeasO2,measCO2,setMeasCO2,combMode,setCombMode}){
-  const units=useContext(UnitCtx);const rO2=useMemo(()=>calcExhaustFromO2(fuel,ox,measO2,T0,P,combMode),[fuel,ox,measO2,T0,P,combMode]);const rCO2=useMemo(()=>calcExhaustFromCO2(fuel,ox,measCO2,T0,P,combMode),[fuel,ox,measCO2,T0,P,combMode]);
+  const units=useContext(UnitCtx);
+  const {accurate}=useContext(AccurateCtx);
+  const localRO2=useMemo(()=>calcExhaustFromO2(fuel,ox,measO2,T0,P,combMode),[fuel,ox,measO2,T0,P,combMode]);
+  const localRCO2=useMemo(()=>calcExhaustFromCO2(fuel,ox,measCO2,T0,P,combMode),[fuel,ox,measCO2,T0,P,combMode]);
+  const bkO2=useBackendCalc("exhaust",{fuel:nonzero(fuel),oxidizer:nonzero(ox),T0,P:atmToBar(P),measured_O2_pct_dry:measO2,combustion_mode:combMode},accurate);
+  const bkCO2=useBackendCalc("exhaust",{fuel:nonzero(fuel),oxidizer:nonzero(ox),T0,P:atmToBar(P),measured_CO2_pct_dry:measCO2,combustion_mode:combMode},accurate);
+  // Adapt backend exhaust response: {phi,FAR,AFR,T_ad,exhaust_composition_wet:{...fractions}} → {phi,T_ad,products:{...percent},FAR_mass,AFR_mass}
+  const adaptEx=(r)=>r?{phi:r.phi,T_ad:r.T_ad,products:Object.fromEntries(Object.entries(r.exhaust_composition_wet||{}).filter(([k,v])=>v>1e-5).map(([k,v])=>[k,v*100])),FAR_mass:r.FAR,AFR_mass:r.AFR}:null;
+  const rO2=accurate&&bkO2.data?adaptEx(bkO2.data):localRO2;
+  const rCO2=accurate&&bkCO2.data?adaptEx(bkCO2.data):localRCO2;
   const o2Sweep=useMemo(()=>{const r=[];for(let o2=0.5;o2<=15;o2+=0.5){const res=calcExhaustFromO2(fuel,ox,o2,T0,P,combMode);r.push({O2:o2,T_ad:uv(units,"T",res.T_ad),phi:res.phi});}return r;},[fuel,ox,T0,P,combMode,units]);
   const modeToggle=<div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:5,overflow:"hidden",marginBottom:10}}>
     {["complete","equilibrium"].map(m=><button key={m} onClick={()=>setCombMode(m)} style={{padding:"6px 12px",fontSize:10.5,fontWeight:combMode===m?700:400,color:combMode===m?C.bg:C.txtDim,background:combMode===m?C.accent:"transparent",border:"none",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",transition:"all .15s"}}>{m==="complete"?"Complete Combustion":"Chemical Equilibrium"}</button>)}
   </div>;
+  const status=(kbk)=>accurate?(kbk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:kbk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {kbk.err}</span>:kbk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA</span>:null):null;
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ Exhaust Analysis — How It Works"><p style={{margin:"0 0 6px"}}>Enter a <span style={hs.em}>measured exhaust O₂ or CO₂ concentration</span> (dry basis, %) from a stack analyzer or CEMS. The tool iteratively solves for the equivalence ratio (φ) that produces that exhaust composition.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Complete Combustion</span> mode works well for lean conditions. <span style={hs.em}>Chemical Equilibrium</span> mode includes dissociation products (CO, OH, NO) and gives more accurate results near stoichiometric and at high temperatures.</p><p style={{margin:0}}><span style={hs.warn}>Note:</span> Both methods use the same fuel/oxidizer from the sidebar. The combustion mode is shared with the Flame Temperature panel.</p></HelpBox>
     {modeToggle}
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <div style={S.card}><div style={S.cardT}>From Measured O₂ (%)</div>
+      <div style={S.card}><div style={S.cardT}>From Measured O₂ (%) {status(bkO2)}</div>
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
           <Tip text="Enter the measured O₂ concentration in the exhaust on a dry basis. Typical values: 2–6% for gas turbines, 3–8% for boilers."><label style={{fontSize:11,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>Meas. O₂ (% dry) ⓘ:</label></Tip>
           <input type="number" step="0.1" value={measO2} onChange={e=>setMeasO2(+e.target.value||0)} style={{...S.inp,width:70}}/></div>
@@ -512,7 +609,7 @@ function ExhaustPanel({fuel,ox,T0,P,measO2,setMeasO2,measCO2,setMeasCO2,combMode
           <HBar data={dryBasis(rO2.products)} h={Math.max(100,Math.max(0,Object.keys(rO2.products).length-1)*22+10)} w={420}/>
         </div>}
       </div>
-      <div style={S.card}><div style={S.cardT}>From Measured CO₂ (%)</div>
+      <div style={S.card}><div style={S.cardT}>From Measured CO₂ (%) {status(bkCO2)}</div>
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
           <Tip text="Enter the measured CO₂ concentration in the exhaust on a dry basis. Higher CO₂ indicates richer combustion."><label style={{fontSize:11,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>Meas. CO₂ (% dry) ⓘ:</label></Tip>
           <input type="number" step="0.1" value={measCO2} onChange={e=>setMeasCO2(+e.target.value||0)} style={{...S.inp,width:70}}/></div>
@@ -562,13 +659,15 @@ function PropsPanel(){
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
 
 /* ══════════════════ MAIN APP ══════════════════ */
-const TABS=[{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"props",label:"Thermo Database",icon:"📊"}];
+const TABS_BASE=[{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"props",label:"Thermo Database",icon:"📊"}];
+const ACCOUNT_TAB={id:"account",label:"Account & Billing",icon:"👤"};
 
 export default function App(){
   // All engineering state below is stored in SI internally (K, atm, m/s, m).
   // Sidebar inputs display and accept values in the currently selected unit system,
   // converting to/from SI via uv()/uvI(). This guarantees that toggling SI↔ENG
   // leaves calculations and chart axes self-consistent.
+  const auth=useAuth();
   const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.52);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("ENG");
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
   const[tau_psr,setTauPsr]=useState(2);const[L_pfr,setLpfr]=useState(0.1036);const[V_pfr,setVpfr]=useState(20);
@@ -576,7 +675,29 @@ export default function App(){
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
   const[showPricing,setShowPricing]=useState(false);
+  const[authModal,setAuthModal]=useState(null); // null | "login" | "signup"
+  const[accurate,setAccurate]=useState(false);
   const panelState={velocity,Lchar,tau_psr,L_pfr,V_pfr,measO2,measCO2,combMode};
+  const hasOnline=!!auth.hasOnlineAccess;
+
+  // Checkout return — refresh subscription state after coming back from Stripe
+  useEffect(()=>{
+    const u=new URL(window.location.href);
+    if(u.searchParams.get("checkout")==="success"||u.searchParams.get("checkout")==="canceled"){
+      if(u.searchParams.get("checkout")==="success"){setTab("account");}
+      auth.refresh&&auth.refresh();
+      u.searchParams.delete("checkout");u.searchParams.delete("session_id");
+      window.history.replaceState({},"",u.pathname+(u.search?u.search:""));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // Accurate-Mode auto-disable if subscription ends / user signs out
+  useEffect(()=>{if(accurate&&!hasOnline)setAccurate(false);},[hasOnline,accurate]);
+  // Kick user out of Account tab if they sign out
+  useEffect(()=>{if(!auth.isAuthenticated&&tab==="account")setTab("aft");},[auth.isAuthenticated,tab]);
+
+  const TABS=auth.isAuthenticated?[...TABS_BASE,ACCOUNT_TAB]:TABS_BASE;
   const initF={};FUEL_SP.forEach(s=>initF[s]=0);Object.assign(initF,FUEL_PRESETS["Pipeline NG (US)"]);
   const initO={};OX_SP.forEach(s=>initO[s]=0);Object.assign(initO,OX_PRESETS["Humid Air (60%RH 25°C)"]);
   const[fuel,setFuel]=useState(initF);const[ox,setOx]=useState(initO);
@@ -587,10 +708,12 @@ export default function App(){
 
   return(
     <UnitCtx.Provider value={units}>
+    <AccurateCtx.Provider value={{accurate:accurate&&hasOnline,setAccurate,available:hasOnline}}>
       <div style={{fontFamily:"'Barlow','Segoe UI',sans-serif",background:C.bg,color:C.txt,minHeight:"100vh",display:"flex",flexDirection:"column"}}>
         <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700;800&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet"/>
         <HelpModal show={showHelp} onClose={()=>setShowHelp(false)}/>
-        <PricingModal show={showPricing} onClose={()=>setShowPricing(false)}/>
+        <PricingModal show={showPricing} onClose={()=>setShowPricing(false)} onRequestSignin={(m)=>setAuthModal(m||"login")}/>
+        <AuthModal show={!!authModal} mode={authModal||"login"} onClose={()=>setAuthModal(null)} onModeChange={(m)=>setAuthModal(m)} C={C}/>
 
         {/* HEADER */}
         <div style={{padding:"12px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(180deg,${C.bg3},${C.bg})`}}>
@@ -600,6 +723,20 @@ export default function App(){
               <div style={{fontSize:8.5,color:C.txtMuted,fontFamily:"monospace",letterSpacing:"2px",textTransform:"uppercase"}}>Combustion Engineering Toolkit — Thermal Fluid Sciences & AI</div></div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
+            {hasOnline&&(
+              <button onClick={()=>setAccurate(a=>!a)} title={accurate?"Using backend Cantera solver":"Using in-browser model"} style={{padding:"6px 12px",fontSize:11,fontWeight:700,color:accurate?C.bg:C.accent,background:accurate?C.accent:`${C.accent}15`,border:`1px solid ${C.accent}`,borderRadius:6,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",display:"flex",alignItems:"center",gap:6}}>
+                <span style={{width:7,height:7,borderRadius:"50%",background:accurate?C.bg:C.accent,display:"inline-block"}}/>
+                {accurate?"ACCURATE: ON":"ACCURATE: OFF"}
+              </button>
+            )}
+            {auth.isAuthenticated?(
+              <button onClick={()=>setTab("account")} title="Account & Billing" style={{padding:"6px 10px",fontSize:11,fontWeight:700,color:C.accent,background:`${C.accent}15`,border:`1px solid ${C.accent}40`,borderRadius:6,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",display:"flex",alignItems:"center",gap:6,maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                <span style={{width:18,height:18,borderRadius:"50%",background:C.accent,color:C.bg,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800}}>{(auth.user?.email||"?").charAt(0).toUpperCase()}</span>
+                <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{auth.user?.email}</span>
+              </button>
+            ):(
+              <button onClick={()=>setAuthModal("login")} title="Sign In" style={{padding:"6px 12px",fontSize:11,fontWeight:700,color:C.accent,background:"transparent",border:`1px solid ${C.accent}`,borderRadius:6,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>SIGN IN</button>
+            )}
             <button onClick={()=>setShowPricing(true)} title="Pricing — Accurate Cantera versions" style={{padding:"6px 12px",fontSize:11,fontWeight:700,color:C.bg,background:C.accent2,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>PRICING</button>
             <button onClick={()=>setShowHelp(true)} title="User Guide & Help" style={{padding:"6px 10px",fontSize:13,fontWeight:700,color:C.accent,background:`${C.accent}15`,border:`1px solid ${C.accent}30`,borderRadius:6,cursor:"pointer",fontFamily:"monospace"}}>?</button>
             <div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>
@@ -612,17 +749,22 @@ export default function App(){
         <div style={{display:"flex",gap:1,padding:"0 20px",background:C.bg,borderBottom:`1px solid ${C.border}`,overflowX:"auto"}}>
           {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"9px 14px",fontSize:11,fontWeight:tab===t.id?600:400,color:tab===t.id?C.accent:C.txtMuted,background:tab===t.id?`${C.accent}0A`:"transparent",border:"none",borderBottom:tab===t.id?`2px solid ${C.accent}`:"2px solid transparent",cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow',sans-serif",letterSpacing:".4px",transition:"all .15s"}}><span style={{marginRight:4}}>{t.icon}</span>{t.label}</button>)}</div>
 
-        {/* FREE-VERSION DISCLAIMER BANNER */}
+        {/* FREE-VERSION DISCLAIMER BANNER (hidden when Accurate Mode is active) */}
+        {!(accurate&&hasOnline)&&tab!=="account"&&(
         <div style={{padding:"10px 20px",background:`${C.warm}12`,borderBottom:`1px solid ${C.warm}35`,display:"flex",alignItems:"center",justifyContent:"space-between",gap:14,flexWrap:"wrap"}}>
           <div style={{fontSize:11.5,color:C.txt,fontFamily:"'Barlow',sans-serif",lineHeight:1.55,flex:"1 1 320px"}}>
             <strong style={{color:C.warm,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif"}}>⚠ FREE VERSION</strong> — Simplified model, accurate for <strong>φ ≤ 1.0</strong> only. <span style={{color:C.txtDim}}>Not suitable for RQL, SAC, or other rich/staged combustion systems. Upgrade for exact Cantera-backed results across all regimes.</span>
           </div>
           <button onClick={()=>setShowPricing(true)} style={{padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",color:C.bg,background:C.accent,border:"none",borderRadius:6,cursor:"pointer",letterSpacing:".7px",whiteSpace:"nowrap"}}>VIEW PRICING →</button>
-        </div>
+        </div>)}
+        {accurate&&hasOnline&&tab!=="account"&&(
+        <div style={{padding:"8px 20px",background:`${C.accent}12`,borderBottom:`1px solid ${C.accent}35`,fontSize:11.5,color:C.txt,fontFamily:"'Barlow',sans-serif"}}>
+          <strong style={{color:C.accent,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif"}}>✓ ACCURATE MODE ACTIVE</strong> — Calculations route to the backend Cantera solver (GRI-Mech 3.0, mixture-averaged transport, detailed PSR/PFR network).
+        </div>)}
 
         <div style={{display:"flex",flex:"1 1 auto",minHeight:0}}>
-          {/* SIDEBAR */}
-          <div style={{width:255,flexShrink:0,borderRight:`1px solid ${C.border}`,padding:"12px 10px",overflowY:"auto",background:`${C.bg}CC`}}>
+          {/* SIDEBAR (hidden on Account tab) */}
+          {tab!=="account"&&<div style={{width:255,flexShrink:0,borderRight:`1px solid ${C.border}`,padding:"12px 10px",overflowY:"auto",background:`${C.bg}CC`}}>
             <div style={{...hs.box,marginBottom:10,background:`${C.accent2}08`,borderColor:`${C.accent2}18`}}>
               <strong style={{color:C.accent2,fontSize:11}}>📌 Quick Start:</strong> <span style={{fontSize:10}}>Select a fuel preset below (e.g., "Pipeline NG"), set your equivalence ratio and conditions, then explore each tab. All panels share these settings.</span></div>
             <CompEditor title="Fuel (mol%)" comp={fuel} setComp={setFuel} presets={FUEL_PRESETS} speciesList={FUEL_SP} accent={C.accent2} initialPreset="Pipeline NG (US)"
@@ -655,7 +797,7 @@ export default function App(){
               <div><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
                 <input type="number" step="0.5" style={S.inp} value={+uv(units,"P",P).toFixed(3)} onChange={e=>setP(uvI(units,"P",+e.target.value||(units==="SI"?1:14.696)))}/></div>
             </div>
-          </div>
+          </div>}
 
           {/* CONTENT */}
           <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
@@ -664,6 +806,7 @@ export default function App(){
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="props"&&<PropsPanel/>}
+            {tab==="account"&&auth.isAuthenticated&&<AccountPanel C={C}/>}
           </div>
         </div>
 
@@ -680,4 +823,5 @@ export default function App(){
           </div>
         </div>
       </div>
+    </AccurateCtx.Provider>
     </UnitCtx.Provider>);}
