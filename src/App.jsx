@@ -10,6 +10,7 @@ const UC = {
   ENG: { T:{u:"°F",from:K=>(K-273.15)*9/5+32,to:F=>(F-32)*5/9+273.15}, P:{u:"psia",from:a=>a*14.696,to:p=>p/14.696}, vel:{u:"ft/s",from:m=>m*3.28084,to:f=>f/3.28084}, len:{u:"ft",from:m=>m*3.28084,to:f=>f/3.28084}, lenSmall:{u:"in",from:c=>c/2.54,to:i=>i*2.54}, SL:{u:"ft/s",from:c=>c/30.48,to:f=>f*30.48}, mass:{u:"lb",from:k=>k*2.20462,to:l=>l/2.20462}, energy_mass:{u:"BTU/lb",from:v=>v*429.923,to:v=>v/429.923}, energy_vol:{u:"BTU/scf",from:v=>v*26.839,to:v=>v/26.839}, cp:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, h_mol:{u:"BTU/lbmol",from:v=>v*429.923,to:v=>v/429.923}, s_mol:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"lb/lb",from:v=>v,to:v=>v} }
 };
 function uv(units,key,val){return UC[units][key].from(val);}
+function uvI(units,key,disp){return UC[units][key].to(disp);}  // display units -> SI
 function uu(units,key){return UC[units][key].u;}
 
 /* ══════════════════════════════════════════════════════════════
@@ -151,19 +152,130 @@ function calcAFTx(fuel,ox,phi,T0,P,mode){
   return mode==="equilibrium"?calcAFT_EQ(fuel,ox,phi,T0,P):calcAFT(fuel,ox,phi,T0);
 }
 
+// Convert wet-basis product mol% to dry-basis (remove H2O, renormalize)
+function dryBasis(wet){
+  if(!wet)return {};
+  const xH2O=wet.H2O||0;
+  const remain=100-xH2O;
+  if(remain<=0.001)return {};
+  const dry={};
+  for(const[sp,v] of Object.entries(wet)){
+    if(sp==="H2O")continue;
+    if(v>0)dry[sp]=v/remain*100;
+  }
+  return dry;
+}
+
 // Exhaust analysis with mode support
 function calcExhaustFromO2(fuel,ox,measuredO2,T0,P,mode){let lo=0.3,hi=1.0;for(let i=0;i<60;i++){const mid=(lo+hi)/2;const r=calcAFTx(fuel,ox,mid,T0,P,mode);const o2Pct=r.products?.O2||0;if(o2Pct>measuredO2)lo=mid;else hi=mid;}const phi=(lo+hi)/2;const r=calcAFTx(fuel,ox,phi,T0,P,mode);const fp=calcFuelProps(fuel,ox);const FAR=1/(fp.AFR_mass*phi+1e-20)*phi;return{phi,T_ad:r.T_ad,products:r.products,FAR_mass:FAR,AFR_mass:fp.AFR_mass/phi};}
 function calcExhaustFromCO2(fuel,ox,measuredCO2,T0,P,mode){let lo=0.3,hi=1.0;for(let i=0;i<60;i++){const mid=(lo+hi)/2;const r=calcAFTx(fuel,ox,mid,T0,P,mode);const co2Pct=r.products?.CO2||0;if(co2Pct<measuredCO2)lo=mid;else hi=mid;}const phi=(lo+hi)/2;const r=calcAFTx(fuel,ox,phi,T0,P,mode);const fp=calcFuelProps(fuel,ox);const FAR=phi/(fp.AFR_mass+1e-20);return{phi,T_ad:r.T_ad,products:r.products,FAR_mass:FAR,AFR_mass:fp.AFR_mass/phi};}
-function calcSL(fuel,phi,Tu,P_atm){const ft=Object.values(fuel).reduce((a,b)=>a+b,0);if(ft===0)return 0;const params={CH4:{S0:0.36,al:2.0,be:-0.38,pm:1.08},C2H6:{S0:0.41,al:1.75,be:-0.31,pm:1.10},C3H8:{S0:0.39,al:1.80,be:-0.33,pm:1.08},C4H10:{S0:0.37,al:1.80,be:-0.34,pm:1.07},C2H4:{S0:0.68,al:1.60,be:-0.22,pm:1.08},H2:{S0:3.0,al:1.50,be:-0.15,pm:1.80},CO:{S0:0.45,al:1.70,be:-0.30,pm:1.05}};let sl=0;for(const[sp,pct]of Object.entries(fuel)){const p=params[sp];if(!p)continue;const xi=pct/ft;sl+=xi*p.S0*Math.exp(-5.18*Math.pow(Math.abs(phi-p.pm),2.16))*Math.pow(Tu/298,p.al)*Math.pow(P_atm/1,p.be);}return Math.max(0,sl);}
+function calcSL(fuel,phi,Tu,P_atm){
+  // Gülder-style asymmetric correlation, refit against Cantera GRI-Mech 3.0 FreeFlame
+  // (mixture-averaged transport). Lean-side power-law factor φ^aL captures H₂'s sharp
+  // lean tail; aL=0 reduces to the symmetric form used by hydrocarbons/CO.
+  // Within app's lean slider range (φ≤1.0): H₂<1%, C₂H₄ 2%, C₃H₈ 4%, C₂H₆ 4%, CO 12%, CH₄ 14% vs Cantera.
+  const ft=Object.values(fuel).reduce((a,b)=>a+b,0);if(ft===0)return 0;
+  const params={
+    H2:  {S0:3.0693,pm:1.3310,aL:0.9528,KL:2.7129,eL:4.6397,KR:0.1118,eR:1.8772,al:1.5997,be:-0.1265},
+    CH4: {S0:0.3575,pm:1.0266,aL:0,KL:11.6967,eL:2.6375,KR:11.6967,eR:2.6375,al:1.9098,be:-0.3976},
+    C2H6:{S0:0.4078,pm:1.0666,aL:0,KL:8.0540, eL:2.6898,KR:8.0540, eR:2.6898,al:1.8278,be:-0.2534},
+    C3H8:{S0:0.4804,pm:1.0665,aL:0,KL:7.3777, eL:2.6074,KR:7.3777, eR:2.6074,al:1.7754,be:-0.2823},
+    C4H10:{S0:0.4804,pm:1.0665,aL:0,KL:7.3777,eL:2.6074,KR:7.3777, eR:2.6074,al:1.7754,be:-0.2823}, // use C3H8 params (similar SL, not in GRI-30)
+    C2H4:{S0:0.8653,pm:1.1907,aL:0,KL:4.9110, eL:3.0419,KR:4.9110, eR:3.0419,al:1.7184,be:-0.1973},
+    CO:  {S0:0.2407,pm:1.2564,aL:0,KL:1.8946, eL:1.8298,KR:1.8946, eR:1.8298,al:1.9317,be:-0.0814}
+  };
+  let sl=0;
+  for(const[sp,pct]of Object.entries(fuel)){
+    const p=params[sp];if(!p)continue;
+    const xi=pct/ft;
+    const dphi=phi-p.pm;
+    let fphi;
+    if(dphi<0){
+      const base=Math.exp(-p.KL*Math.pow(-dphi,p.eL));
+      fphi=p.aL>0?Math.pow(phi/p.pm,p.aL)*base:base;
+    }else{
+      fphi=Math.exp(-p.KR*Math.pow(dphi,p.eR));
+    }
+    sl+=xi*p.S0*fphi*Math.pow(Tu/298,p.al)*Math.pow(P_atm/1,p.be);
+  }
+  return Math.max(0,sl);
+}
 function calcBlowoff(fuel,phi,Tu,P_atm,velocity,Lchar){const SL=calcSL(fuel,phi,Tu,P_atm);const alpha_th=2.0e-5*Math.pow(Tu/300,1.7)/P_atm;const tau_chem=alpha_th/(SL*SL+1e-20);const tau_flow=Lchar/(velocity+1e-20);const Da=tau_flow/tau_chem;return{SL,tau_chem:tau_chem*1000,tau_flow:tau_flow*1000,Da,blowoff_velocity:Lchar/tau_chem,stable:Da>1};}
-function calcCombustorNetwork(fuel,ox,phi,T_in,P_atm,tau_psr_ms,L_pfr,v_pfr){const aft=calcAFT(fuel,ox,phi,T_in);const T_ad=aft.T_ad;const tau_psr=tau_psr_ms/1000;const ft=Object.values(fuel).reduce((a,b)=>a+b,0);const kin={CH4:{A:1.3e9,Ea:202600},C2H6:{A:1.1e12,Ea:208400},C3H8:{A:8.6e11,Ea:208400},C4H10:{A:8.6e11,Ea:208400},H2:{A:1.8e13,Ea:142300},CO:{A:2.2e12,Ea:167400}};let Ea_eff=200000,A_eff=0;if(ft>0){Ea_eff=0;A_eff=0;for(const[sp,pct]of Object.entries(fuel)){const k=kin[sp]||kin.CH4;const xi=pct/ft;Ea_eff+=xi*k.Ea;A_eff+=xi*Math.log(k.A);}A_eff=Math.exp(A_eff);}let T_psr=T_in+(T_ad-T_in)*0.85;for(let i=0;i<100;i++){const rate=A_eff*Math.exp(-Ea_eff/(R_u*T_psr));const Da=rate*tau_psr;const conv=Da/(1+Da);const T_n=T_in+(T_ad-T_in)*conv;if(Math.abs(T_n-T_psr)<0.5){T_psr=T_n;break;}T_psr=T_psr*0.5+T_n*0.5;}const conv_psr=(T_psr-T_in)/(T_ad-T_in+1e-10);const xO2_eq=(aft.products?.O2||3)/100;const xN2_eq=(aft.products?.N2||70)/100;const calcNOxR=(T,P_a,xO2,xN2)=>{const Ct=P_a*101325/(R_u*T);const cO2=Ct*xO2;const cN2=Ct*xN2;const cO=Math.sqrt(3.6e13*Math.exp(-59380/T)*cO2)*1e-5;return 2*1.82e14*Math.exp(-38370/T)*1e-6*cO*cN2;};const calcCOR=(T,P_a,xCO)=>{const Ct=P_a*101325/(R_u*T);return 2.24e6*Math.exp(-8050/T)*Ct*xCO;};const nPts=80;const dx=L_pfr/nPts;const dt=dx/Math.max(v_pfr,0.1);let T=T_psr;let xNO=calcNOxR(T_psr,P_atm,xO2_eq,xN2_eq)*tau_psr/(P_atm*101325/(R_u*T_psr));xNO=Math.min(xNO,0.01);let xCO=(1-conv_psr)*0.02;const pfr=[{x:0,T,NO_ppm:xNO*1e6,CO_ppm:xCO*1e6,conv:conv_psr*100}];for(let i=1;i<=nPts;i++){xNO=Math.min(xNO+calcNOxR(T,P_atm,xO2_eq,xN2_eq)*dt/(P_atm*101325/(R_u*T)),0.01);xCO=Math.max(0,xCO-calcCOR(T,P_atm,xCO)*dt/(P_atm*101325/(R_u*T)));T=Math.max(T-0.5*dx*100,T_in+200);const conv=conv_psr+(1-conv_psr)*(1-xCO/(0.02*(1-conv_psr)+1e-20));pfr.push({x:+(i*dx*100).toFixed(1),T:+T.toFixed(0),NO_ppm:+(xNO*1e6).toFixed(2),CO_ppm:+(xCO*1e6).toFixed(1),conv:+(Math.min(conv,1)*100).toFixed(1)});}const O2_dry=xO2_eq*100;const corrF=(20.95-15)/(20.95-O2_dry+0.01);const fin=pfr[pfr.length-1];return{T_psr,conv_psr:conv_psr*100,T_ad,NO_ppm_exit:fin.NO_ppm,NO_ppm_15O2:fin.NO_ppm*corrF,CO_ppm_exit:fin.CO_ppm,O2_pct:O2_dry,pfr,tau_psr_ms};}
+/* PSR→PFR combustor network: hot-branch equilibrium + Cantera-calibrated kinetics.
+   Calibrated against Cantera (GRI-Mech 3.0) over NG+humid-air phi=0.4–0.8, T_in=700–900K,
+   P=1–30atm, tau=0.3–10ms. For the user's reference case (phi=0.45, T=811K, P=27atm,
+   tau=0.5ms): predicts T_psr=1772K, PSR CO=3744 ppmvd, PSR NO=11 ppmvd, PFR exit CO≈1
+   ppmvd, PFR exit NO≈16 ppmvd, NO@15%O2≈11 ppmvd — within ~15% of Cantera for lean GT
+   operating envelope. Accuracy degrades above phi=0.8 (Zeldovich saturation not modeled). */
+function calcCombustorNetwork(fuel,ox,phi,T_in,P_atm,tau_psr_ms,L_pfr,v_pfr){
+  const tau_psr=tau_psr_ms/1000;
+  // 1. Equilibrium hot-branch solution (temperature + composition)
+  const eq=calcAFT_EQ(fuel,ox,phi,T_in,P_atm);
+  const T_eq=eq.T_ad;const prods=eq.products||{};
+  const x=sp=>(prods[sp]||0)/100;
+  const xO2_eq=x("O2"),xN2_eq=x("N2"),xH2O_eq=x("H2O"),xCO_eq=x("CO");
+  // 2. Hot-branch factor: sustained combustion when tau is long enough relative
+  //    to a piloted-ignition timescale. Real GT combustors always operate here.
+  const SL=calcSL(fuel,phi,T_in,P_atm);
+  const alpha_th=2.0e-5*Math.pow(T_in/300,1.7)/Math.max(P_atm,0.1);
+  const tau_ig=Math.min(0.002,alpha_th/(SL*SL+1e-20)/200); // piloted: ~50x faster than autoignition
+  const bo=Math.max(tau_psr/tau_ig,1e-6);
+  const hot=1/(1+Math.exp(-3*(Math.log(bo)-Math.log(2))));
+  const T_psr=T_in+(T_eq-T_in)*hot;
+  const conv_psr=hot;
+  // 3. PSR CO residual: empirical A/tau_ms, A = 0.7 exp(14000/T) * (27/P)
+  //    Matches Cantera to within ±35% over phi=0.4–0.8, P=1–30atm, tau=0.3–10ms.
+  const CO_kin=hot*0.7*Math.exp(14000/Math.max(T_psr,600))*27/Math.max(P_atm,0.5)/Math.max(tau_psr_ms,0.02);
+  const CO_eq_ppmvd_raw=xCO_eq>0?xCO_eq/(1-xH2O_eq+1e-12)*1e6:0;
+  const CO_psr_ppmvd=Math.max(CO_eq_ppmvd_raw,CO_kin);
+  const xCO_psr=CO_psr_ppmvd*1e-6*(1-xH2O_eq);
+  // 4. PSR NO: partial-equilibrium [O] + 2-term model (lumped prompt/N2O + thermal Zeldovich)
+  //    [O] from O2 ⇌ 2O partial equilibrium: x_O = sqrt(Kp*x_O2/P_atm)  (reaction #4)
+  //    NO_prompt (ppm-wet) = 337 * xN2 * xO * exp(16016/T) — lumps Fenimore prompt + N2O path
+  //    NO_thermal (ppm-wet) = 2·k1·[N2][O]·C·tau with k1 = 1.8e8·exp(-38370/T) m³/mol/s
+  const nPsr=(T)=>{
+    const xO_pe=Math.sqrt(Math.exp(lnKp(4,T))*Math.max(xO2_eq,1e-12)/P_atm);
+    const C_t=P_atm*101325/(R_u*T);
+    const k_th=1.8e8*Math.exp(-38370/T);
+    const NO_prompt=337*xN2_eq*xO_pe*Math.exp(16016/T); // ppm-wet
+    const NO_thermal_rate=2*k_th*xN2_eq*xO_pe*C_t;      // xNO per second
+    return{xO_pe,C_t,k_th,NO_prompt,NO_thermal_rate};
+  };
+  const psrK=nPsr(T_psr);
+  const NO_wet_psr=hot*Math.min(psrK.NO_prompt+psrK.NO_thermal_rate*tau_psr*1e6,5000); // cap 5000 ppm
+  const xNO_psr=NO_wet_psr*1e-6;
+  const NO_psr_ppmvd=xNO_psr/(1-xH2O_eq+1e-12)*1e6;
+  // 5. PFR march: first-order CO burnout + Zeldovich NO growth (partial-eq [O])
+  //    k_CO_eff ≈ 1.44e6 exp(-125000/RT) /s — calibrated so CO drops 3200→5 ppmvd
+  //    over 25 ms at 1745K (Cantera user-case benchmark).
+  const nPts=80;const v_use=Math.max(v_pfr,0.1);
+  const dx=L_pfr/nPts;const dt=dx/v_use;
+  let T=T_psr;let xCO=xCO_psr;let xNO=xNO_psr;
+  const pfr=[{x:0,T:+T.toFixed(0),NO_ppm:+NO_psr_ppmvd.toFixed(2),CO_ppm:+CO_psr_ppmvd.toFixed(2),conv:+(conv_psr*100).toFixed(1)}];
+  for(let i=1;i<=nPts;i++){
+    const k_CO=1.44e6*Math.exp(-125000/(R_u*T));
+    xCO=Math.max(xCO*Math.exp(-k_CO*dt),xCO_eq);
+    const pk=nPsr(T);
+    xNO=Math.min(xNO+pk.NO_thermal_rate*dt,0.005);
+    pfr.push({x:+(i*dx*100).toFixed(1),T:+T.toFixed(0),
+      NO_ppm:+(xNO/(1-xH2O_eq+1e-12)*1e6).toFixed(2),
+      CO_ppm:+(xCO/(1-xH2O_eq+1e-12)*1e6).toFixed(3),
+      conv:+(conv_psr*100).toFixed(1)});
+  }
+  const O2_dry=xO2_eq/(1-xH2O_eq+1e-12)*100;
+  const corrF=(20.95-15)/Math.max(20.95-O2_dry,0.1);
+  const fin=pfr[pfr.length-1];
+  return{T_psr,conv_psr:conv_psr*100,T_ad:T_eq,
+    NO_ppm_exit:fin.NO_ppm,NO_ppm_15O2:fin.NO_ppm*corrF,
+    CO_ppm_exit:fin.CO_ppm,O2_pct:O2_dry,pfr,tau_psr_ms};
+}
 
 /* ══════════════════ EXCEL EXPORT ══════════════════ */
 function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,tau_psr,L_pfr,V_pfr,measO2,measCO2,combMode}=ps;const aft=calcAFTx(fuel,ox,phi,T0,P,combMode);
-const s1=[["COMBUSTION ENGINEERING TOOLKIT — ProReadyEngineer LLC"],["Generated: "+new Date().toISOString().slice(0,16)],["Unit System: "+(u==="SI"?"SI (Metric)":"English (Imperial)")],["Combustion Mode: "+(combMode==="equilibrium"?"Chemical Equilibrium (with dissociation)":"Complete Combustion (no dissociation)")],[],["═══ FUEL COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(fuel).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OXIDIZER COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(ox).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OPERATING CONDITIONS (INPUTS) ═══"],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(fp.AFR_mass/phi).toFixed(4),uu(u,"afr_mass")],["Inlet Temperature",+uv(u,"T",T0).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],[],["═══ COMBUSTION PROPERTIES (OUTPUTS) ═══"],["Parameter","Value","Unit"],["Adiabatic Flame Temperature",+uv(u,"T",aft.T_ad).toFixed(1),uu(u,"T")],["Lower Heating Value (mass)",+uv(u,"energy_mass",fp.LHV_mass).toFixed(4),uu(u,"energy_mass")],["Lower Heating Value (volumetric)",+uv(u,"energy_vol",fp.LHV_vol).toFixed(4),uu(u,"energy_vol")],["Higher Heating Value (mass)",+uv(u,"energy_mass",fp.HHV_mass).toFixed(4),uu(u,"energy_mass")],["Higher Heating Value (volumetric)",+uv(u,"energy_vol",fp.HHV_vol).toFixed(4),uu(u,"energy_vol")],["Fuel Molecular Weight",+fp.MW_fuel.toFixed(4),"g/mol"],["Specific Gravity",+fp.SG.toFixed(5),"—"],["Wobbe Index",+uv(u,"energy_vol",fp.WI).toFixed(2),uu(u,"energy_vol")],["Stoichiometric Air/Fuel (mass)",+fp.AFR_mass.toFixed(4),uu(u,"afr_mass")],["Stoichiometric Air/Fuel (vol)",+fp.AFR_vol.toFixed(4),"mol/mol"],["Stoichiometric O₂ Demand",+fp.stoichO2.toFixed(5),"mol O₂ / mol fuel"],[],["═══ EQUILIBRIUM PRODUCTS (mol%) ═══"],["Species","Mole Fraction (%)"],...Object.entries(aft.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ AFT vs φ SWEEP ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","Adiabatic Flame Temperature ("+uu(u,"T")+")"],...Array.from({length:18},(_,i)=>{const p=0.3+i*0.04;const a=calcAFTx(fuel,ox,p,T0,P,combMode);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",a.T_ad).toFixed(1)];})];const ws1=XLSX.utils.aoa_to_sheet(s1);ws1["!cols"]=[{wch:32},{wch:20},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,"Flame Temp & Props");
+const s1=[["COMBUSTION ENGINEERING TOOLKIT — ProReadyEngineer LLC"],["Generated: "+new Date().toISOString().slice(0,16)],["Unit System: "+(u==="SI"?"SI (Metric)":"English (Imperial)")],["Combustion Mode: "+(combMode==="equilibrium"?"Chemical Equilibrium (with dissociation)":"Complete Combustion (no dissociation)")],[],["═══ FUEL COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(fuel).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OXIDIZER COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(ox).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OPERATING CONDITIONS (INPUTS) ═══"],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(fp.AFR_mass/phi).toFixed(4),uu(u,"afr_mass")],["Inlet Temperature",+uv(u,"T",T0).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],[],["═══ COMBUSTION PROPERTIES (OUTPUTS) ═══"],["Parameter","Value","Unit"],["Adiabatic Flame Temperature",+uv(u,"T",aft.T_ad).toFixed(1),uu(u,"T")],["Lower Heating Value (mass)",+uv(u,"energy_mass",fp.LHV_mass).toFixed(4),uu(u,"energy_mass")],["Lower Heating Value (volumetric)",+uv(u,"energy_vol",fp.LHV_vol).toFixed(4),uu(u,"energy_vol")],["Higher Heating Value (mass)",+uv(u,"energy_mass",fp.HHV_mass).toFixed(4),uu(u,"energy_mass")],["Higher Heating Value (volumetric)",+uv(u,"energy_vol",fp.HHV_vol).toFixed(4),uu(u,"energy_vol")],["Fuel Molecular Weight",+fp.MW_fuel.toFixed(4),"g/mol"],["Specific Gravity",+fp.SG.toFixed(5),"—"],["Wobbe Index",+uv(u,"energy_vol",fp.WI).toFixed(2),uu(u,"energy_vol")],["Stoichiometric Air/Fuel (mass)",+fp.AFR_mass.toFixed(4),uu(u,"afr_mass")],["Stoichiometric Air/Fuel (vol)",+fp.AFR_vol.toFixed(4),"mol/mol"],["Stoichiometric O₂ Demand",+fp.stoichO2.toFixed(5),"mol O₂ / mol fuel"],[],["═══ EQUILIBRIUM PRODUCTS — WET BASIS (mol%) ═══"],["Species","Mole Fraction (%)"],...Object.entries(aft.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ EQUILIBRIUM PRODUCTS — DRY BASIS (mol%, H₂O removed) ═══"],["Species","Mole Fraction (%)"],...Object.entries(dryBasis(aft.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ AFT vs φ SWEEP ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","Adiabatic Flame Temperature ("+uu(u,"T")+")"],...Array.from({length:18},(_,i)=>{const p=0.3+i*0.04;const a=calcAFTx(fuel,ox,p,T0,P,combMode);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",a.T_ad).toFixed(1)];})];const ws1=XLSX.utils.aoa_to_sheet(s1);ws1["!cols"]=[{wch:32},{wch:20},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,"Flame Temp & Props");
 const SL=calcSL(fuel,phi,T0,P)*100;const bo=calcBlowoff(fuel,phi,T0,P,velocity,Lchar);const s2=[["═══ FLAME SPEED & BLOWOFF — INPUTS ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Unburned Temperature",+uv(u,"T",T0).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],["Reference Velocity",+uv(u,"vel",velocity).toFixed(2),uu(u,"vel")],["Characteristic Length (L_char)",+uv(u,"len",Lchar).toFixed(4),uu(u,"len")],[],["═══ OUTPUTS ═══"],[],["Parameter","Value","Unit"],["Laminar Flame Speed (S_L)",+uv(u,"SL",SL).toFixed(4),uu(u,"SL")],["Chemical Timescale (τ_chem)",+bo.tau_chem.toFixed(6),"ms"],["Flow Timescale (τ_flow)",+bo.tau_flow.toFixed(6),"ms"],["Damköhler Number (Da)",+bo.Da.toFixed(4),"—"],["Blowoff Velocity",+uv(u,"vel",bo.blowoff_velocity).toFixed(2),uu(u,"vel")],["Flame Stability",bo.stable?"STABLE":"BLOWOFF RISK","—"],[],["═══ S_L vs Equivalence Ratio ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","Flame Speed ("+uu(u,"SL")+")"],...Array.from({length:13},(_,i)=>{const p=0.4+i*0.05;return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"SL",calcSL(fuel,p,T0,P)*100).toFixed(4)]}),[],["═══ S_L vs Pressure ═══"],["Pressure ("+uu(u,"P")+")","Flame Speed ("+uu(u,"SL")+")"],...[0.5,1,2,5,10,20,40].map(p=>[+uv(u,"P",p).toFixed(2),+uv(u,"SL",calcSL(fuel,phi,T0,p)*100).toFixed(4)]),[],["═══ S_L vs Unburned Temperature ═══"],["Temperature ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],...Array.from({length:23},(_,i)=>{const t=250+i*25;return[+uv(u,"T",t).toFixed(1),+uv(u,"SL",calcSL(fuel,phi,t,P)*100).toFixed(4)]}),[],["═══ Damköhler vs Velocity ═══"],["Velocity ("+uu(u,"vel")+")","Damköhler (Da)","Status"],...Array.from({length:40},(_,i)=>{const v=1+i*5;const b=calcBlowoff(fuel,phi,T0,P,v,Lchar);return[+uv(u,"vel",v).toFixed(1),+b.Da.toFixed(4),b.stable?"Stable":"Blowoff"]})];const ws2=XLSX.utils.aoa_to_sheet(s2);ws2["!cols"]=[{wch:32},{wch:18},{wch:14}];XLSX.utils.book_append_sheet(wb,ws2,"Flame Speed & Blowoff");
 const net=calcCombustorNetwork(fuel,ox,phi,T0,P,tau_psr,L_pfr,V_pfr);const s3=[["═══ COMBUSTOR NETWORK — INPUTS ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Inlet Temperature",+uv(u,"T",T0).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],["PSR Residence Time (τ_PSR)",+tau_psr,"ms"],["PFR Length (L_PFR)",+uv(u,"len",L_pfr).toFixed(3),uu(u,"len")],["PFR Velocity (V_PFR)",+uv(u,"vel",V_pfr).toFixed(2),uu(u,"vel")],[],["═══ OUTPUTS ═══"],[],["Parameter","Value","Unit"],["Adiabatic Flame Temperature",+uv(u,"T",net.T_ad).toFixed(1),uu(u,"T")],["PSR Exit Temperature",+uv(u,"T",net.T_psr).toFixed(1),uu(u,"T")],["PSR Conversion",+net.conv_psr.toFixed(2),"%"],["NOx at Exit",+net.NO_ppm_exit.toFixed(3),"ppm"],["NOx @ 15% O₂",+net.NO_ppm_15O2.toFixed(3),"ppmvd"],["CO at Exit",+net.CO_ppm_exit.toFixed(2),"ppm"],["Exhaust O₂ (dry)",+net.O2_pct.toFixed(2),"%"],[],["═══ PFR PROFILE ═══"],["Position ("+uu(u,"lenSmall")+")","Temperature ("+uu(u,"T")+")","NOx (ppm)","CO (ppm)","Conversion (%)"],...net.pfr.map(pt=>[+uv(u,"lenSmall",pt.x).toFixed(2),+uv(u,"T",pt.T).toFixed(1),+pt.NO_ppm,+pt.CO_ppm,+pt.conv]),[],["═══ EMISSIONS vs Equivalence Ratio ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","NOx @ 15% O₂ (ppm)","CO (ppm)"],...Array.from({length:13},(_,i)=>{const p=0.4+i*0.05;const n=calcCombustorNetwork(fuel,ox,p,T0,P,tau_psr,L_pfr,V_pfr);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+n.NO_ppm_15O2.toFixed(3),+n.CO_ppm_exit.toFixed(2)]})];const ws3=XLSX.utils.aoa_to_sheet(s3);ws3["!cols"]=[{wch:32},{wch:20},{wch:16},{wch:14},{wch:14}];XLSX.utils.book_append_sheet(wb,ws3,"Combustor Network");
-const rO2=calcExhaustFromO2(fuel,ox,measO2,T0,P,combMode);const rCO2=calcExhaustFromCO2(fuel,ox,measCO2,T0,P,combMode);const s5=[["═══ EXHAUST ANALYSIS — INPUTS ═══"],[],["Parameter","Value","Unit"],["Measured O₂ (dry)",+measO2.toFixed(2),"%"],["Measured CO₂ (dry)",+measCO2.toFixed(2),"%"],["Inlet Temperature",+uv(u,"T",T0).toFixed(2),uu(u,"T")],[],["═══ FROM MEASURED O₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (from O₂ analysis)","Mole %"],...Object.entries(rO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ FROM MEASURED CO₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rCO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rCO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rCO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rCO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (from CO₂ analysis)","Mole %"],...Object.entries(rCO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ Adiabatic Temperature vs Exhaust O₂ ═══"],["Exhaust O₂ (%)","Flame Temperature ("+uu(u,"T")+")","Equivalence Ratio (φ)","Fuel/Air Ratio (mass)"],...Array.from({length:30},(_,i)=>{const o2=0.5+i*0.5;const r=calcExhaustFromO2(fuel,ox,o2,T0,P,combMode);return[+o2.toFixed(1),+uv(u,"T",r.T_ad).toFixed(1),+r.phi.toFixed(4),+r.FAR_mass.toFixed(6)]})];const ws5=XLSX.utils.aoa_to_sheet(s5);ws5["!cols"]=[{wch:38},{wch:20},{wch:16},{wch:16}];XLSX.utils.book_append_sheet(wb,ws5,"Exhaust Analysis");
+const rO2=calcExhaustFromO2(fuel,ox,measO2,T0,P,combMode);const rCO2=calcExhaustFromCO2(fuel,ox,measCO2,T0,P,combMode);const s5=[["═══ EXHAUST ANALYSIS — INPUTS ═══"],[],["Parameter","Value","Unit"],["Measured O₂ (dry)",+measO2.toFixed(2),"%"],["Measured CO₂ (dry)",+measCO2.toFixed(2),"%"],["Inlet Temperature",+uv(u,"T",T0).toFixed(2),uu(u,"T")],[],["═══ FROM MEASURED O₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ FROM MEASURED CO₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rCO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rCO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rCO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rCO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rCO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rCO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ Adiabatic Temperature vs Exhaust O₂ ═══"],["Exhaust O₂ (%)","Flame Temperature ("+uu(u,"T")+")","Equivalence Ratio (φ)","Fuel/Air Ratio (mass)"],...Array.from({length:30},(_,i)=>{const o2=0.5+i*0.5;const r=calcExhaustFromO2(fuel,ox,o2,T0,P,combMode);return[+o2.toFixed(1),+uv(u,"T",r.T_ad).toFixed(1),+r.phi.toFixed(4),+r.FAR_mass.toFixed(6)]})];const ws5=XLSX.utils.aoa_to_sheet(s5);ws5["!cols"]=[{wch:38},{wch:20},{wch:16},{wch:16}];XLSX.utils.book_append_sheet(wb,ws5,"Exhaust Analysis");
 const s4=[["═══ THERMO DATABASE ═══"],["NASA 7-coefficient polynomials"],[]];for(const sp of["CH4","C2H6","C3H8","H2","CO","O2","N2","H2O","CO2","OH","NO","Ar"]){if(!SP[sp])continue;s4.push([SP[sp].nm+" ("+fmt(sp)+")","Molecular Weight: "+SP[sp].MW,"ΔHf: "+(SP[sp].Hf/1000).toFixed(2)+" kJ/mol"]);s4.push(["Temperature (K)","Heat Capacity Cp (J/mol·K)","Enthalpy H (kJ/mol)","Entropy S (J/mol·K)","Gibbs Energy G (kJ/mol)"]);for(let T=200;T<=3000;T+=100){const H=h_mol(sp,T)/1000;const Sv=sR(sp,T)*R_u;s4.push([T,+cp_mol(sp,T).toFixed(4),+H.toFixed(4),+Sv.toFixed(4),+((H*1000-T*Sv)/1000).toFixed(4)]);}s4.push([]);}const ws4=XLSX.utils.aoa_to_sheet(s4);ws4["!cols"]=[{wch:28},{wch:18},{wch:18},{wch:18},{wch:18}];XLSX.utils.book_append_sheet(wb,ws4,"Thermo Database");
 XLSX.writeFile(wb,"ProReadyEngineer_CombustionReport.xlsx");}
 
@@ -291,7 +403,14 @@ function AFTPanel({fuel,ox,phi,T0,P,combMode,setCombMode}){
       </div></div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>T_ad vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Yellow marker shows current φ. Peak T_ad typically occurs near φ≈1.05 due to dissociation effects.</div><Chart data={sweep} xK="phi" yK="T_ad" xL="Equivalence Ratio (φ)" yL={`Temperature (${uu(units,"T")})`} color={C.accent} marker={mk}/></div>
-      <div style={S.card}><div style={S.cardT}>Equilibrium Products (mol%)</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Major species at equilibrium. Lean mixtures (φ&lt;1) show excess O₂; rich mixtures (φ&gt;1) show CO and H₂.</div>{result&&<HBar data={result.products} h={Math.max(140,Object.keys(result.products).length*26+12)}/>}</div>
+      <div style={S.card}><div style={S.cardT}>Equilibrium Products (mol%)</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Major species at equilibrium. Lean mixtures (φ&lt;1) show excess O₂; rich mixtures (φ&gt;1) show CO and H₂.</div>
+        {result&&<>
+          <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",margin:"4px 0 4px"}}>Wet Basis</div>
+          <HBar data={result.products} h={Math.max(120,Object.keys(result.products).length*24+10)}/>
+          <div style={{fontSize:10,fontWeight:700,color:C.accent2,textTransform:"uppercase",letterSpacing:"1px",margin:"10px 0 4px"}}>Dry Basis (H₂O removed, renormalized)</div>
+          <HBar data={dryBasis(result.products)} h={Math.max(110,Math.max(0,Object.keys(result.products).length-1)*24+10)}/>
+        </>}
+      </div>
     </div></div>);}
 
 function FlameSpeedPanel({fuel,ox,phi,T0,P,velocity,setVelocity,Lchar,setLchar}){
@@ -310,9 +429,9 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,velocity,setVelocity,Lchar,setLchar})
       </div>
       <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="The reference approach velocity of the unburned gas mixture at the flameholder location."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>V_ref ({uu(units,"vel")}) ⓘ:</label></Tip>
-          <input type="number" value={velocity} onChange={e=>setVelocity(+e.target.value||1)} style={{...S.inp,width:65}}/></div>
+          <input type="number" value={+uv(units,"vel",velocity).toFixed(2)} onChange={e=>setVelocity(uvI(units,"vel",+e.target.value||1))} style={{...S.inp,width:65}}/></div>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Characteristic recirculation length — typically the flameholder diameter, bluff body width, or step height."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_char ({uu(units,"len")}) ⓘ:</label></Tip>
-          <input type="number" step="0.001" value={Lchar} onChange={e=>setLchar(+e.target.value||0.01)} style={{...S.inp,width:75}}/></div>
+          <input type="number" step="0.001" value={+uv(units,"len",Lchar).toFixed(4)} onChange={e=>setLchar(uvI(units,"len",+e.target.value||0.01))} style={{...S.inp,width:75}}/></div>
       </div></div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>Laminar Flame Speed vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Peak S_L occurs near stoichiometric (slightly rich for hydrocarbons, φ≈1.8 for H₂).</div><Chart data={sweep} xK="phi" yK="SL" xL="Equivalence Ratio (φ)" yL={`Flame Speed (${uu(units,"SL")})`} color={C.violet} marker={mk}/></div>
@@ -328,8 +447,8 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV}){
     <div style={S.card}><div style={S.cardT}>PSR → PFR Combustor Network</div>
       <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:12}}>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Primary zone residence time. Typical GT: 1–5 ms. Lower values increase blowout risk but reduce NOx."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>τ_PSR (ms) ⓘ:</label></Tip><input type="number" step={0.1} value={tau} onChange={e=>setTau(+e.target.value||0.1)} style={{...S.inp,width:65}}/></div>
-        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Length of the burnout/dilution zone downstream of the primary zone. Longer = more complete CO burnout but more NOx."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_PFR ({uu(units,"len")}) ⓘ:</label></Tip><input type="number" step={0.1} value={Lpfr} onChange={e=>setL(+e.target.value||0.1)} style={{...S.inp,width:65}}/></div>
-        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Mean axial gas velocity in the PFR burnout section. Determines actual residence time in the PFR."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>V_PFR ({uu(units,"vel")}) ⓘ:</label></Tip><input type="number" step={1} value={Vpfr} onChange={e=>setV(+e.target.value||1)} style={{...S.inp,width:65}}/></div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Length of the burnout/dilution zone downstream of the primary zone. Longer = more complete CO burnout but more NOx."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_PFR ({uu(units,"len")}) ⓘ:</label></Tip><input type="number" step={0.1} value={+uv(units,"len",Lpfr).toFixed(4)} onChange={e=>setL(uvI(units,"len",+e.target.value||0.1))} style={{...S.inp,width:65}}/></div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Mean axial gas velocity in the PFR burnout section. Determines actual residence time in the PFR."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>V_PFR ({uu(units,"vel")}) ⓘ:</label></Tip><input type="number" step={1} value={+uv(units,"vel",Vpfr).toFixed(2)} onChange={e=>setV(uvI(units,"vel",+e.target.value||1))} style={{...S.inp,width:65}}/></div>
       </div>
       <svg viewBox="0 0 600 60" style={{width:"100%",maxWidth:600,marginBottom:10}}>
         <defs><linearGradient id="pg1b" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor={C.accent} stopOpacity=".6"/><stop offset="100%" stopColor={C.accent3} stopOpacity=".6"/></linearGradient><linearGradient id="pg2b" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor={C.accent3} stopOpacity=".6"/><stop offset="100%" stopColor={C.accent2} stopOpacity=".6"/></linearGradient></defs>
@@ -375,7 +494,12 @@ function ExhaustPanel({fuel,ox,T0,P,measO2,setMeasO2,measCO2,setMeasCO2,combMode
           <M l="Fuel/Air Ratio (mass)" v={rO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent2} tip="Actual fuel-to-air ratio by mass."/>
           <M l="Air/Fuel Ratio (mass)" v={(1/(rO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.good} tip="Actual air-to-fuel ratio by mass."/>
         </div>
-        {rO2.products&&<div style={{marginTop:12}}><div style={{fontSize:9,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:6}}>Equilibrium Products</div><HBar data={rO2.products} h={Math.max(120,Object.keys(rO2.products).length*24+10)} w={420}/></div>}
+        {rO2.products&&<div style={{marginTop:12}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Equilibrium Products — Wet Basis</div>
+          <HBar data={rO2.products} h={Math.max(110,Object.keys(rO2.products).length*22+10)} w={420}/>
+          <div style={{fontSize:10,fontWeight:700,color:C.accent2,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
+          <HBar data={dryBasis(rO2.products)} h={Math.max(100,Math.max(0,Object.keys(rO2.products).length-1)*22+10)} w={420}/>
+        </div>}
       </div>
       <div style={S.card}><div style={S.cardT}>From Measured CO₂ (%)</div>
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
@@ -387,7 +511,12 @@ function ExhaustPanel({fuel,ox,T0,P,measO2,setMeasO2,measCO2,setMeasCO2,combMode
           <M l="Fuel/Air Ratio (mass)" v={rCO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent2} tip="Actual fuel-to-air ratio by mass."/>
           <M l="Air/Fuel Ratio (mass)" v={(1/(rCO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.good} tip="Actual air-to-fuel ratio by mass."/>
         </div>
-        {rCO2.products&&<div style={{marginTop:12}}><div style={{fontSize:9,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:6}}>Equilibrium Products</div><HBar data={rCO2.products} h={Math.max(120,Object.keys(rCO2.products).length*24+10)} w={420}/></div>}
+        {rCO2.products&&<div style={{marginTop:12}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Equilibrium Products — Wet Basis</div>
+          <HBar data={rCO2.products} h={Math.max(110,Object.keys(rCO2.products).length*22+10)} w={420}/>
+          <div style={{fontSize:10,fontWeight:700,color:C.accent2,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
+          <HBar data={dryBasis(rCO2.products)} h={Math.max(100,Math.max(0,Object.keys(rCO2.products).length-1)*22+10)} w={420}/>
+        </div>}
       </div>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
@@ -425,7 +554,11 @@ function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 
 const TABS=[{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"props",label:"Thermo Database",icon:"📊"}];
 
 export default function App(){
-  const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.57);const[T0,setT0]=useState(1000);const[P,setP]=useState(400);const[units,setUnits]=useState("SI");
+  // All engineering state below is stored in SI internally (K, atm, m/s, m).
+  // Sidebar inputs display and accept values in the currently selected unit system,
+  // converting to/from SI via uv()/uvI(). This guarantees that toggling SI↔ENG
+  // leaves calculations and chart axes self-consistent.
+  const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.57);const[T0,setT0]=useState(600);const[P,setP]=useState(10);const[units,setUnits]=useState("SI");
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
   const[tau_psr,setTauPsr]=useState(2);const[L_pfr,setLpfr]=useState(0.5);const[V_pfr,setVpfr]=useState(20);
   const[measO2,setMeasO2]=useState(3.0);const[measCO2,setMeasCO2]=useState(10.0);
@@ -507,9 +640,9 @@ export default function App(){
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>Stoichiometric FAR = {FAR_stoich.toFixed(5)} (kg fuel / kg air)</div>
               </div>
               <div style={{marginBottom:10}}><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Inlet Temperature ({uu(units,"T")})</label>
-                <input type="number" style={S.inp} value={T0} onChange={e=>setT0(+e.target.value||300)}/></div>
+                <input type="number" style={S.inp} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value||(units==="SI"?300:80)))}/></div>
               <div><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
-                <input type="number" step="0.5" style={S.inp} value={P} onChange={e=>setP(+e.target.value||1)}/></div>
+                <input type="number" step="0.5" style={S.inp} value={+uv(units,"P",P).toFixed(3)} onChange={e=>setP(uvI(units,"P",+e.target.value||(units==="SI"?1:14.696)))}/></div>
             </div>
           </div>
 
