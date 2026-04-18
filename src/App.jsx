@@ -522,9 +522,11 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,velocity,setVelocity,Lchar,setLchar})
       <div style={S.card}><div style={S.cardT}>Flame Speed vs Unburned Temperature</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>S_L increases strongly with preheat temperature (exponent α ≈ 1.5–2.0).</div><Chart data={tSw} xK="T" yK="SL" xL={`Unburned Temperature (${uu(units,"T")})`} yL={`Flame Speed (${uu(units,"SL")})`} color={C.accent}/></div>
     </div></div>);}
 
-function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,setTfuel,Tair,setTair}){
+function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,setTfuel}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
+  // Air inlet T = T0 (sidebar "Air Temperature"); fuel inlet T = Tfuel (sidebar "Fuel Temperature").
+  const Tair=T0;
   const localNet=useMemo(()=>calcCombustorNetwork(fuel,ox,phi,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair),[fuel,ox,phi,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair]);
   const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60,T_fuel_K:Tfuel,T_air_K:Tair},accurate);
   // Adapt backend response to local combustor format.
@@ -557,9 +559,11 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Primary zone residence time. Typical GT: 1–5 ms. Lower values increase blowout risk but reduce NOx."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>τ_PSR (ms) ⓘ:</label></Tip><input type="number" step={0.1} value={tau} onChange={e=>setTau(+e.target.value||0.1)} style={{...S.inp,width:65}}/></div>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Length of the burnout/dilution zone downstream of the primary zone. Longer = more complete CO burnout but more NOx."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_PFR ({uu(units,"len")}) ⓘ:</label></Tip><input type="number" step={0.1} value={+uv(units,"len",Lpfr).toFixed(4)} onChange={e=>setL(uvI(units,"len",+e.target.value||0.1))} style={{...S.inp,width:65}}/></div>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Mean axial gas velocity in the PFR burnout section. Determines actual residence time in the PFR."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>V_PFR ({uu(units,"vel")}) ⓘ:</label></Tip><input type="number" step={1} value={+uv(units,"vel",Vpfr).toFixed(2)} onChange={e=>setV(uvI(units,"vel",+e.target.value||1))} style={{...S.inp,width:65}}/></div>
-        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Fuel inlet temperature (before adiabatic mixing with air). Default = sidebar inlet T. Set lower than air T for cold-fuel / hot-air (e.g., compressor-discharge) designs."><label style={{fontSize:10.5,color:C.orange,fontFamily:"monospace",cursor:"help"}}>T_fuel ({uu(units,"T")}) ⓘ:</label></Tip><input type="number" step={1} value={+uv(units,"T",Tfuel).toFixed(1)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value||300))} style={{...S.inp,width:75,borderColor:`${C.orange}55`}}/></div>
-        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Air (oxidizer) inlet temperature before mixing with fuel. Default = sidebar inlet T. Typical hot-section: 550–900 K for compressor discharge."><label style={{fontSize:10.5,color:C.accent3,fontFamily:"monospace",cursor:"help"}}>T_air ({uu(units,"T")}) ⓘ:</label></Tip><input type="number" step={1} value={+uv(units,"T",Tair).toFixed(1)} onChange={e=>setTair(uvI(units,"T",+e.target.value||300))} style={{...S.inp,width:75,borderColor:`${C.accent3}55`}}/></div>
-        <button onClick={()=>{setTfuel(T0);setTair(T0);}} title="Reset T_fuel and T_air to the sidebar inlet T" style={{padding:"3px 10px",fontSize:10,fontWeight:600,color:C.txtDim,background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>=T₀</button>
+        <div style={{fontSize:10,color:C.txtMuted,fontFamily:"monospace",marginLeft:8,paddingLeft:8,borderLeft:`1px dashed ${C.border}`}}>
+          T_air = <span style={{color:C.accent3}}>{uv(units,"T",Tair).toFixed(1)} {uu(units,"T")}</span>
+          &nbsp;·&nbsp; T_fuel = <span style={{color:C.orange}}>{uv(units,"T",Tfuel).toFixed(1)} {uu(units,"T")}</span>
+          &nbsp;<span style={{color:C.txtMuted,fontSize:9}}>(set in sidebar)</span>
+        </div>
       </div>
       {Math.abs(Tfuel-Tair)>0.5&&(
         <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",marginBottom:8,padding:"4px 8px",background:`${C.accent}08`,border:`1px dashed ${C.accent}40`,borderRadius:4,display:"inline-block"}}>
@@ -694,16 +698,16 @@ export default function App(){
   const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.52);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("ENG");
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
   const[tau_psr,setTauPsr]=useState(2);const[L_pfr,setLpfr]=useState(0.1036);const[V_pfr,setVpfr]=useState(20);
-  // Separate fuel & air inlet temperatures for the combustor (K). Default both to T0 so the
-  // mix degenerates to the single-inlet case until the user overrides either field.
-  const[T_fuel,setTfuel]=useState(810.93);const[T_air,setTair]=useState(810.93);
+  // Fuel-stream inlet temperature (K). Air inlet T = T0 (sidebar). When T_fuel != T0
+  // the combustor mixes them adiabatically before the PSR.
+  const[T_fuel,setTfuel]=useState(810.93);
   const[measO2,setMeasO2]=useState(14.0);const[measCO2,setMeasCO2]=useState(3.0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
   const[showPricing,setShowPricing]=useState(false);
   const[authModal,setAuthModal]=useState(null); // null | "login" | "signup"
   const[accurate,setAccurate]=useState(false);
-  const panelState={velocity,Lchar,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode};
+  const panelState={velocity,Lchar,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode};
   const hasOnline=!!auth.hasOnlineAccess;
 
   // Checkout return — refresh subscription state after coming back from Stripe
@@ -818,8 +822,16 @@ export default function App(){
                 <input type="range" min={0.3*FAR_stoich} max={FAR_stoich} step={FAR_stoich/1000} value={FAR} onChange={e=>setFAR(+e.target.value)} style={{width:"100%",accentColor:C.accent2}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>Stoichiometric FAR = {FAR_stoich.toFixed(5)} (kg fuel / kg air)</div>
               </div>
-              <div style={{marginBottom:10}}><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Inlet Temperature ({uu(units,"T")})</label>
+              <div style={{marginBottom:10}}><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, adiabatic mixing with T_fuel (below) sets the actual PSR inlet temperature.">Air Temperature ({uu(units,"T")})</label>
                 <input type="number" style={S.inp} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value||(units==="SI"?300:80)))}/></div>
+              <div style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel inlet temperature (before adiabatic mixing with air). Combustor tab only. Typical values: 290 K (cold fuel line) to 550 K (preheated). Defaults to Air T until you change it.">Fuel Temperature ({uu(units,"T")})</label>
+                  <button onClick={()=>setTfuel(T0)} title="Reset T_fuel to match Air Temperature" style={{padding:"1px 8px",fontSize:9,fontWeight:700,color:C.orange,background:"transparent",border:`1px solid ${C.orange}50`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>= T_air</button>
+                </div>
+                <input type="number" style={{...S.inp,borderColor:`${C.orange}55`}} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value||(units==="SI"?300:80)))}/>
+                <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={units==="SI"?5:5} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.orange,marginTop:4}}/>
+              </div>
               <div><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
                 <input type="number" step="0.5" style={S.inp} value={+uv(units,"P",P).toFixed(3)} onChange={e=>setP(uvI(units,"P",+e.target.value||(units==="SI"?1:14.696)))}/></div>
             </div>
@@ -829,7 +841,7 @@ export default function App(){
           <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
             {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar}/>}
-            {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} Tair={T_air} setTair={setTair}/>}
+            {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="props"&&<PropsPanel/>}
             {tab==="account"&&auth.isAuthenticated&&<AccountPanel C={C}/>}
