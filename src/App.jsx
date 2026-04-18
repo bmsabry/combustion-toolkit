@@ -750,7 +750,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
           </div>
         </div>
       )}
-      <svg viewBox="0 0 600 60" style={{width:"100%",maxWidth:600,marginBottom:10}}>
+      <svg viewBox="0 0 600 60" style={{width:"100%",maxWidth:750,marginBottom:10}}>
         <defs><linearGradient id="pg1b" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor={C.accent} stopOpacity=".6"/><stop offset="100%" stopColor={C.accent3} stopOpacity=".6"/></linearGradient><linearGradient id="pg2b" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor={C.accent3} stopOpacity=".6"/><stop offset="100%" stopColor={C.accent2} stopOpacity=".6"/></linearGradient></defs>
         <rect x="16" y="10" width="40" height="40" rx="4" fill="none" stroke={C.border} strokeWidth="1.5"/><text x="36" y="28" fill={C.txtDim} fontSize="7.5" textAnchor="middle" fontFamily="monospace">FUEL</text><text x="36" y="38" fill={C.txtDim} fontSize="7.5" textAnchor="middle" fontFamily="monospace">+OX</text><polygon points="58,26 70,30 58,34" fill={C.border}/>
         <rect x="72" y="5" width="150" height="50" rx="8" fill="url(#pg1b)" opacity=".12" stroke={C.accent} strokeWidth="1.5"/><text x="147" y="26" fill={C.accent} fontSize="11" textAnchor="middle" fontFamily="monospace" fontWeight="700">PSR</text><text x="147" y="40" fill={C.txtMuted} fontSize="8" textAnchor="middle" fontFamily="monospace">τ={tau}ms T={uv(units,"T",net.T_psr).toFixed(0)}{uu(units,"T")}</text>
