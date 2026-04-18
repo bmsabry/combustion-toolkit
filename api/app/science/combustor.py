@@ -390,17 +390,24 @@ def run(
     # PSR seed — dispatch based on psr_seed + eq_constraint
     psr_gas = _dispatch_seed(psr_seed, eq_constraint, T_mixed, P_Pa, X_in, mech=mech_path)
     psr = ct.IdealGasReactor(psr_gas, energy="on")
+    # CRITICAL: Cantera's IdealGasReactor defaults to V=1.0 m³. mdot below is sized
+    # for V_psr=1e-3 m³ so we MUST set psr.volume to match — otherwise the effective
+    # residence time is 1000× the requested tau_psr_s, NO runs to equilibrium, and
+    # the PSR behaves like a closed batch reactor.
+    V_psr = 1.0e-3  # m³ reference — only mdot/tau is physical, volume just needs to match
+    psr.volume = V_psr
+    mdot = psr_gas.density * V_psr / max(tau_psr_s, 1e-9)
 
-    # Downstream reservoir (state irrelevant at steady state)
+    # Downstream reservoir must be at the same pressure as the PSR; otherwise
+    # the PressureController will bleed the PSR toward the downstream pressure.
     downstream_gas = ct.Solution(mech_path)
     downstream_gas.TPX = psr_gas.T, psr_gas.P, psr_gas.X
     downstream = ct.Reservoir(downstream_gas)
 
-    V_psr = 1.0e-3  # m³ reference — only mdot/tau is physical
-    mdot = psr_gas.density * V_psr / max(tau_psr_s, 1e-9)
-
     mfc = ct.MassFlowController(upstream=upstream, downstream=psr, mdot=mdot)
-    out = ct.PressureController(upstream=psr, downstream=downstream, primary=mfc, K=1e-5)
+    # K is the pressure-coupling coefficient of the outflow controller.
+    # Making this larger keeps P_psr pinned to P_downstream during transients.
+    out = ct.PressureController(upstream=psr, downstream=downstream, primary=mfc, K=1e-2)
 
     # Optional heat loss: hold the PSR at T_target = T_ad - f·(T_ad − T_in) via a
     # high-conductance wall to an ambient reservoir at T_target. With large U,
