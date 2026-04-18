@@ -33,12 +33,25 @@ export function setCachedUser(u) {
   try { if (u) localStorage.setItem(USER_KEY, JSON.stringify(u)); else localStorage.removeItem(USER_KEY); } catch {}
 }
 
+// In desktop mode, the preload script exposes window.__CTK_LICENSE_TOKEN__
+// (signed offline license). The loopback solver's require_desktop_license
+// dependency validates the HMAC on this header before running any /calc/*.
+function getDesktopLicenseToken() {
+  try {
+    return (typeof window !== "undefined" && window.__CTK_LICENSE_TOKEN__) || null;
+  } catch {
+    return null;
+  }
+}
+
 // ---- low-level fetch with auto-refresh ----
 async function request(path, { method = "GET", body = null, auth = false, retry = true } = {}) {
   const headers = { "Content-Type": "application/json" };
   if (auth) {
     const t = getToken();
     if (t) headers["Authorization"] = `Bearer ${t}`;
+    const lt = getDesktopLicenseToken();
+    if (lt) headers["X-License-Token"] = lt;
   }
   const res = await fetch(`${API_BASE}${path}`, {
     method,

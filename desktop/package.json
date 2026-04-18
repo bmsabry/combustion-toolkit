@@ -48,7 +48,7 @@
       ],
       "category": "public.app-category.education",
       "identity": null,
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "gatekeeperAssess": false
     },
     "win": {

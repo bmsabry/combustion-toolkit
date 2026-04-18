@@ -104,13 +104,20 @@ def create_desktop_app() -> FastAPI:
         docs_url=None,
         redoc_url=None,
     )
-    # Electron renders from file:// or http://localhost:<vite>; permissive CORS is fine on a loopback server.
+    # Loopback binding already prevents off-host callers; still tighten CORS to the
+    # origins Electron actually uses so a malicious browser extension or local web
+    # page can't drive /calc/* via fetch. Electron file:// pages send Origin: null;
+    # Chromium treats null as a valid origin that must be listed explicitly.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[
+            "null",                    # Electron file:// production load
+            "http://localhost:5173",   # Vite dev server (CTK_DEV_UI)
+            "http://127.0.0.1:5173",
+        ],
         allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-License-Token"],
     )
 
     @app.get("/health", response_model=HealthResponse)

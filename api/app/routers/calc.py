@@ -38,8 +38,13 @@ def _run_in_pool(fn, *args, **kwargs) -> Any:
     try:
         return _solver_pool.submit(fn, *args, **kwargs).result(timeout=180)
     except Exception as e:
-        log.exception("solver error: %s", e)
-        raise HTTPException(status_code=500, detail=f"solver error: {e}") from e
+        # Log the full exception server-side but return a generic message to clients
+        # to avoid leaking mechanism/species internals or stack traces.
+        log.exception("solver error in %s: %s", fn.__name__, e)
+        raise HTTPException(
+            status_code=500,
+            detail="Solver failed to converge on the submitted inputs. Check fuel composition, phi, and T/P, then retry.",
+        ) from e
 
 
 @router.post("/aft", response_model=AFTResponse)
@@ -104,7 +109,10 @@ def calc_flame_speed_sweep(
         ).result(timeout=540)
     except Exception as e:
         log.exception("flame-speed-sweep error: %s", e)
-        raise HTTPException(status_code=500, detail=f"sweep error: {e}") from e
+        raise HTTPException(
+            status_code=500,
+            detail="Flame-speed sweep failed. One or more points may be outside the flammability limits; narrow the range and retry.",
+        ) from e
     return FlameSpeedSweepResponse(**result)
 
 

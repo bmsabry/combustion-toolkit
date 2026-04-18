@@ -12,6 +12,15 @@ if (arg) {
   contextBridge.exposeInMainWorld("__CTK_API_BASE__", base);
 }
 
+// Pluck --ctk-license-token=<token>. Renderer attaches this as X-License-Token
+// on every /calc/* request so the loopback solver's HMAC check runs in addition
+// to the env-var-based startup check.
+const tokArg = process.argv.find((a) => a.startsWith("--ctk-license-token="));
+if (tokArg) {
+  const tok = tokArg.slice("--ctk-license-token=".length);
+  contextBridge.exposeInMainWorld("__CTK_LICENSE_TOKEN__", tok);
+}
+
 contextBridge.exposeInMainWorld("ctk", {
   activateLicense: (key) => ipcRenderer.invoke("license:activate", { key }),
   licenseStatus: () => ipcRenderer.invoke("license:status"),

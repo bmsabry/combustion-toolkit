@@ -11,13 +11,17 @@ returns 503 so the feature is off by default.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+import logging
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import get_db
 from ..models import User
+
+log = logging.getLogger("combustion-toolkit-api.admin")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 settings = get_settings()
@@ -50,14 +54,25 @@ def _require_secret(x_admin_secret: str | None = Header(default=None)) -> None:
 @router.post("/promote", response_model=PromoteResponse)
 def promote_user(
     body: PromoteRequest,
+    request: Request,
     db: Session = Depends(get_db),
     _: None = Depends(_require_secret),
 ) -> PromoteResponse:
+    remote_ip = (request.client.host if request.client else "unknown") or "unknown"
     user = db.query(User).filter(User.email == body.email.lower()).first()
     if not user:
+        log.warning("admin.promote missed email=%s ip=%s", body.email, remote_ip)
         raise HTTPException(status_code=404, detail=f"No user with email '{body.email}'")
-    user.is_admin = bool(body.admin)
+    before = bool(user.is_admin)
+    after = bool(body.admin)
+    user.is_admin = after
     db.commit()
+    # Structured audit line — lets Render/grep spot ADMIN_SECRET leaks after the fact.
+    log.warning(
+        "admin.promote email=%s before=%s after=%s ip=%s action=%s",
+        user.email, before, after, remote_ip,
+        "promoted" if after else "revoked",
+    )
     return PromoteResponse(
         email=user.email,
         is_admin=user.is_admin,

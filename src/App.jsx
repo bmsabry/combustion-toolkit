@@ -495,6 +495,11 @@ function PricingModal({show,onClose,onRequestSignin}){if(!show)return null;
 /* ══════════════════ ACCURATE-MODE HOOK ══════════════════ */
 // Fires a backend Cantera call when `enabled`. Returns { data, loading, error }.
 // `args` is serialized as a key so changes trigger a new call.
+// A 300 s hard timeout guards against a hung solver locking the busy overlay
+// forever (Render's HTTP ceiling is 600 s; the backend solver pool uses 540 s;
+// 300 s client-side is the shortest reasonable ceiling that still lets long
+// sweeps finish).
+const BACKEND_CALC_TIMEOUT_MS = 300_000;
 function useBackendCalc(kind, args, enabled){
   const [data,setData]=useState(null);const[loading,setLoading]=useState(false);const[err,setErr]=useState(null);
   const {begin}=useContext(BusyCtx);
@@ -506,9 +511,17 @@ function useBackendCalc(kind, args, enabled){
     let cancelled=false;setLoading(true);setErr(null);
     const endBusy=begin(BUSY_LABELS[kind]||kind);
     let ended=false;const safeEnd=()=>{if(!ended){ended=true;endBusy();}};
-    fn(args).then(d=>{if(!cancelled){setData(d);setLoading(false);}safeEnd();})
-            .catch(e=>{if(!cancelled){setErr(e.message||String(e));setLoading(false);setData(null);}safeEnd();});
-    return()=>{cancelled=true;safeEnd();};
+    const timeoutId=setTimeout(()=>{
+      if(!cancelled){
+        cancelled=true;
+        setErr(`Request timed out after ${BACKEND_CALC_TIMEOUT_MS/1000}s. The solver may be under load; try again or simplify inputs.`);
+        setLoading(false);setData(null);
+      }
+      safeEnd();
+    },BACKEND_CALC_TIMEOUT_MS);
+    fn(args).then(d=>{clearTimeout(timeoutId);if(!cancelled){setData(d);setLoading(false);}safeEnd();})
+            .catch(e=>{clearTimeout(timeoutId);if(!cancelled){setErr(e.message||String(e));setLoading(false);setData(null);}safeEnd();});
+    return()=>{cancelled=true;clearTimeout(timeoutId);safeEnd();};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[enabled,key,kind]);
   return{data,loading,err};

@@ -144,7 +144,14 @@ async function showActivationWindow() {
   });
 }
 
-async function showMainWindow() {
+async function showMainWindow(licenseToken) {
+  const extraArgs = [`--ctk-api-base=http://127.0.0.1:${solverPort}`];
+  if (licenseToken) {
+    // Renderer attaches this as X-License-Token on every /calc/* request — the
+    // loopback solver's require_desktop_license dependency validates the HMAC
+    // in addition to the CTK_LICENSE_TOKEN env var the process was started with.
+    extraArgs.push(`--ctk-license-token=${licenseToken}`);
+  }
   mainWin = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -153,7 +160,7 @@ async function showMainWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--ctk-api-base=http://127.0.0.1:${solverPort}`],
+      additionalArguments: extraArgs,
     },
   });
 
@@ -247,7 +254,7 @@ app.whenReady().then(async () => {
     return;
   }
 
-  await showMainWindow();
+  await showMainWindow(lic.signed_token);
 });
 
 app.on("window-all-closed", () => {
@@ -258,5 +265,8 @@ app.on("window-all-closed", () => {
 app.on("before-quit", stopSolver);
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0 && solverPort) showMainWindow();
+  if (BrowserWindow.getAllWindows().length === 0 && solverPort) {
+    const lic = readLicense();
+    showMainWindow(lic && lic.signed_token);
+  }
 });

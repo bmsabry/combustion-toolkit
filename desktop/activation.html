@@ -2,6 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8" />
+  <!-- Defense-in-depth: tight CSP on the activation window (it handles a license key).
+       No remote scripts, no remote frames, no inline event handlers on <input>.
+       'unsafe-inline' for styles matches the existing in-file <style> block; script
+       stays inline as well but cannot fetch anything off-host. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'" />
   <title>Activate Combustion Toolkit</title>
   <style>
     body { margin:0; background:#0a0e1a; color:#e8eaf0; font-family: 'Barlow','Segoe UI',sans-serif; padding:32px; }

@@ -4,25 +4,29 @@ Three cases exercise the combustor:
 
     Case A — legacy fixture (tau_PSR=2 ms). Same fuel/air T=1000 F, so the
     adiabatic mix of T_fuel==T_air reduces to the old single-inlet behavior.
-    Guards that the cold-ignited + advance-based scheme still converges to the
-    same answer the earlier test expected.
 
     Case B — short tau (tau_PSR=0.5 ms), same fuel/air T=1000 F. Pins the
-    new cold-ignited-with-NOx-zeroed seed + chunked-advance convergence at
-    short residence time. Matches the user's 2026-04-17 screenshot within 2%.
+    cold-ignited-with-NOx-zeroed seed + chunked-advance convergence at
+    short residence time.
 
     Case C — separate T_fuel (70 F) and T_air (1000 F) adiabatically mixed.
     Verifies the adiabatic mixing produces a lower mixed inlet T than Case B,
-    which in turn lowers T_psr and NO_exit. This case pins the new
-    T_fuel/T_air feature.
+    which in turn lowers T_psr and NO_exit.
 
-Expected values were obtained by running an independent clean Cantera script
-using the same GRI-Mech 3.0 mechanism and reactor topology; see
-psr_new_scheme.py at the repo root.
+Expected values were re-derived 2026-04-18 using an independent Cantera
+PSR+PFR oracle (`api/tests/_ref_psr_pfr.py`) after the PSR-volume correctness
+fix in commit 041899f shortened the effective residence time by 1000x. The
+earlier pins reflected the pre-fix near-equilibrium NOx and are no longer
+physically correct for a DLE combustor at tau=2 ms.
+
+Tolerances are wide enough to absorb small day-to-day drift in the PSR
+convergence scheme but tight enough that a real physics regression (e.g.,
+another 1000x residence-time bug, a wrong mixing fraction) will fail loudly.
 
 If these assertions fail after a code change, either:
   (a) the change broke the physics → fix the code, OR
-  (b) the change was an intentional methodology update → update the pinned values.
+  (b) the change was an intentional methodology update → re-run the oracle
+      (`python -m tests._ref_psr_pfr` from api/) and update the pinned values.
 """
 from __future__ import annotations
 
@@ -56,13 +60,17 @@ def test_A_temperatures(result_A):
 
 
 def test_A_nox_ppmvd(result_A):
-    # Reference Cantera: NO exit ~ 1790 ppmvd at tau=2ms
-    assert 1770 < result_A["NO_ppm_vd_exit"] < 1810, f'NO_exit={result_A["NO_ppm_vd_exit"]}'
+    # Post-041899f (correct PSR volume): NO_exit ~ 15-17 ppmvd at tau=2ms, phi=0.52.
+    # Independent Cantera oracle (_ref_psr_pfr.py Case A) gives 14.7 ppmvd;
+    # app gives 16.9 ppmvd (differs due to cold-ignited seed vs advance_to_steady_state).
+    assert 13.0 < result_A["NO_ppm_vd_exit"] < 20.0, f'NO_exit={result_A["NO_ppm_vd_exit"]}'
     assert result_A["NO_ppm_vd_exit"] >= result_A["NO_ppm_vd_psr"]
 
 
 def test_A_nox_corrected(result_A):
-    assert 1000 < result_A["NO_ppm_15O2"] < 1040, f'NO_15={result_A["NO_ppm_15O2"]}'
+    # NO @ 15% O2: NO_exit * (20.95 - 15) / (20.95 - O2_exit) where O2_exit ~ 10.59%
+    # → correction factor ~ 0.574 → NO_15 ~ 8-12 ppm
+    assert 7.0 < result_A["NO_ppm_15O2"] < 12.0, f'NO_15={result_A["NO_ppm_15O2"]}'
 
 
 def test_A_co_ppmvd(result_A):
@@ -91,18 +99,21 @@ def result_B():
 
 
 def test_B_temperatures(result_B):
-    assert 1890.0 < result_B["T_psr"] < 1900.0, f'T_psr={result_B["T_psr"]}'
+    # At tau=0.5 ms the PSR doesn't fully relax to AFT; T_psr sits 10-20 K below T_exit.
+    assert 1870.0 < result_B["T_psr"] < 1895.0, f'T_psr={result_B["T_psr"]}'
 
 
 def test_B_nox_ppmvd(result_B):
-    # Reference Cantera (new cold-ignited + advance scheme at tau=0.5ms): NO_exit ~ 681, NO_psr ~ 673
-    assert 660 < result_B["NO_ppm_vd_exit"] < 700, f'NO_exit={result_B["NO_ppm_vd_exit"]}'
-    assert 650 < result_B["NO_ppm_vd_psr"] < 695, f'NO_psr={result_B["NO_ppm_vd_psr"]}'
+    # Post-041899f: shorter residence -> less Zeldovich time -> lower NO_psr than Case A.
+    # Oracle: NO_exit = 12.7 ppmvd, NO_psr = 3.1 ppmvd. App: 13.8 / 4.4.
+    assert 10.0 < result_B["NO_ppm_vd_exit"] < 17.0, f'NO_exit={result_B["NO_ppm_vd_exit"]}'
+    assert 2.5 < result_B["NO_ppm_vd_psr"] < 6.0, f'NO_psr={result_B["NO_ppm_vd_psr"]}'
     assert result_B["NO_ppm_vd_exit"] >= result_B["NO_ppm_vd_psr"]
 
 
 def test_B_nox_corrected(result_B):
-    assert 375 < result_B["NO_ppm_15O2"] < 400, f'NO_15={result_B["NO_ppm_15O2"]}'
+    # NO @ 15% O2 with O2_exit ~ 10.59%. App: 7.94.
+    assert 6.0 < result_B["NO_ppm_15O2"] < 10.0, f'NO_15={result_B["NO_ppm_15O2"]}'
 
 
 def test_B_o2_dry(result_B):
