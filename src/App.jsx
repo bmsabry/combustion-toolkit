@@ -565,6 +565,8 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
   const [psrSeed,setPsrSeed]=useState("cold_ignited");
   const [eqConstraint,setEqConstraint]=useState("HP");
   const [integration,setIntegration]=useState("chunked");
+  const [heatLossFrac,setHeatLossFrac]=useState(0);
+  const [mechanism,setMechanism]=useState("gri30");
   // Compatibility: unreacted seed has no equilibrium to constrain; autoignition is constant-HP by construction.
   const constraintDisabled=psrSeed==="unreacted"||psrSeed==="autoignition";
   const effectiveConstraint=psrSeed==="autoignition"?"HP":eqConstraint;
@@ -572,7 +574,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
   // If user switches to autoignition while UV/TP was selected, snap the constraint back to HP.
   useEffect(()=>{if(psrSeed==="autoignition"&&eqConstraint!=="HP")setEqConstraint("HP");},[psrSeed]);
   const localNet=useMemo(()=>calcCombustorNetwork(fuel,ox,phi,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair),[fuel,ox,phi,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair]);
-  const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60,T_fuel_K:Tfuel,T_air_K:Tair,psr_seed:psrSeed,eq_constraint:effectiveConstraint,integration},accurate);
+  const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60,T_fuel_K:Tfuel,T_air_K:Tair,psr_seed:psrSeed,eq_constraint:effectiveConstraint,integration,heat_loss_fraction:heatLossFrac,mechanism},accurate);
   // Adapt backend response to local combustor format.
   const backendNet=bk.data?{
     T_ad:bk.data.T_exit,T_psr:bk.data.T_psr,conv_psr:bk.data.conv_psr,
@@ -582,6 +584,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
     O2_pct:bk.data.O2_pct_dry_exit??0,  // dry-basis exhaust O2 from Cantera
     tau_pfr_ms:bk.data.tau_pfr_ms,tau_total_ms:bk.data.tau_total_ms,
     L_psr_cm:bk.data.L_psr_cm,L_total_cm:bk.data.L_total_cm,
+    heat_loss_fraction:bk.data.heat_loss_fraction,T_target_K:bk.data.T_target_K,
     pfr:bk.data.profile||[],fromBackend:true
   }:null;
   const net=accurate&&backendNet?backendNet:localNet;
@@ -651,6 +654,44 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
               <button key={o.v} onClick={()=>setIntegration(o.v)} style={{padding:"4px 9px",fontSize:10,fontWeight:integration===o.v?700:400,color:integration===o.v?C.bg:C.txtDim,background:integration===o.v?C.accent2:"transparent",border:`1px solid ${integration===o.v?C.accent2:C.border}`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".3px",transition:"all .15s"}}>{o.l}</button>
             ))}
             {showIgnitionWarning&&<span style={{fontSize:9,color:C.warm,fontStyle:"italic"}}>⚠ Steady-State + Unreacted may not ignite; Chunked is safer</span>}
+          </div>
+          {/* Heat-loss row */}
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <Tip text="Fraction of sensible heat release removed from the PSR via film cooling, liner losses, and dilution. PSR is held at T_psr = T_ad − f·(T_ad − T_inlet) via a high-conductance heat-extraction wall. Typical real DLE combustors: 0.10–0.25 (10–25% quench from idealized adiabatic). A major lever on thermal NO: 20% quench at P = 27 bar drops NO@15%O₂ from ~1000 ppm (adiabatic, GRI-Mech) into the tens.">
+              <label style={{fontSize:10,color:C.txtDim,fontFamily:"monospace",cursor:"help",minWidth:98}}>Heat loss ⓘ:</label>
+            </Tip>
+            <input type="range" min="0" max="0.5" step="0.01" value={heatLossFrac} onChange={e=>setHeatLossFrac(+e.target.value)} style={{width:140}}/>
+            <span style={{fontSize:10,fontFamily:"monospace",color:C.accent,fontWeight:700,minWidth:40}}>{(heatLossFrac*100).toFixed(0)}%</span>
+            <span style={{fontSize:9,color:C.txtMuted,fontStyle:"italic"}}>
+              {heatLossFrac===0?"adiabatic (T_psr ≈ T_ad)":`T_psr ≈ T_ad − ${(heatLossFrac*100).toFixed(0)}%·(T_ad − T_inlet)`}
+            </span>
+          </div>
+          {/* Mechanism row */}
+          <div style={{display:"flex",alignItems:"flex-start",gap:6,flexWrap:"wrap"}}>
+            <Tip text="Chemical-kinetics mechanism. The mechanism determines both fuel-oxidation pathways (ignition, flame speed, CO burnout) and NOx chemistry (thermal, prompt, N₂O). GRI-Mech 3.0 is the default because it ships with Cantera and includes both hydrocarbon + nitrogen chemistry in one file. Other mechanisms (USC-Mech II, AramcoMech 3.0, Konnov) are widely-cited alternatives validated at elevated pressures, but most do not include built-in NOx chemistry and would require merging with a nitrogen sub-mechanism — not yet bundled.">
+              <label style={{fontSize:10,color:C.txtDim,fontFamily:"monospace",cursor:"help",minWidth:98}}>Mechanism ⓘ:</label>
+            </Tip>
+            <div style={{display:"flex",flexDirection:"column",gap:4,flex:1,minWidth:280}}>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {[
+                  {v:"gri30",l:"GRI-Mech 3.0",active:true},
+                  {v:"usc2",l:"USC-Mech II",active:false},
+                  {v:"aramco30",l:"AramcoMech 3.0",active:false},
+                  {v:"konnov",l:"Konnov 2009",active:false},
+                ].map(o=>{
+                  const sel=mechanism===o.v;
+                  return(<button key={o.v} disabled={!o.active} onClick={()=>o.active&&setMechanism(o.v)}
+                    title={o.active?"":"Not yet bundled — see summary below"}
+                    style={{padding:"4px 9px",fontSize:10,fontWeight:sel?700:400,color:sel?C.bg:(o.active?C.txtDim:C.txtMuted),background:sel?C.orange:"transparent",border:`1px solid ${sel?C.orange:C.border}`,borderRadius:3,cursor:o.active?"pointer":"not-allowed",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".3px",opacity:o.active?1:0.5,transition:"all .15s"}}>{o.l}{!o.active&&" (soon)"}</button>);
+                })}
+              </div>
+              <div style={{fontSize:9.5,color:C.txtMuted,lineHeight:1.45,fontFamily:"'Barlow',sans-serif"}}>
+                {mechanism==="gri30"&&<><strong style={{color:C.orange}}>GRI-Mech 3.0</strong> — 53 species, 325 reactions. Natural-gas oxidation (CH₄ → C₃H₈, H₂, NH₃) with thermal, prompt, and N₂O NOx chemistry. Validated for φ = 0.1–5 at P = 1–10 atm, T = 1000–2500 K. <span style={{color:C.warm}}>Known to overpredict thermal NO by 2–4× at P ≥ 10 atm vs newer mechanisms (Klippenstein 2011, Hughes 2001)</span> — use the heat-loss fraction to calibrate T_PZ to your measured combustor exit data.</>}
+                {mechanism==="usc2"&&<><strong>USC-Mech II</strong> — 111 species, 784 reactions. C1–C4 + benzene kinetics, validated to P = 100 atm (Wang et al., USC 2007). Widely used for high-pressure gas-turbine CFD. <span style={{color:C.warm}}>Does not include nitrogen chemistry</span> — must be merged with a NOx sub-mechanism (Glarborg, Konnov-N) to compute NOx. Bundling pending.</>}
+                {mechanism==="aramco30"&&<><strong>AramcoMech 3.0</strong> — 581 species, 3037 reactions. Modern C0–C4 oxidation (Zhou et al., NUIG 2017–2019) validated for natural gas, biogas, and hydrogen-enriched fuels across φ = 0.3–2 and P = 1–80 atm. <span style={{color:C.warm}}>Ships without NOx chemistry</span> — would need merging with Glarborg-N or AramcoN for NOx. Bundling pending.</>}
+                {mechanism==="konnov"&&<><strong>Konnov 2009 (v0.6)</strong> — ~130 species, ~1200 reactions. H₂/CO/C1–C3 with detailed N-chemistry including prompt-NO (CH+N₂ → NCN+H) and N₂O paths. Particularly good for oxy-fuel and rich combustion NOx. <span style={{color:C.warm}}>Source file not in Cantera-YAML format upstream</span> — conversion pending.</>}
+              </div>
+            </div>
           </div>
         </div>
       )}

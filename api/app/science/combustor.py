@@ -196,20 +196,32 @@ def _integrate_chunked(
     tau_psr_s: float,
     max_wall_time_s: float = 30.0,
 ) -> None:
-    """Integrate the PSR in chunks until both T and NO stop changing, or until
-    a safety cap is reached.
+    """Integrate the PSR until both T and NO stabilize.
 
-    Chunk size is 100× tau (or at least 100 ms). Convergence tolerance:
-    |ΔT| < 0.02 K and |ΔNO/NO| < 1e-4 between successive chunks.
+    Convergence protocol:
+      * Advance in chunks of 50·tau (minimum 25 ms of simulated time).
+      * Require a MINIMUM integration time of max(1000·tau, 1.0 s) before
+        any convergence test is evaluated. Rationale: at gas-turbine
+        pressures the Zeldovich NO relaxation takes 1–10 s (~1e3–1e4 τ),
+        far longer than ignition and T-relaxation. Bailing earlier is a
+        false convergence and produces seed-dependent steady-state NO.
+      * Declare converged only when |ΔT|<0.005 K AND |ΔNO/NO|<1e-6 hold
+        over TWO consecutive chunks (prevents declaring converged when
+        Zeldovich is transiently flat at a local inflection).
+      * Absolute caps: simulated time ≤ max(1e5·τ, 60 s); wall time
+        ≤ max_wall_time_s.
     """
     NO_idx = psr.phase.species_index("NO")
-    chunk = max(100.0 * tau_psr_s, 0.1)
+    chunk = max(50.0 * tau_psr_s, 0.025)
     t = 0.0
     prev_T = -1.0
     prev_NO = -1.0
-    max_total = max(1.0e5 * tau_psr_s, 30.0)
+    stable_count = 0
+    # Integrate at least 1000·τ (min 1 s) but cap at 10 s of simulated time.
+    min_total = min(max(1000.0 * tau_psr_s, 1.0), 10.0)
+    max_total = min(max(1.0e5 * tau_psr_s, 60.0), 120.0)
     wall0 = time.monotonic()
-    for _ in range(200):
+    for _ in range(5000):
         if time.monotonic() - wall0 > max_wall_time_s:
             break
         t += chunk
@@ -225,8 +237,13 @@ def _integrate_chunked(
             break
         T = float(psr.phase.T)
         NO = float(psr.phase.X[NO_idx]) if NO_idx >= 0 else 0.0
-        if prev_T >= 0 and abs(T - prev_T) < 0.02 and abs(NO - prev_NO) < 1e-4 * max(NO, 1e-12):
-            break
+        if t >= min_total and prev_T >= 0:
+            if abs(T - prev_T) < 0.005 and abs(NO - prev_NO) < 1e-6 * max(NO, 1e-12):
+                stable_count += 1
+                if stable_count >= 2:
+                    break
+            else:
+                stable_count = 0
         prev_T, prev_NO = T, NO
 
 
@@ -248,15 +265,24 @@ def _integrate_step(
     tau_psr_s: float,
     max_wall_time_s: float = 30.0,
 ) -> None:
-    """Step-by-step integration using net.step() with convergence check on
-    each internal timestep."""
+    """Step-by-step integration using net.step() with a minimum-simulated-time
+    gate before convergence is tested.
+
+    Same rationale as `_integrate_chunked`: require ≥ max(1000·τ, 1 s)
+    of simulated time before the convergence criterion
+    (|ΔT|<0.005 K ∧ |ΔNO/NO|<1e-6) can trigger, and only break after 50
+    consecutive stable internal steps. Hard caps: simulated time
+    ≤ max(1e5·τ, 60 s); wall time ≤ max_wall_time_s.
+    """
     NO_idx = psr.phase.species_index("NO")
     prev_T = -1.0
     prev_NO = -1.0
-    max_total = max(1.0e5 * tau_psr_s, 30.0)
+    # Integrate at least 1000·τ (min 1 s) but cap at 10 s of simulated time.
+    min_total = min(max(1000.0 * tau_psr_s, 1.0), 10.0)
+    max_total = min(max(1.0e5 * tau_psr_s, 60.0), 120.0)
     stable_count = 0
     wall0 = time.monotonic()
-    for _ in range(200000):
+    for _ in range(500000):
         if time.monotonic() - wall0 > max_wall_time_s:
             break
         try:
@@ -267,12 +293,13 @@ def _integrate_step(
             break
         T = float(psr.phase.T)
         NO = float(psr.phase.X[NO_idx]) if NO_idx >= 0 else 0.0
-        if prev_T >= 0 and abs(T - prev_T) < 0.02 and abs(NO - prev_NO) < 1e-4 * max(NO, 1e-12):
-            stable_count += 1
-            if stable_count >= 20:  # require sustained stability
-                break
-        else:
-            stable_count = 0
+        if t_now >= min_total and prev_T >= 0:
+            if abs(T - prev_T) < 0.005 and abs(NO - prev_NO) < 1e-6 * max(NO, 1e-12):
+                stable_count += 1
+                if stable_count >= 50:  # require sustained stability
+                    break
+            else:
+                stable_count = 0
         prev_T, prev_NO = T, NO
 
 
@@ -308,6 +335,7 @@ def run(
     psr_seed: str = "cold_ignited",
     eq_constraint: str = "HP",
     integration: str = "chunked",
+    heat_loss_fraction: float = 0.0,
 ) -> dict:
     """PSR then PFR. Returns emissions at PSR exit and PFR exit, plus a profile.
 
@@ -329,6 +357,10 @@ def run(
     if integration not in _INTEGRATION_OPTIONS:
         raise ValueError(
             f"integration must be one of {_INTEGRATION_OPTIONS}, got {integration!r}"
+        )
+    if not (0.0 <= heat_loss_fraction <= 0.5):
+        raise ValueError(
+            f"heat_loss_fraction must be in [0, 0.5], got {heat_loss_fraction}"
         )
 
     T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0_K)
@@ -356,6 +388,27 @@ def run(
 
     mfc = ct.MassFlowController(upstream=upstream, downstream=psr, mdot=mdot)
     out = ct.PressureController(upstream=psr, downstream=downstream, primary=mfc, K=1e-5)
+
+    # Optional heat loss: hold the PSR at T_target = T_ad - f·(T_ad − T_in) via a
+    # high-conductance wall to an ambient reservoir at T_target. With large U,
+    # the reactor's energy balance is dominated by the wall, pinning T at
+    # T_target while the mass-flow/chemistry proceed normally. This is the
+    # standard parametrisation used by combustor designers (quench fraction).
+    T_target = 0.0
+    ambient = None
+    wall = None
+    if heat_loss_fraction > 0.0:
+        eq_gas = ct.Solution("gri30.yaml")
+        eq_gas.TPX = T_mixed, P_Pa, X_in
+        eq_gas.equilibrate("HP")
+        T_ad_ref = float(eq_gas.T)
+        T_target = T_ad_ref - float(heat_loss_fraction) * (T_ad_ref - float(T_mixed))
+        ambient_gas = ct.Solution("gri30.yaml")
+        ambient_gas.TPX = T_target, P_Pa, eq_gas.X
+        ambient = ct.Reservoir(ambient_gas)
+        # U*A with A=1 m² → U in W/m²/K. 1e7 ≫ mdot·cp for our scales (mdot~O(1)
+        # kg/s, cp~1500, so 1e7 K/(K·s) dominates). Reactor T locks to T_target.
+        wall = ct.Wall(psr, ambient, U=1.0e7, A=1.0)
 
     net = ct.ReactorNet([psr])
     net.rtol = 1e-9
@@ -456,5 +509,7 @@ def run(
         "psr_seed": psr_seed,
         "eq_constraint": eq_constraint,
         "integration": integration,
+        "heat_loss_fraction": float(heat_loss_fraction),
+        "T_target_K": float(T_target),  # 0.0 if heat_loss_fraction == 0
         "profile": profile,
     }

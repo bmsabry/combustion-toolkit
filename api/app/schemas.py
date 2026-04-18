@@ -179,6 +179,20 @@ class CombustorRequest(BaseCalcRequest):
         pattern="^(steady_state|chunked|step)$",
         description="PSR time-integration strategy",
     )
+    heat_loss_fraction: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=0.5,
+        description=(
+            "PSR heat loss as fraction of sensible heat release. "
+            "T_psr is held at T_ad − f·(T_ad − T_in). Typical DLE values: 0.10–0.25."
+        ),
+    )
+    mechanism: str = Field(
+        default="gri30",
+        pattern="^(gri30)$",
+        description="Kinetic mechanism selector (currently only GRI-Mech 3.0).",
+    )
 
 
 class CombustorProfilePoint(BaseModel):
@@ -212,6 +226,9 @@ class CombustorResponse(BaseModel):
     psr_seed: Optional[str] = None
     eq_constraint: Optional[str] = None
     integration: Optional[str] = None
+    heat_loss_fraction: Optional[float] = None
+    T_target_K: Optional[float] = None
+    mechanism: Optional[str] = None
     profile: List[CombustorProfilePoint]
 
 

@@ -92,7 +92,9 @@ def calc_combustor(
         body.psr_seed,
         body.eq_constraint,
         body.integration,
+        body.heat_loss_fraction,
     )
+    result["mechanism"] = body.mechanism
     return CombustorResponse(**result)
 
 
