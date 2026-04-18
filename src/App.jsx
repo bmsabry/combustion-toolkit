@@ -656,13 +656,14 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
     setSweepRunning(true);setSweepErr(null);
     const endBusy=beginBusy(BUSY_LABELS.flame_sweep);
     const base={fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair};
-    // Point counts kept modest so each sweep fits comfortably inside the
-    // backend's 540 s pool timeout: phi 10 × ~25 s ≈ 250 s, T 8 × ~25 s ≈ 200 s,
-    // P 7 × ~25 s ≈ 175 s. Dropped T=250 K (often below flammability limit —
-    // silent convergence-fighting that burns budget for no useful data).
-    const phiVals=Array.from({length:10},(_,i)=>+(0.4+(2.0-0.4)*i/9).toFixed(3));
-    const TVals=[300,350,400,450,500,600,700,800];
-    const PVals_bar=[0.5,1,2,5,10,20,40].map(atmToBar);
+    // Trimmed point counts — each sweep now finishes in ~2 min worst-case:
+    //   phi 5 × ~25 s ≈ 125 s, T 4 × ~25 s ≈ 100 s, P 5 × ~25 s ≈ 125 s
+    // phi: even spacing 0.4 → 2.0 (brackets hydrocarbon peak ~1 and H₂ peak ~1.8)
+    // T:   300/500/650/800 K — ambient → preheat → high-preheat range
+    // P:   0.5/1/5/20/40 bar — geometric spread spanning sub-atm to 40 bar
+    const phiVals=Array.from({length:5},(_,i)=>+(0.4+(2.0-0.4)*i/4).toFixed(3));
+    const TVals=[300,500,650,800];
+    const PVals_bar=[0.5,1,5,20,40].map(atmToBar);
     try{
       // Run sweeps SEQUENTIALLY. Backend solver pool has max_workers=1 (Cantera is
       // not thread-safe), so Promise.all just serializes them anyway *and* leaks
