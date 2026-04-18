@@ -714,9 +714,27 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
   else{tau_ign=NaN;tau_ign_is_lower_bound=false;}
   // Premixer residence time (s): τ_res = L_premix / V_premix.
   const tau_res=Lpremix/Math.max(Vpremix,1e-20);
-  // Safety margin — τ_res must be shorter than τ_ign to avoid autoignition inside the premixer.
-  const ignition_safe=isFinite(tau_ign)&&tau_res<tau_ign;
+  // Autoignition safety — τ_ign / τ_res. ≥ 3 is robust (gating threshold).
+  //   1–3 marginal; < 1 means the mixture will autoignite before exiting the premixer.
   const ignition_margin=isFinite(tau_ign)?tau_ign/Math.max(tau_res,1e-20):NaN;
+  const ignition_safe=isFinite(tau_ign)&&ignition_margin>=3;
+  // ───── Core flashback (flame propagation) criterion ─────
+  // Estimated turbulent flame speed S_T ≈ S_L · turb_factor (conservative screening).
+  //   H2 > 30 %: 2.5 — turbulent wrinkling + Le<1 thermodiffusive acceleration
+  //   otherwise:  1.8 — turbulent wrinkling only (Le ≈ 1 hydrocarbons)
+  // For detailed design, replace this with measured or CFD-derived S_T/S_L.
+  const turb_factor=H2_frac>0.30?2.5:1.8;
+  const S_T_est=SL_ms*turb_factor;                                          // m/s
+  const flashback_margin=Vpremix/Math.max(S_T_est,1e-20);
+  // Safe if V_premix exceeds S_T by ~30 % (flashback_margin > 1/0.7 ≈ 1.43).
+  const core_flashback_safe=flashback_margin>1/0.7;
+  // Lewis-number (thermodiffusive) advisory when fuel has > 30 % H₂.
+  const h2_thermodiffusive_warn=H2_frac>0.30;
+  // Overall PREMIXER SAFE = BOTH autoignition robust AND core-flashback margin hold.
+  const premixer_safe=ignition_safe&&core_flashback_safe;
+  const risk_label=(!ignition_safe&&!core_flashback_safe)?"AUTOIGN + FLASHBACK RISK"
+                 :(!ignition_safe?"AUTOIGNITION RISK"
+                 :(!core_flashback_safe?"FLASHBACK RISK":"PREMIXER SAFE"));
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works"><p style={{margin:"0 0 6px"}}><span style={hs.em}>Laminar Flame Speed (S_L)</span> is computed using Gülder/Metghalchi-Keck empirical correlations: S_L = S_L0 · f(φ) · (T_u/T_0)^α · (P/P_0)^β. For mixtures, species contributions are mole-fraction-weighted.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Blowoff Analysis:</span> τ_chem = α_th / S_L² (chemical timescale), τ_flow = L_char / V (flow timescale). The <span style={hs.em}>Damköhler number Da = τ_flow / τ_chem</span>. When Da &lt; 1, the flame cannot sustain itself and blows off.</p><p style={{margin:0}}><span style={hs.warn}>V_ref</span> is your reference approach velocity. <span style={hs.warn}>L_char</span> is the characteristic recirculation length (typically flameholder diameter or step height).</p></HelpBox>
     <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}</div>
@@ -744,7 +762,20 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
         <M l="Premixer Residence (τ_res)" v={(tau_res*1000).toFixed(3)} u="ms" c={C.accent3} tip="Premixer residence time: τ_res = L_premix / V_premix. Must be shorter than τ_ign to avoid autoignition inside the premixer."/>
         <M l="Safety Margin (τ_ign/τ_res)" v={!isFinite(ignition_margin)?"N/A":(tau_ign_is_lower_bound?">":"")+(ignition_margin>=1e4?ignition_margin.toExponential(1):ignition_margin.toFixed(1))} u="—" c={tau_ign_source==="none"?C.txtMuted:(ignition_safe?C.good:C.warm)} tip={tau_ign_is_lower_bound?"Lower bound on the safety margin — Cantera did not observe ignition within the integration window, so τ_ign (and therefore the margin) is at least this value.":"Ratio τ_ign / τ_res. Values > 3 indicate a robust margin against premixer autoignition. Values < 1 indicate the mixture can autoignite before leaving the premixer."}/>
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
-          <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",background:tau_ign_source==="none"?`${C.txtMuted}1F`:(ignition_safe?`${C.good}1F`:`${C.warm}1F`),color:tau_ign_source==="none"?C.txtMuted:(ignition_safe?C.good:C.warm),border:`1px solid ${tau_ign_source==="none"?C.txtMuted+"44":(ignition_safe?C.good+"44":C.warm+"44")}`}}>{tau_ign_source==="none"?"● NEEDS ACCURATE MODE":(ignition_safe?"● PREMIXER SAFE":"● AUTOIGNITION RISK")}</span></div>
+          <Tip text={`PREMIXER SAFE requires BOTH criteria:\n  1) Autoignition margin τ_ign/τ_res ≥ 3 (robust; 1–3 marginal; <1 fails).\n  2) Core-flashback margin V_premix / S_T > 1/0.7 ≈ 1.43, where S_T ≈ S_L·${turb_factor.toFixed(1)} (${H2_frac>0.30?"H₂>30% — includes turbulent wrinkling + Le<1 thermodiffusive":"Le≈1 — turbulent wrinkling only"}).\nFor detailed design replace S_T with measured / CFD values.`}>
+            <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",cursor:"help",background:tau_ign_source==="none"?`${C.txtMuted}1F`:(premixer_safe?`${C.good}1F`:`${C.warm}1F`),color:tau_ign_source==="none"?C.txtMuted:(premixer_safe?C.good:C.warm),border:`1px solid ${tau_ign_source==="none"?C.txtMuted+"44":(premixer_safe?C.good+"44":C.warm+"44")}`}}>{tau_ign_source==="none"?"● NEEDS ACCURATE MODE":"● "+risk_label} ⓘ</span></Tip></div>
+      </div>
+      <div style={{...S.row,gap:8,marginBottom:10}}>
+        <M l="Turbulent S_T Estimate" v={(S_T_est).toFixed(2)} u="m/s" c={C.violet} tip={`Screening estimate of turbulent flame speed: S_T ≈ S_L · ${turb_factor.toFixed(1)}. Factor ${turb_factor.toFixed(1)} accounts for ${H2_frac>0.30?"turbulent wrinkling AND Le<1 thermodiffusive acceleration (H₂ > 30%)":"turbulent wrinkling only (Le ≈ 1 hydrocarbons)"}. Replace with measured / CFD S_T for detailed design.`}/>
+        <M l="V_premix (for flashback)" v={uv(units,"vel",Vpremix).toFixed(2)} u={uu(units,"vel")} c={C.accent3} tip="Bulk velocity of the premixed mixture through the premixer channel. For the flame to not travel upstream, V_premix must exceed the turbulent flame speed S_T with margin."/>
+        <M l="Flashback Margin (V/S_T)" v={!isFinite(flashback_margin)?"N/A":flashback_margin.toFixed(2)} u="—" c={core_flashback_safe?C.good:C.warm} tip="Core flashback margin: V_premix / S_T. Must exceed 1/0.7 ≈ 1.43 for a 30% speed margin over the turbulent flame. Values < 1 mean the flame will propagate upstream into the premixer."/>
+        <M l="S_T Model" v={H2_frac>0.30?"H₂ Le<1":"Le≈1"} u="—" c={h2_thermodiffusive_warn?C.warm:C.txtDim} tip={h2_thermodiffusive_warn?"Fuel is H₂-rich (>30%). Lewis number Le < 1 → thermodiffusive instability accelerates the turbulent flame (wrinkled cellular structure). The 2.5× factor is a conservative screening value; actual S_T/S_L can exceed 3 for very lean H₂.":"Fuel Lewis number ≈ 1 (hydrocarbon-like). S_T ≈ 1.8·S_L reflects standard turbulent-wrinkling enhancement."}/>
+      </div>
+      <div style={{marginTop:-4,background:`${C.accent}0A`,border:`1px solid ${C.border}`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.5}}>
+        <strong style={{color:C.accent}}>ℹ PREMIXER SAFE — what it checks &amp; assumes:</strong><br/>
+        &nbsp;&nbsp;• <strong>Autoignition (0D kinetics):</strong> Cantera const-P reactor on the perfectly mixed fuel+air stream at P, φ, T_mixed from the sidebar. Gate: τ_ign/τ_res ≥ 3.<br/>
+        &nbsp;&nbsp;• <strong>Core flashback (1D laminar + turbulence factor):</strong> Cantera 1D FreeFlame gives S_L; S_T = S_L · {turb_factor.toFixed(1)} ({H2_frac>0.30?"H₂-rich: turb-wrinkling + Le<1 thermodiffusive":"hydrocarbon: turb-wrinkling only"}). Gate: V_premix / S_T &gt; 1/0.7 ≈ 1.43.<br/>
+        &nbsp;&nbsp;• <strong>Not checked here:</strong> boundary-layer flashback (see g_c above), combustion-induced-vortex-breakdown (CIVB), acoustic-driven flashback, or wall-temperature/quenching effects. Use CFD + rig data for detailed design.
       </div>
       <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Flameholder diameter (bluff body, burner rod, or swirler hub diameter). Used for Zukoski τ_BO."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>D_flameholder ({uu(units,"len")}) ⓘ:</label></Tip>
@@ -757,6 +788,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
       {!accurate&&freeCorrValid&&<div style={{marginTop:8,background:`${C.txtMuted}10`,border:`1px solid ${C.border}`,borderRadius:5,padding:"6px 10px",fontSize:10,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.45}}>ℹ τ_ign uses the Spadaccini–Colket NG correlation — order-of-magnitude only, valid for NG-like fuels. Switch to <strong>Accurate</strong> mode for Cantera 0D constant-pressure reactor integration.</div>}
       {!accurate&&!freeCorrValid&&<div style={{marginTop:8,background:`${C.warm}12`,border:`1px solid ${C.warm}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.warm,fontFamily:"monospace",lineHeight:1.45}}>⚠ This fuel contains {(H2_frac*100).toFixed(0)}% H₂ (or CO / NH₃). The free-mode Spadaccini–Colket τ_ign correlation is calibrated for pure natural gas and gives unreliable values for H₂ blends — it has been suppressed. Switch to <strong>Accurate</strong> mode for first-principles Cantera 0D kinetics.</div>}
       {accurate&&bkIgn.data&&!bkIgn.data.ignited&&<div style={{marginTop:8,background:`${C.accent}10`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.45}}>ℹ Cantera 0D integrated for {bkIgn.data.tau_ign_s.toFixed(1)} s without the mixture igniting (T_peak rose from {bkIgn.data.T_mixed_inlet_K.toFixed(0)} to {bkIgn.data.T_peak.toFixed(0)} K). τ_ign is therefore at least {bkIgn.data.tau_ign_s.toFixed(1)} s — the premixer margin shown is a <em>lower bound</em>. Very long τ_ign indicates the mixture is thermo-kinetically stable at T_mixed and cannot autoignite within the premixer.</div>}
+      {h2_thermodiffusive_warn&&<div style={{marginTop:8,background:`${C.warm}12`,border:`1px solid ${C.warm}55`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.warm,fontFamily:"monospace",lineHeight:1.45}}>⚠ <strong>H₂-rich fuel ({(H2_frac*100).toFixed(0)}%) — Lewis-number advisory:</strong> Le &lt; 1 drives thermodiffusive instability and cellular flame structure, which can increase real S_T/S_L well beyond the 2.5× screening factor used here (measured values up to 3–4× for very lean H₂). The flashback margin shown is a <em>best-case</em> estimate; verify with rig data or CFD before committing to a premixer geometry.</div>}
     </div>
     {/* Sweep curves — banner + button. In accurate mode the charts below show correlation-based
         TRENDS unless the user clicks "Run" to fetch first-principles Cantera sweeps (slow, ~2-3 min).
