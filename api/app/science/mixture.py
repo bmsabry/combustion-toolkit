@@ -1,6 +1,7 @@
 """Shared helpers for converting frontend fuel/oxidizer compositions into Cantera mixture strings."""
 from __future__ import annotations
 
+import os
 from typing import Dict, Tuple
 
 import cantera as ct
@@ -9,28 +10,51 @@ import numpy as np
 # Species we always want available in the mechanism for typical fuels + air + products
 GRI_MECH = "gri30.yaml"
 
-# Fallback substitutions for species that don't exist in GRI-Mech 3.0
-# (GRI only has C1-C3 hydrocarbons + H2, NOx, so anything heavier needs a stand-in)
+# Glarborg 2018 — alternative mechanism with comprehensive nitrogen chemistry and
+# C1–C2 hydrocarbon oxidation. Shipped as a YAML file alongside this source tree.
+_MECH_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mechanisms")
+GLARBORG_MECH = os.path.join(_MECH_DIR, "glarborg_2018.yaml")
+
+# Registry: code → (absolute yaml path, supports_C3plus)
+MECH_CATALOG: Dict[str, Tuple[str, bool]] = {
+    "gri30":    (GRI_MECH,      True),   # GRI-Mech 3.0: CH4–C3H8 + NOx
+    "glarborg": (GLARBORG_MECH, False),  # Glarborg 2018: CH4–C2 + comprehensive N-chem; C3+ lumped to C2H6
+}
+
+
+def mech_yaml(mechanism: str) -> str:
+    """Return the YAML path for a mechanism code. Unknown codes fall back to GRI-Mech 3.0."""
+    entry = MECH_CATALOG.get(mechanism)
+    if entry is None:
+        return GRI_MECH
+    return entry[0]
+
+
+# Fallback substitutions for species that don't exist in the loaded mechanism.
+# Applied after we see the actual species list; keyed by species name.
+# Each entry maps source_species → {target_species: mole_multiplier} (preserves carbon count).
 FUEL_SUBSTITUTIONS = {
-    # GRI has these already: CH4, C2H2, C2H4, C2H6, C3H8 (as C3H8 doesn't exist — uses NC3H7 precursor)
+    # GRI has these already: CH4, C2H2, C2H4, C2H6, C3H8.
     # Higher alkanes: approximate with propane + methane to preserve H/C ratio
-    "C4H10": {"C3H8": 0.75, "CH4": 0.25},  # rough H/C match; use proper mechanism for real work
+    "C4H10": {"C3H8": 0.75, "CH4": 0.25},   # rough H/C match; use proper mechanism for real work
     "C5H12": {"C3H8": 1.0, "CH4": 0.666},
     "C6H14": {"C3H8": 1.5, "CH4": 0.5},
     "C7H16": {"C3H8": 1.75, "CH4": 0.75},
-    "C8H18": {"C3H8": 2.0, "CH4": 1.0},  # iso-octane stand-in
-    # Other fuels mapped to nearest GRI species
-    "C2H5OH": {"CH3OH": 2.0},  # ethanol → methanol + extra carbon
-    "NH3": {"N2": 0.5, "H2": 1.5},  # ammonia fallback (GRI has NO/NH path but no NH3)
+    "C8H18": {"C3H8": 2.0, "CH4": 1.0},     # iso-octane stand-in
+    # Mechanisms without C3 (Glarborg): lump C3H8 into C2H6 preserving hydrocarbon-mol basis
+    "C3H8":  {"C2H6": 1.0},  # loses one C-atom per mol; ok for <2% NG content
+    # Other fuels mapped to nearest available species
+    "C2H5OH": {"CH3OH": 2.0},
+    "NH3":    {"N2": 0.5, "H2": 1.5},
 }
 
 OXIDIZER_SPECIES = {"O2", "N2", "AR", "H2O", "CO2"}
 
 
-def _normalize_to_gri(comp_mol_pct: Dict[str, float]) -> Dict[str, float]:
-    """Take user composition (mole%), map exotic species to GRI substitutes, return dict normalized to sum 1.0."""
-    gri = ct.Solution(GRI_MECH)
-    available = set(gri.species_names)
+def _normalize_to_mech(comp_mol_pct: Dict[str, float], mechanism: str = "gri30") -> Dict[str, float]:
+    """Take user composition (mole%), map exotic species to mechanism-available substitutes, return dict normalized to sum 1.0."""
+    gas = ct.Solution(mech_yaml(mechanism))
+    available = set(gas.species_names)
     out: Dict[str, float] = {}
     for name, pct in comp_mol_pct.items():
         if pct <= 0:
@@ -42,9 +66,15 @@ def _normalize_to_gri(comp_mol_pct: Dict[str, float]) -> Dict[str, float]:
         if key in available:
             out[key] = out.get(key, 0.0) + pct / 100.0
         elif key in FUEL_SUBSTITUTIONS:
+            # Try the substitution — recursively, one level deep — so mechanism-specific
+            # fallbacks kick in when the preferred substitute also isn't available.
             for s, mult in FUEL_SUBSTITUTIONS[key].items():
                 if s in available:
                     out[s] = out.get(s, 0.0) + mult * pct / 100.0
+                elif s in FUEL_SUBSTITUTIONS:
+                    for s2, mult2 in FUEL_SUBSTITUTIONS[s].items():
+                        if s2 in available:
+                            out[s2] = out.get(s2, 0.0) + mult * mult2 * pct / 100.0
         else:
             # fall back to methane equivalent (keeps calc running; flag in logs)
             if "CH4" in available:
@@ -53,6 +83,11 @@ def _normalize_to_gri(comp_mol_pct: Dict[str, float]) -> Dict[str, float]:
     if total <= 0:
         raise ValueError("Composition is empty after normalization")
     return {k: v / total for k, v in out.items()}
+
+
+# Legacy alias — preserves the old function name used elsewhere in the codebase.
+def _normalize_to_gri(comp_mol_pct: Dict[str, float]) -> Dict[str, float]:
+    return _normalize_to_mech(comp_mol_pct, "gri30")
 
 
 def make_gas(fuel_pct: Dict[str, float], ox_pct: Dict[str, float], phi: float, T: float, P_bar: float):
@@ -74,6 +109,7 @@ def make_gas_mixed(
     T_fuel_K: float,
     T_air_K: float,
     P_bar: float,
+    mechanism: str = "gri30",
 ):
     """Build a Cantera Solution representing fuel (at T_fuel) and air (at T_air)
     adiabatically mixed at the target equivalence ratio.
@@ -82,9 +118,10 @@ def make_gas_mixed(
     (T=T_mixed, composition at phi, pressure=P). If T_fuel == T_air, T_mixed
     equals that value (degenerate case = previous behavior).
     """
-    gas = ct.Solution(GRI_MECH)
-    fuel_x = _normalize_to_gri(fuel_pct)
-    ox_x = _normalize_to_gri(ox_pct)
+    mech_path = mech_yaml(mechanism)
+    gas = ct.Solution(mech_path)
+    fuel_x = _normalize_to_mech(fuel_pct, mechanism)
+    ox_x = _normalize_to_mech(ox_pct, mechanism)
     fuel_str = ", ".join(f"{k}:{v:.10f}" for k, v in fuel_x.items())
     ox_str = ", ".join(f"{k}:{v:.10f}" for k, v in ox_x.items())
     P_Pa = float(P_bar) * 1e5
@@ -120,11 +157,11 @@ def make_gas_mixed(
     X_air_vec /= X_air_vec.sum()
 
     # Specific enthalpies of each stream at its own inlet T
-    g_f = ct.Solution(GRI_MECH)
+    g_f = ct.Solution(mech_path)
     g_f.TPX = float(T_fuel_K), P_Pa, X_fuel_vec
     h_fuel = g_f.enthalpy_mass  # J/kg
 
-    g_a = ct.Solution(GRI_MECH)
+    g_a = ct.Solution(mech_path)
     g_a.TPX = float(T_air_K), P_Pa, X_air_vec
     h_air = g_a.enthalpy_mass
 

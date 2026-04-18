@@ -309,7 +309,7 @@ function calcCombustorNetwork(fuel,ox,phi,T_in,P_atm,tau_psr_ms,L_pfr,v_pfr,T_fu
 const _PSR_SEED_LBL={unreacted:"Unreacted (cold)",hot_eq:"Hot equilibrium",cold_ignited:"Cold-ignited (default)",autoignition:"Autoignition"};
 const _EQ_LBL={HP:"HP (constant enthalpy+pressure)",UV:"UV (constant internal energy+volume)",TP:"TP (constant temperature+pressure)"};
 const _INT_LBL={steady_state:"Steady-state solver",chunked:"Chunked time advance (default)",step:"Step-by-step"};
-const _MECH_LBL={gri30:"GRI-Mech 3.0 (53 species, 325 rxns)",usc2:"USC-Mech II (coming soon)",aramco30:"AramcoMech 3.0 (coming soon)",konnov:"Konnov 2009 (coming soon)"};
+const _MECH_LBL={gri30:"GRI-Mech 3.0 (53 species, 325 rxns)",glarborg:"Glarborg 2018 (151 species, 1395 rxns)",usc2:"USC-Mech II (coming soon)",aramco30:"AramcoMech 3.0 (coming soon)"};
 function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",accurate=false}=ps||{};
   // Adiabatic fuel/air mix T that's used everywhere downstream
   const T_mix_phi=mixT(fuel,ox,phi,T_fuel??T0,T_air??T0);
@@ -668,16 +668,16 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
           </div>
           {/* Mechanism row */}
           <div style={{display:"flex",alignItems:"flex-start",gap:6,flexWrap:"wrap"}}>
-            <Tip text="Chemical-kinetics mechanism. The mechanism determines both fuel-oxidation pathways (ignition, flame speed, CO burnout) and NOx chemistry (thermal, prompt, N₂O). GRI-Mech 3.0 is the default because it ships with Cantera and includes both hydrocarbon + nitrogen chemistry in one file. Other mechanisms (USC-Mech II, AramcoMech 3.0, Konnov) are widely-cited alternatives validated at elevated pressures, but most do not include built-in NOx chemistry and would require merging with a nitrogen sub-mechanism — not yet bundled.">
+            <Tip text="Chemical-kinetics mechanism. The mechanism determines both fuel-oxidation pathways (ignition, flame speed, CO burnout) and NOx chemistry (thermal, prompt, N₂O). GRI-Mech 3.0 is the default because it ships with Cantera and includes both hydrocarbon + nitrogen chemistry in one file. Glarborg 2018 is a larger modern mechanism with comprehensive N-chemistry (NNH, N2O, prompt-NCN, NH3 oxidation) — use it when GRI's NOx numbers look suspect or when burning NH3/H2/CO blends. Other mechanisms (USC-Mech II, AramcoMech 3.0) are widely-cited alternatives validated at elevated pressures, but do not include built-in NOx chemistry and would require merging with a nitrogen sub-mechanism — not yet bundled.">
               <label style={{fontSize:10,color:C.txtDim,fontFamily:"monospace",cursor:"help",minWidth:98}}>Mechanism ⓘ:</label>
             </Tip>
             <div style={{display:"flex",flexDirection:"column",gap:4,flex:1,minWidth:280}}>
               <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                 {[
                   {v:"gri30",l:"GRI-Mech 3.0",active:true},
+                  {v:"glarborg",l:"Glarborg 2018",active:true},
                   {v:"usc2",l:"USC-Mech II",active:false},
                   {v:"aramco30",l:"AramcoMech 3.0",active:false},
-                  {v:"konnov",l:"Konnov 2009",active:false},
                 ].map(o=>{
                   const sel=mechanism===o.v;
                   return(<button key={o.v} disabled={!o.active} onClick={()=>o.active&&setMechanism(o.v)}
@@ -687,9 +687,9 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
               </div>
               <div style={{fontSize:9.5,color:C.txtMuted,lineHeight:1.45,fontFamily:"'Barlow',sans-serif"}}>
                 {mechanism==="gri30"&&<><strong style={{color:C.orange}}>GRI-Mech 3.0</strong> — 53 species, 325 reactions. Natural-gas oxidation (CH₄ → C₃H₈, H₂, NH₃) with thermal, prompt, and N₂O NOx chemistry. Validated for φ = 0.1–5 at P = 1–10 atm, T = 1000–2500 K. <span style={{color:C.warm}}>Known to overpredict thermal NO by 2–4× at P ≥ 10 atm vs newer mechanisms (Klippenstein 2011, Hughes 2001)</span> — use the heat-loss fraction to calibrate T_PZ to your measured combustor exit data.</>}
+                {mechanism==="glarborg"&&<><strong style={{color:C.orange}}>Glarborg 2018</strong> — 151 species, 1395 reactions. Comprehensive nitrogen chemistry (thermal, prompt-NCN, N₂O, NNH, NH₃/HCN oxidation) merged with C1–C2 hydrocarbon kinetics. The state-of-the-art reference for NOx modeling in premixed flames (Glarborg, Miller, Ruscic, Klippenstein, <em>Prog. Energy Combust. Sci.</em> 2018). <span style={{color:C.warm}}>C1–C2 only</span> — C₃H₈ in the fuel is lumped to C₂H₆ on a hydrocarbon-mol basis (fine for natural gas with &lt;2% propane). Typically predicts 30–60% higher NO than GRI at DLE conditions — closer to experiments at elevated P.</>}
                 {mechanism==="usc2"&&<><strong>USC-Mech II</strong> — 111 species, 784 reactions. C1–C4 + benzene kinetics, validated to P = 100 atm (Wang et al., USC 2007). Widely used for high-pressure gas-turbine CFD. <span style={{color:C.warm}}>Does not include nitrogen chemistry</span> — must be merged with a NOx sub-mechanism (Glarborg, Konnov-N) to compute NOx. Bundling pending.</>}
                 {mechanism==="aramco30"&&<><strong>AramcoMech 3.0</strong> — 581 species, 3037 reactions. Modern C0–C4 oxidation (Zhou et al., NUIG 2017–2019) validated for natural gas, biogas, and hydrogen-enriched fuels across φ = 0.3–2 and P = 1–80 atm. <span style={{color:C.warm}}>Ships without NOx chemistry</span> — would need merging with Glarborg-N or AramcoN for NOx. Bundling pending.</>}
-                {mechanism==="konnov"&&<><strong>Konnov 2009 (v0.6)</strong> — ~130 species, ~1200 reactions. H₂/CO/C1–C3 with detailed N-chemistry including prompt-NO (CH+N₂ → NCN+H) and N₂O paths. Particularly good for oxy-fuel and rich combustion NOx. <span style={{color:C.warm}}>Source file not in Cantera-YAML format upstream</span> — conversion pending.</>}
               </div>
             </div>
           </div>
@@ -948,7 +948,7 @@ export default function App(){
         </div>)}
         {accurate&&hasOnline&&tab!=="account"&&(
         <div style={{padding:"8px 20px",background:`${C.accent}12`,borderBottom:`1px solid ${C.accent}35`,fontSize:11.5,color:C.txt,fontFamily:"'Barlow',sans-serif"}}>
-          <strong style={{color:C.accent,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif"}}>✓ ACCURATE MODE ACTIVE</strong> — Calculations route to the backend Cantera solver (GRI-Mech 3.0, mixture-averaged transport, detailed PSR/PFR network).
+          <strong style={{color:C.accent,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif"}}>✓ ACCURATE MODE ACTIVE</strong> — Calculations route to the backend Cantera solver (GRI-Mech 3.0 or Glarborg 2018 selectable per calculation, mixture-averaged transport, detailed PSR/PFR network).
         </div>)}
 
         <div style={{display:"flex",flex:"1 1 auto",minHeight:0}}>

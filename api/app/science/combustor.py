@@ -46,7 +46,7 @@ from typing import Dict, List, Optional
 import cantera as ct
 import numpy as np
 
-from .mixture import make_gas_mixed
+from .mixture import make_gas_mixed, mech_yaml
 
 
 # NOx-family species to zero out in the cold-ignited warm start.
@@ -62,12 +62,22 @@ _CONSTRAINT_OPTIONS = ("HP", "UV", "TP")
 _INTEGRATION_OPTIONS = ("steady_state", "chunked", "step")
 
 
+def _safe_idx(gas: ct.Solution, species: str) -> int:
+    """Return species index, or -1 if the species is not in the mechanism.
+    Cantera 3.x raises CanteraError on missing species instead of returning -1;
+    this helper restores the old sentinel behavior."""
+    try:
+        return gas.species_index(species)
+    except Exception:
+        return -1
+
+
 def _ppm_vd(gas: ct.Solution, species: str) -> float:
     """ppm, volumetric, dry (water removed) for the given species."""
-    idx = gas.species_index(species)
+    idx = _safe_idx(gas, species)
     if idx < 0:
         return 0.0
-    h2o_idx = gas.species_index("H2O")
+    h2o_idx = _safe_idx(gas, "H2O")
     X = np.array(gas.X, dtype=float)
     if h2o_idx >= 0:
         X[h2o_idx] = 0.0
@@ -79,10 +89,10 @@ def _ppm_vd(gas: ct.Solution, species: str) -> float:
 
 
 def _o2_pct_dry(gas: ct.Solution) -> float:
-    idx = gas.species_index("O2")
+    idx = _safe_idx(gas, "O2")
     if idx < 0:
         return 0.0
-    h2o_idx = gas.species_index("H2O")
+    h2o_idx = _safe_idx(gas, "H2O")
     X = np.array(gas.X, dtype=float)
     if h2o_idx >= 0:
         X[h2o_idx] = 0.0
@@ -123,7 +133,7 @@ def _seed_ignited_no_NOx(
     g.equilibrate(constraint)
     X = np.array(g.X, dtype=float)
     for sp in _NOX_FAMILY:
-        idx = g.species_index(sp)
+        idx = _safe_idx(g, sp)
         if idx >= 0:
             X[idx] = 0.0
     s = X.sum()
@@ -177,15 +187,16 @@ def _dispatch_seed(
     inlet_T: float,
     inlet_P: float,
     inlet_X,
+    mech: str = "gri30.yaml",
 ) -> ct.Solution:
     if psr_seed == "unreacted":
-        return _seed_unreacted(inlet_T, inlet_P, inlet_X)
+        return _seed_unreacted(inlet_T, inlet_P, inlet_X, mech)
     if psr_seed == "hot_eq":
-        return _seed_hot_equilibrium(inlet_T, inlet_P, inlet_X, eq_constraint)
+        return _seed_hot_equilibrium(inlet_T, inlet_P, inlet_X, eq_constraint, mech)
     if psr_seed == "cold_ignited":
-        return _seed_ignited_no_NOx(inlet_T, inlet_P, inlet_X, eq_constraint)
+        return _seed_ignited_no_NOx(inlet_T, inlet_P, inlet_X, eq_constraint, mech)
     if psr_seed == "autoignition":
-        return _seed_autoignition(inlet_T, inlet_P, inlet_X)
+        return _seed_autoignition(inlet_T, inlet_P, inlet_X, mech)
     raise ValueError(f"Unknown psr_seed: {psr_seed!r}")
 
 
@@ -211,7 +222,7 @@ def _integrate_chunked(
       * Absolute caps: simulated time ≤ max(1e5·τ, 60 s); wall time
         ≤ max_wall_time_s.
     """
-    NO_idx = psr.phase.species_index("NO")
+    NO_idx = _safe_idx(psr.phase, "NO")
     chunk = max(50.0 * tau_psr_s, 0.025)
     t = 0.0
     prev_T = -1.0
@@ -274,7 +285,7 @@ def _integrate_step(
     consecutive stable internal steps. Hard caps: simulated time
     ≤ max(1e5·τ, 60 s); wall time ≤ max_wall_time_s.
     """
-    NO_idx = psr.phase.species_index("NO")
+    NO_idx = _safe_idx(psr.phase, "NO")
     prev_T = -1.0
     prev_NO = -1.0
     # Integrate at least 1000·τ (min 1 s) but cap at 10 s of simulated time.
@@ -336,6 +347,7 @@ def run(
     eq_constraint: str = "HP",
     integration: str = "chunked",
     heat_loss_fraction: float = 0.0,
+    mechanism: str = "gri30",
 ) -> dict:
     """PSR then PFR. Returns emissions at PSR exit and PFR exit, plus a profile.
 
@@ -365,21 +377,22 @@ def run(
 
     T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0_K)
     T_a = float(T_air_K) if T_air_K is not None else float(T0_K)
-    gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar)
+    mech_path = mech_yaml(mechanism)
+    gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar, mechanism=mechanism)
     X_in = np.array(gas.X, dtype=float)
     P_Pa = gas.P
 
     # Upstream reservoir: fresh pre-mixed reactants at the adiabatic mixed T
-    inlet_gas = ct.Solution("gri30.yaml")
+    inlet_gas = ct.Solution(mech_path)
     inlet_gas.TPX = T_mixed, P_Pa, X_in
     upstream = ct.Reservoir(inlet_gas)
 
     # PSR seed — dispatch based on psr_seed + eq_constraint
-    psr_gas = _dispatch_seed(psr_seed, eq_constraint, T_mixed, P_Pa, X_in)
+    psr_gas = _dispatch_seed(psr_seed, eq_constraint, T_mixed, P_Pa, X_in, mech=mech_path)
     psr = ct.IdealGasReactor(psr_gas, energy="on")
 
     # Downstream reservoir (state irrelevant at steady state)
-    downstream_gas = ct.Solution("gri30.yaml")
+    downstream_gas = ct.Solution(mech_path)
     downstream_gas.TPX = psr_gas.T, psr_gas.P, psr_gas.X
     downstream = ct.Reservoir(downstream_gas)
 
@@ -398,12 +411,12 @@ def run(
     ambient = None
     wall = None
     if heat_loss_fraction > 0.0:
-        eq_gas = ct.Solution("gri30.yaml")
+        eq_gas = ct.Solution(mech_path)
         eq_gas.TPX = T_mixed, P_Pa, X_in
         eq_gas.equilibrate("HP")
         T_ad_ref = float(eq_gas.T)
         T_target = T_ad_ref - float(heat_loss_fraction) * (T_ad_ref - float(T_mixed))
-        ambient_gas = ct.Solution("gri30.yaml")
+        ambient_gas = ct.Solution(mech_path)
         ambient_gas.TPX = T_target, P_Pa, eq_gas.X
         ambient = ct.Reservoir(ambient_gas)
         # U*A with A=1 m² → U in W/m²/K. 1e7 ≫ mdot·cp for our scales (mdot~O(1)
@@ -419,14 +432,14 @@ def run(
     NO_psr = _ppm_vd(psr.phase, "NO")
     CO_psr = _ppm_vd(psr.phase, "CO")
     O2_psr = _o2_pct_dry(psr.phase)
-    fuel_idx = [psr.phase.species_index(s) for s in ("CH4", "C2H6", "C3H8", "H2") if psr.phase.species_index(s) >= 0]
+    fuel_idx = [i for i in (_safe_idx(psr.phase, s) for s in ("CH4", "C2H6", "C3H8", "H2")) if i >= 0]
     fuel_left = float(sum(psr.phase.Y[i] for i in fuel_idx))
     inlet_fuel = float(sum(inlet_gas.Y[i] for i in fuel_idx))
     conv_psr = 1.0 - fuel_left / max(inlet_fuel, 1e-20)
     conv_psr = max(0.0, min(1.0, conv_psr))
 
     # ---- PFR: ideal plug-flow along L_pfr at velocity V_pfr ----
-    pfr_gas = ct.Solution("gri30.yaml")
+    pfr_gas = ct.Solution(mech_path)
     pfr_gas.TPX = psr.phase.T, psr.phase.P, psr.phase.X
     tau_pfr_s = L_pfr_m / max(V_pfr_m_s, 1e-9)
     dt = tau_pfr_s / max(profile_points - 1, 1)

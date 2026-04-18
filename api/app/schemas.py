@@ -190,8 +190,12 @@ class CombustorRequest(BaseCalcRequest):
     )
     mechanism: str = Field(
         default="gri30",
-        pattern="^(gri30)$",
-        description="Kinetic mechanism selector (currently only GRI-Mech 3.0).",
+        pattern="^(gri30|glarborg)$",
+        description=(
+            "Kinetic mechanism selector. 'gri30' = GRI-Mech 3.0 (53 species, "
+            "CH4–C3H8 + NOx). 'glarborg' = Glarborg 2018 (151 species, 1395 "
+            "reactions, comprehensive N-chemistry, C1–C2 hydrocarbons; C3+ lumped to C2)."
+        ),
     )
 
 
