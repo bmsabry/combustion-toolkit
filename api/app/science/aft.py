@@ -1,11 +1,11 @@
 """Adiabatic Flame Temperature via Cantera equilibrium."""
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
 import cantera as ct
 
-from .mixture import compute_ratios, make_gas
+from .mixture import compute_ratios, make_gas, make_gas_mixed
 
 
 def run(
@@ -15,12 +15,26 @@ def run(
     T0_K: float,
     P_bar: float,
     heat_loss_fraction: float = 0.0,
+    T_fuel_K: Optional[float] = None,
+    T_air_K: Optional[float] = None,
 ) -> dict:
     """Equilibrium adiabatic flame temp with optional heat-loss fraction.
 
     For heat_loss > 0, we subtract the fraction from the enthalpy change and re-equilibrate at constant (H, P).
+
+    If T_fuel_K / T_air_K are provided, the two inlet streams are mixed
+    adiabatically (enthalpy-weighted) before equilibrium. Otherwise both
+    default to T0_K (previous single-inlet behavior). T_mixed (the pre-
+    combustion mixture temperature) is returned so the caller can show the
+    user what inlet T was used.
     """
-    gas, _, _ = make_gas(fuel_pct, ox_pct, phi, T0_K, P_bar)
+    T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0_K)
+    T_a = float(T_air_K) if T_air_K is not None else float(T0_K)
+    if T_fuel_K is not None or T_air_K is not None:
+        gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar)
+    else:
+        gas, _, _ = make_gas(fuel_pct, ox_pct, phi, T0_K, P_bar)
+        T_mixed = float(T0_K)
 
     # Store reactant-state reference values
     h_reactants = gas.enthalpy_mass  # J/kg
@@ -68,6 +82,7 @@ def run(
     return {
         "T_ad": float(T_ad),
         "T_actual": float(T_actual),
+        "T_mixed_inlet_K": float(T_mixed),
         "mole_fractions": mole_fracs,
         "mass_fractions": mass_fracs,
         "species_kmol_per_kg_mix": kmol_per_kg,

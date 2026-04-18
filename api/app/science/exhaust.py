@@ -7,7 +7,7 @@ import cantera as ct
 import numpy as np
 from scipy.optimize import brentq
 
-from .mixture import compute_ratios, make_gas
+from .mixture import compute_ratios, make_gas, make_gas_mixed
 
 
 def _equilibrium_at_phi(
@@ -17,15 +17,21 @@ def _equilibrium_at_phi(
     T0: float,
     P_bar: float,
     mode: str,
-) -> ct.Solution:
-    gas, _, _ = make_gas(fuel_pct, ox_pct, phi, T0, P_bar)
-    if mode == "complete":
-        # Freeze at low-T complete products ≈ equilibrate at T=T0 then TP-eq at 1500K
-        gas.equilibrate("HP")
-        return gas
+    T_fuel_K: Optional[float] = None,
+    T_air_K: Optional[float] = None,
+) -> tuple:
+    """Return (gas_at_equilibrium, T_mixed_inlet_K). If T_fuel/T_air provided,
+    the adiabatic mix T is used as the pre-combustion inlet T; otherwise T0."""
+    if T_fuel_K is not None or T_air_K is not None:
+        T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0)
+        T_a = float(T_air_K) if T_air_K is not None else float(T0)
+        gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar)
     else:
-        gas.equilibrate("HP")
-        return gas
+        gas, _, _ = make_gas(fuel_pct, ox_pct, phi, T0, P_bar)
+        T_mixed = float(T0)
+    # mode currently collapses to HP equilibrium either way (previous behavior)
+    gas.equilibrate("HP")
+    return gas, T_mixed
 
 
 def _dry_frac(gas: ct.Solution, species: str) -> float:
@@ -48,18 +54,28 @@ def run(
     measured_O2_pct_dry: Optional[float] = None,
     measured_CO2_pct_dry: Optional[float] = None,
     combustion_mode: str = "equilibrium",
+    T_fuel_K: Optional[float] = None,
+    T_air_K: Optional[float] = None,
 ) -> dict:
-    """Given a measurement of either O2 or CO2 in dry exhaust, invert to find phi and return full exhaust state."""
+    """Given a measurement of either O2 or CO2 in dry exhaust, invert to find phi and return full exhaust state.
+
+    If T_fuel_K / T_air_K are provided, the pre-combustion mixture T is the
+    adiabatic enthalpy-balance mix of the two streams. Otherwise both default to T0_K.
+    """
     if measured_O2_pct_dry is None and measured_CO2_pct_dry is None:
         raise ValueError("Provide measured_O2_pct_dry or measured_CO2_pct_dry")
 
     # Binary search phi in [0.1, 1.5]
     def delta_O2(phi: float) -> float:
-        gas = _equilibrium_at_phi(fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode)
+        gas, _ = _equilibrium_at_phi(
+            fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode, T_fuel_K, T_air_K
+        )
         return _dry_frac(gas, "O2") * 100.0 - (measured_O2_pct_dry or 0)
 
     def delta_CO2(phi: float) -> float:
-        gas = _equilibrium_at_phi(fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode)
+        gas, _ = _equilibrium_at_phi(
+            fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode, T_fuel_K, T_air_K
+        )
         return _dry_frac(gas, "CO2") * 100.0 - (measured_CO2_pct_dry or 0)
 
     method = "O2" if measured_O2_pct_dry is not None else "CO2"
@@ -71,7 +87,9 @@ def run(
     except Exception:
         phi = 0.5  # fallback
 
-    gas = _equilibrium_at_phi(fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode)
+    gas, T_mixed = _equilibrium_at_phi(
+        fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode, T_fuel_K, T_air_K
+    )
     FAR, FAR_stoich, AFR, AFR_stoich = compute_ratios(fuel_pct, ox_pct, phi)
 
     wet = {s: float(x) for s, x in zip(gas.species_names, gas.X) if x > 1e-10}
@@ -90,6 +108,7 @@ def run(
         "FAR": FAR,
         "AFR": AFR,
         "T_ad": float(gas.T),
+        "T_mixed_inlet_K": float(T_mixed),
         "exhaust_composition_wet": wet,
         "exhaust_composition_dry": dry,
         "O2_pct_dry": _dry_frac(gas, "O2") * 100.0,

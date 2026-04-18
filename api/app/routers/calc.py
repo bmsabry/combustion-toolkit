@@ -48,6 +48,8 @@ def calc_aft(body: AFTRequest, _: User = Depends(require_full_subscription)) -> 
         body.T0,
         body.P,
         body.heat_loss_fraction if body.mode == "heat_loss" else 0.0,
+        body.T_fuel_K,
+        body.T_air_K,
     )
     return AFTResponse(**result)
 
@@ -64,6 +66,8 @@ def calc_flame_speed(
         body.T0,
         body.P,
         body.domain_length_m,
+        body.T_fuel_K,
+        body.T_air_K,
     )
     return FlameSpeedResponse(**result)
 
@@ -100,6 +104,8 @@ def calc_exhaust(body: ExhaustRequest, _: User = Depends(require_full_subscripti
         body.measured_O2_pct_dry,
         body.measured_CO2_pct_dry,
         body.combustion_mode,
+        body.T_fuel_K,
+        body.T_air_K,
     )
     return ExhaustResponse(**result)
 

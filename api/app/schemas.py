@@ -114,11 +114,16 @@ class BaseCalcRequest(BaseModel):
 class AFTRequest(BaseCalcRequest):
     mode: str = Field(default="adiabatic", pattern="^(adiabatic|heat_loss)$")
     heat_loss_fraction: float = Field(default=0.0, ge=0.0, le=0.5)
+    # Optional separate fuel / air inlet temperatures. If provided, the two
+    # streams are mixed adiabatically before equilibrium.
+    T_fuel_K: Optional[float] = Field(default=None, gt=0, description="Fuel inlet T in K")
+    T_air_K: Optional[float] = Field(default=None, gt=0, description="Air inlet T in K")
 
 
 class AFTResponse(BaseModel):
     T_ad: float
     T_actual: float
+    T_mixed_inlet_K: float = 0.0  # adiabatic mix T of fuel+air before equilibrium
     mole_fractions: Dict[str, float]
     mass_fractions: Dict[str, float]
     species_kmol_per_kg_mix: Dict[str, float]
@@ -134,12 +139,15 @@ class AFTResponse(BaseModel):
 
 class FlameSpeedRequest(BaseCalcRequest):
     domain_length_m: float = Field(default=0.03, gt=0)
+    T_fuel_K: Optional[float] = Field(default=None, gt=0, description="Fuel inlet T in K")
+    T_air_K: Optional[float] = Field(default=None, gt=0, description="Air inlet T in K")
 
 
 class FlameSpeedResponse(BaseModel):
     SL: float  # m/s
     flame_thickness: float  # m
     T_max: float
+    T_mixed_inlet_K: float = 0.0  # adiabatic mix T of fuel+air at flame base
     T_profile: List[float]
     x_profile: List[float]
     grid_points: int
@@ -196,6 +204,8 @@ class ExhaustRequest(BaseModel):
     measured_O2_pct_dry: Optional[float] = None
     measured_CO2_pct_dry: Optional[float] = None
     combustion_mode: str = Field(default="complete", pattern="^(complete|equilibrium)$")
+    T_fuel_K: Optional[float] = Field(default=None, gt=0, description="Fuel inlet T in K")
+    T_air_K: Optional[float] = Field(default=None, gt=0, description="Air inlet T in K")
 
 
 class ExhaustResponse(BaseModel):
@@ -203,6 +213,7 @@ class ExhaustResponse(BaseModel):
     FAR: float
     AFR: float
     T_ad: float
+    T_mixed_inlet_K: float = 0.0
     exhaust_composition_wet: Dict[str, float]
     exhaust_composition_dry: Dict[str, float]
     O2_pct_dry: float
