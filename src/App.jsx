@@ -881,7 +881,7 @@ export default function App(){
   const auth=useAuth();
   const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.555);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("ENG");
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
-  const[tau_psr,setTauPsr]=useState(2);const[L_pfr,setLpfr]=useState(0.1036);const[V_pfr,setVpfr]=useState(20);
+  const[tau_psr,setTauPsr]=useState(0.5);const[L_pfr,setLpfr]=useState(0.21336);const[V_pfr,setVpfr]=useState(30.48);
   // Fuel-stream inlet temperature (K). Air inlet T = T0 (sidebar). When T_fuel != T0
   // the combustor mixes them adiabatically before the PSR.
   const[T_fuel,setTfuel]=useState(294.261); // 70 °F
