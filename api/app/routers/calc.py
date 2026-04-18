@@ -82,9 +82,11 @@ def calc_flame_speed_sweep(
 ) -> FlameSpeedSweepResponse:
     """Run a Cantera FreeFlame at each point in sweep_values.
 
-    Bounded at 15 points × ~15 s ≈ 225 s worst-case; we widen the pool timeout
-    here so a full sweep can finish without tripping the per-call 180 s ceiling
-    used by single-point endpoints.
+    Per-point FreeFlame cost in production is ~15–30 s depending on how close
+    the point sits to a flammability limit. A 10-point sweep can breach 300 s
+    when extremes fight convergence, so we widen the pool timeout to 540 s —
+    below Render's 600 s HTTP ceiling on Standard, leaving headroom. The
+    single-point endpoints keep the tighter 180 s ceiling.
     """
     try:
         result = _solver_pool.submit(
@@ -99,7 +101,7 @@ def calc_flame_speed_sweep(
             body.T_fuel_K,
             body.T_air_K,
             body.domain_length_m,
-        ).result(timeout=300)
+        ).result(timeout=540)
     except Exception as e:
         log.exception("flame-speed-sweep error: %s", e)
         raise HTTPException(status_code=500, detail=f"sweep error: {e}") from e

@@ -656,8 +656,12 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
     setSweepRunning(true);setSweepErr(null);
     const endBusy=beginBusy(BUSY_LABELS.flame_sweep);
     const base={fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair};
-    const phiVals=Array.from({length:12},(_,i)=>+(0.4+(2.0-0.4)*i/11).toFixed(3));
-    const TVals=[250,300,350,400,450,500,600,700,800,900];
+    // Point counts kept modest so each sweep fits comfortably inside the
+    // backend's 540 s pool timeout: phi 10 × ~25 s ≈ 250 s, T 8 × ~25 s ≈ 200 s,
+    // P 7 × ~25 s ≈ 175 s. Dropped T=250 K (often below flammability limit —
+    // silent convergence-fighting that burns budget for no useful data).
+    const phiVals=Array.from({length:10},(_,i)=>+(0.4+(2.0-0.4)*i/9).toFixed(3));
+    const TVals=[300,350,400,450,500,600,700,800];
     const PVals_bar=[0.5,1,2,5,10,20,40].map(atmToBar);
     try{
       // Run sweeps SEQUENTIALLY. Backend solver pool has max_workers=1 (Cantera is
