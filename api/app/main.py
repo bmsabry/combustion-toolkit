@@ -20,6 +20,16 @@ log = logging.getLogger("combustion-toolkit-api")
 settings = get_settings()
 
 
+# Fail fast in production if SECRET_KEY is still the development placeholder.
+# The same key signs JWTs and (when LICENSE_SIGNING_KEY is unset) desktop
+# license tokens — an unchanged default is a critical paywall/auth bypass.
+if settings.env == "production" and settings.secret_key == "dev-insecure-change-me":
+    raise RuntimeError(
+        "SECRET_KEY must be set to a strong random value in production. "
+        "Set it in the Render dashboard before starting the service."
+    )
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Combustion Toolkit API",

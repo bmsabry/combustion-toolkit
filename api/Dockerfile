@@ -31,11 +31,13 @@ COPY alembic ./alembic
 ENV PORT=8000
 EXPOSE 8000
 
-# Graceful timeout long enough for Cantera cold-start; 2 workers for light concurrency
+# Worker timeout must exceed the longest solver pool timeout in routers/calc.py
+# (540 s for /calc/flame-speed-sweep). We set 600 s — Render's HTTP ceiling on
+# Standard — so gunicorn does not kill the worker mid-sweep. 2 workers for light concurrency.
 CMD ["gunicorn", "app.main:app", \
      "-k", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:8000", \
      "--workers", "2", \
-     "--timeout", "180", \
+     "--timeout", "600", \
      "--graceful-timeout", "30", \
      "--access-logfile", "-"]
