@@ -566,9 +566,19 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
         </div>
       </div>
       {Math.abs(Tfuel-Tair)>0.5&&(
-        <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",marginBottom:8,padding:"4px 8px",background:`${C.accent}08`,border:`1px dashed ${C.accent}40`,borderRadius:4,display:"inline-block"}}>
-          adiabatic mix → T_inlet_PSR = <span style={{color:C.accent,fontWeight:700}}>{uv(units,"T",net.T_mixed_inlet_K??T0).toFixed(1)} {uu(units,"T")}</span>
-          {!accurate&&<span style={{color:C.txtMuted,marginLeft:8}}>(cp-weighted approx)</span>}
+        <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",marginBottom:8,padding:"6px 10px",background:`${C.accent}08`,border:`1px dashed ${C.accent}40`,borderRadius:4}}>
+          <div style={{marginBottom:2}}>
+            <span style={{color:C.orange}}>T_fuel</span> = {uv(units,"T",Tfuel).toFixed(1)} {uu(units,"T")}
+            <span style={{margin:"0 6px",color:C.txtMuted}}>+</span>
+            <span style={{color:C.accent3}}>T_air</span> = {uv(units,"T",Tair).toFixed(1)} {uu(units,"T")}
+            <span style={{margin:"0 6px",color:C.txtMuted}}>→ adiabatic mix →</span>
+            <span style={{color:C.accent,fontWeight:700}}>T_inlet_PSR = {uv(units,"T",net.T_mixed_inlet_K??T0).toFixed(1)} {uu(units,"T")}</span>
+          </div>
+          <div style={{fontSize:9.5,color:C.txtMuted}}>
+            {accurate
+              ? "Cantera enthalpy balance: h_mix = Z·h_fuel(T_fuel) + (1−Z)·h_air(T_air), then solve gas.HPX for T."
+              : "Free-version constant-cp approximation (cp_fuel≈2.2, cp_air≈1.005 kJ/kg·K). Switch to ACCURATE for the exact Cantera enthalpy balance."}
+          </div>
         </div>
       )}
       <svg viewBox="0 0 600 60" style={{width:"100%",maxWidth:600,marginBottom:10}}>
@@ -822,15 +832,18 @@ export default function App(){
                 <input type="range" min={0.3*FAR_stoich} max={FAR_stoich} step={FAR_stoich/1000} value={FAR} onChange={e=>setFAR(+e.target.value)} style={{width:"100%",accentColor:C.accent2}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>Stoichiometric FAR = {FAR_stoich.toFixed(5)} (kg fuel / kg air)</div>
               </div>
-              <div style={{marginBottom:10}}><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, adiabatic mixing with T_fuel (below) sets the actual PSR inlet temperature.">Air Temperature ({uu(units,"T")})</label>
-                <input type="number" style={S.inp} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value||(units==="SI"?300:80)))}/></div>
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, Cantera mixes this with T_fuel adiabatically (mass-weighted enthalpy balance with T-dependent NASA polynomials) to get the actual PSR inlet T.">Air Temperature ({uu(units,"T")})</label>
+                <input type="number" style={{...S.inp,borderColor:`${C.accent3}55`}} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value||(units==="SI"?300:80)))}/>
+                <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.accent3,marginTop:4}}/>
+              </div>
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel inlet temperature (before adiabatic mixing with air). Combustor tab only. Typical values: 290 K (cold fuel line) to 550 K (preheated). Defaults to Air T until you change it.">Fuel Temperature ({uu(units,"T")})</label>
-                  <button onClick={()=>setTfuel(T0)} title="Reset T_fuel to match Air Temperature" style={{padding:"1px 8px",fontSize:9,fontWeight:700,color:C.orange,background:"transparent",border:`1px solid ${C.orange}50`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>= T_air</button>
+                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel inlet temperature (before adiabatic mixing with air). Independent from Air T. Typical values: 290 K (cold fuel line) to 550 K (preheated).">Fuel Temperature ({uu(units,"T")})</label>
+                  <button onClick={()=>setTfuel(T0)} title="Copy current Air T into Fuel T (sets the two streams equal, so adiabatic mixing degenerates to the single-inlet case)." style={{padding:"1px 8px",fontSize:9,fontWeight:700,color:C.orange,background:"transparent",border:`1px solid ${C.orange}50`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>copy Air T</button>
                 </div>
                 <input type="number" style={{...S.inp,borderColor:`${C.orange}55`}} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value||(units==="SI"?300:80)))}/>
-                <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={units==="SI"?5:5} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.orange,marginTop:4}}/>
+                <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.orange,marginTop:4}}/>
               </div>
               <div><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
                 <input type="number" step="0.5" style={S.inp} value={+uv(units,"P",P).toFixed(3)} onChange={e=>setP(uvI(units,"P",+e.target.value||(units==="SI"?1:14.696)))}/></div>
