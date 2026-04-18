@@ -656,14 +656,14 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
     setSweepRunning(true);setSweepErr(null);
     const endBusy=beginBusy(BUSY_LABELS.flame_sweep);
     const base={fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair};
-    // Trimmed point counts — each sweep now finishes in ~2 min worst-case:
-    //   phi 5 × ~25 s ≈ 125 s, T 4 × ~25 s ≈ 100 s, P 5 × ~25 s ≈ 125 s
-    // phi: even spacing 0.4 → 2.0 (brackets hydrocarbon peak ~1 and H₂ peak ~1.8)
-    // T:   300/500/650/800 K — ambient → preheat → high-preheat range
-    // P:   0.5/1/5/20/40 bar — geometric spread spanning sub-atm to 40 bar
+    // Equispaced points between min/max for each sweep axis. Each sweep
+    // finishes in ~2 min worst-case at ~25 s/point.
+    //   phi: 5 points linearly spaced 0.4 → 2.0
+    //   T:   4 points linearly spaced 300 → 800 K
+    //   P:   5 points linearly spaced 0.5 → 40 atm (converted to bar for backend)
     const phiVals=Array.from({length:5},(_,i)=>+(0.4+(2.0-0.4)*i/4).toFixed(3));
-    const TVals=[300,500,650,800];
-    const PVals_bar=[0.5,1,5,20,40].map(atmToBar);
+    const TVals=Array.from({length:4},(_,i)=>+(300+(800-300)*i/3).toFixed(1));
+    const PVals_bar=Array.from({length:5},(_,i)=>+(0.5+(40-0.5)*i/4).toFixed(3)).map(atmToBar);
     try{
       // Run sweeps SEQUENTIALLY. Backend solver pool has max_workers=1 (Cantera is
       // not thread-safe), so Promise.all just serializes them anyway *and* leaks
