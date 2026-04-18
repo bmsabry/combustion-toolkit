@@ -20,10 +20,12 @@ from ..schemas import (
     ExhaustResponse,
     FlameSpeedRequest,
     FlameSpeedResponse,
+    FlameSpeedSweepRequest,
+    FlameSpeedSweepResponse,
     PropsRequest,
     PropsResponse,
 )
-from ..science import aft, autoignition, combustor, exhaust, flame_speed, props
+from ..science import aft, autoignition, combustor, exhaust, flame_speed, flame_speed_sweep, props
 
 log = logging.getLogger("calc")
 router = APIRouter(prefix="/calc", tags=["calc (accurate Cantera)"])
@@ -72,6 +74,36 @@ def calc_flame_speed(
         body.T_air_K,
     )
     return FlameSpeedResponse(**result)
+
+
+@router.post("/flame-speed-sweep", response_model=FlameSpeedSweepResponse)
+def calc_flame_speed_sweep(
+    body: FlameSpeedSweepRequest, _: User = Depends(require_full_subscription)
+) -> FlameSpeedSweepResponse:
+    """Run a Cantera FreeFlame at each point in sweep_values.
+
+    Bounded at 15 points × ~15 s ≈ 225 s worst-case; we widen the pool timeout
+    here so a full sweep can finish without tripping the per-call 180 s ceiling
+    used by single-point endpoints.
+    """
+    try:
+        result = _solver_pool.submit(
+            flame_speed_sweep.run,
+            body.sweep_var,
+            list(body.sweep_values),
+            body.fuel,
+            body.oxidizer,
+            body.phi,
+            body.T0,
+            body.P,
+            body.T_fuel_K,
+            body.T_air_K,
+            body.domain_length_m,
+        ).result(timeout=300)
+    except Exception as e:
+        log.exception("flame-speed-sweep error: %s", e)
+        raise HTTPException(status_code=500, detail=f"sweep error: {e}") from e
+    return FlameSpeedSweepResponse(**result)
 
 
 @router.post("/combustor", response_model=CombustorResponse)

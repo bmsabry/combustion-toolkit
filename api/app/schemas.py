@@ -154,6 +154,35 @@ class FlameSpeedResponse(BaseModel):
     grid_points: int
 
 
+class FlameSpeedSweepRequest(BaseCalcRequest):
+    """Cantera-backed sweep of S_L across one of {phi, P, T}.
+
+    Slow: each point is a full 1D FreeFlame solve (~5–15 s). Cap points at 15 so
+    the run finishes within the 180 s solver-pool timeout. Used only on explicit
+    user button-click from the Flame Speed panel (Accurate mode).
+    """
+
+    sweep_var: str = Field(pattern="^(phi|P|T)$", description="Which baseline var to sweep")
+    sweep_values: List[float] = Field(min_length=2, max_length=15, description="Values of the swept variable")
+    domain_length_m: float = Field(default=0.03, gt=0)
+    T_fuel_K: Optional[float] = Field(default=None, gt=0)
+    T_air_K: Optional[float] = Field(default=None, gt=0)
+
+
+class FlameSpeedSweepPoint(BaseModel):
+    x: float  # value of the swept variable at this point
+    SL: float  # m/s (0.0 if not converged)
+    T_mixed_inlet_K: float = 0.0
+    alpha_th_u: float = 0.0
+    converged: bool = True
+    error: Optional[str] = None
+
+
+class FlameSpeedSweepResponse(BaseModel):
+    sweep_var: str
+    points: List[FlameSpeedSweepPoint]
+
+
 class AutoignitionRequest(BaseCalcRequest):
     """Constant-pressure autoignition delay for the premixed (fuel+air) mixture.
 

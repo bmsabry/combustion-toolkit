@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, createContext, useContext } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, createContext, useContext } from "react";
 import * as XLSX from "xlsx";
 import { useAuth, AuthModal } from "./auth.jsx";
 import { AccountPanel } from "./AccountPanel.jsx";
@@ -11,6 +11,18 @@ const UnitCtx = createContext("SI");
 // Accurate Mode: when on AND user has online access, panels route calcs to the backend (Cantera).
 // Otherwise they use the free in-browser models. Exposed via context to avoid prop-drilling.
 const AccurateCtx = createContext({ accurate:false, setAccurate:()=>{}, available:false });
+// Busy tracker — any Cantera call registers a task here while in-flight so the global overlay
+// can show a large "calculations in progress" banner that disappears when all tasks complete.
+const BusyCtx = createContext({ begin:()=>()=>{}, tasks:[] });
+const BUSY_LABELS = {
+  aft: "Flame temperature (Cantera equilibrium)",
+  flame: "Laminar flame speed (Cantera 1D)",
+  combustor: "Combustor network (Cantera PSR+PFR)",
+  exhaust: "Exhaust composition (Cantera equilibrium)",
+  props: "Fluid properties (Cantera)",
+  autoignition: "Autoignition delay (Cantera 0D)",
+  flame_sweep: "Flame speed sweep curves (Cantera 1D × N points)",
+};
 const UC = {
   SI: { T:{u:"K",from:v=>v,to:v=>v}, P:{u:"atm",from:v=>v,to:v=>v}, vel:{u:"m/s",from:v=>v,to:v=>v}, len:{u:"m",from:v=>v,to:v=>v}, lenSmall:{u:"cm",from:v=>v,to:v=>v}, SL:{u:"cm/s",from:v=>v,to:v=>v}, mass:{u:"kg",from:v=>v,to:v=>v}, energy_mass:{u:"MJ/kg",from:v=>v,to:v=>v}, energy_vol:{u:"MJ/m³",from:v=>v,to:v=>v}, cp:{u:"J/(mol·K)",from:v=>v,to:v=>v}, h_mol:{u:"kJ/mol",from:v=>v,to:v=>v}, s_mol:{u:"J/(mol·K)",from:v=>v,to:v=>v}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"kg/kg",from:v=>v,to:v=>v} },
   ENG: { T:{u:"°F",from:K=>(K-273.15)*9/5+32,to:F=>(F-32)*5/9+273.15}, P:{u:"psia",from:a=>a*14.696,to:p=>p/14.696}, vel:{u:"ft/s",from:m=>m*3.28084,to:f=>f/3.28084}, len:{u:"ft",from:m=>m*3.28084,to:f=>f/3.28084}, lenSmall:{u:"in",from:c=>c/2.54,to:i=>i*2.54}, SL:{u:"ft/s",from:c=>c/30.48,to:f=>f*30.48}, mass:{u:"lb",from:k=>k*2.20462,to:l=>l/2.20462}, energy_mass:{u:"BTU/lb",from:v=>v*429.923,to:v=>v/429.923}, energy_vol:{u:"BTU/scf",from:v=>v*26.839,to:v=>v/26.839}, cp:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, h_mol:{u:"BTU/lbmol",from:v=>v*429.923,to:v=>v/429.923}, s_mol:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"lb/lb",from:v=>v,to:v=>v} }
@@ -485,18 +497,61 @@ function PricingModal({show,onClose,onRequestSignin}){if(!show)return null;
 // `args` is serialized as a key so changes trigger a new call.
 function useBackendCalc(kind, args, enabled){
   const [data,setData]=useState(null);const[loading,setLoading]=useState(false);const[err,setErr]=useState(null);
+  const {begin}=useContext(BusyCtx);
   const key=JSON.stringify(args||{});
   useEffect(()=>{
     if(!enabled){setData(null);setErr(null);setLoading(false);return;}
     const fn={aft:api.calcAFT,flame:api.calcFlameSpeed,combustor:api.calcCombustor,exhaust:api.calcExhaust,props:api.calcProps,autoignition:api.calcAutoignition}[kind];
     if(!fn){return;}
     let cancelled=false;setLoading(true);setErr(null);
-    fn(args).then(d=>{if(!cancelled){setData(d);setLoading(false);}})
-            .catch(e=>{if(!cancelled){setErr(e.message||String(e));setLoading(false);setData(null);}});
-    return()=>{cancelled=true;};
+    const endBusy=begin(BUSY_LABELS[kind]||kind);
+    let ended=false;const safeEnd=()=>{if(!ended){ended=true;endBusy();}};
+    fn(args).then(d=>{if(!cancelled){setData(d);setLoading(false);}safeEnd();})
+            .catch(e=>{if(!cancelled){setErr(e.message||String(e));setLoading(false);setData(null);}safeEnd();});
+    return()=>{cancelled=true;safeEnd();};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[enabled,key,kind]);
   return{data,loading,err};
+}
+
+// Global busy tracker: any Cantera call (auto-fired via useBackendCalc, or manually-fired
+// like the flame-speed sweep button) registers a task here. The overlay reads `tasks`
+// and renders a large fixed-position banner while the list is non-empty — the banner
+// disappears automatically once every task's promise settles. Fresh ids per begin() call
+// allow multiple concurrent tasks of the same kind to coexist safely.
+function BusyProvider({children}){
+  const[tasks,setTasks]=useState([]);
+  const begin=useCallback((label)=>{
+    const id=Math.random().toString(36).slice(2)+Date.now().toString(36);
+    setTasks(ts=>[...ts,{id,label,t0:Date.now()}]);
+    return()=>setTasks(ts=>ts.filter(x=>x.id!==id));
+  },[]);
+  const value=useMemo(()=>({begin,tasks}),[begin,tasks]);
+  return <BusyCtx.Provider value={value}>{children}<BusyOverlay tasks={tasks}/></BusyCtx.Provider>;
+}
+function BusyOverlay({tasks}){
+  const[tick,setTick]=useState(0);
+  useEffect(()=>{if(tasks.length===0)return;const id=setInterval(()=>setTick(t=>t+1),500);return()=>clearInterval(id);},[tasks.length]);
+  if(tasks.length===0)return null;
+  const labels=[...new Set(tasks.map(t=>t.label))];
+  const oldest=Math.max(...tasks.map(t=>Date.now()-t.t0));
+  const secs=(oldest/1000).toFixed(1);
+  return(<div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:9999,minWidth:420,maxWidth:640,padding:"14px 22px",background:C.bg2,border:`2px solid ${C.accent}`,borderRadius:10,boxShadow:"0 8px 32px rgba(0,0,0,.55)",fontFamily:"'Barlow',sans-serif",color:C.txt,pointerEvents:"none"}}
+    data-tick={tick}>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+      <span style={{display:"inline-block",width:14,height:14,border:`2.5px solid ${C.accent}`,borderTopColor:"transparent",borderRadius:"50%",animation:"ctkspin 0.85s linear infinite"}}/>
+      <span style={{fontSize:15,fontWeight:700,letterSpacing:".5px",color:C.accent,fontFamily:"'Barlow Condensed',sans-serif"}}>CALCULATIONS IN PROGRESS — PLEASE WAIT</span>
+      <span style={{fontSize:11,color:C.txtMuted,fontFamily:"monospace",marginLeft:"auto"}}>{secs}s</span>
+    </div>
+    <div style={{fontSize:11.5,color:C.txtDim,lineHeight:1.5,marginBottom:6}}>
+      Cantera is updating the numbers on this page. Values on the screen may not yet reflect your latest inputs.
+    </div>
+    <ul style={{margin:"4px 0 6px 18px",padding:0,fontSize:11,color:C.txt,fontFamily:"monospace",lineHeight:1.55}}>
+      {labels.map(l=><li key={l}>{l}</li>)}
+    </ul>
+    <div style={{fontSize:10.5,color:C.txtMuted,fontStyle:"italic"}}>This box will disappear automatically once the calculations are complete.</div>
+    <style>{`@keyframes ctkspin{to{transform:rotate(360deg)}}`}</style>
+  </div>);
 }
 
 // Only non-zero species so we don't ship a 30-key object for a 2-key input.
@@ -576,7 +631,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
   const localSL=calcSL(fuel,phi,Tmix,P)*100;
   const bk=useBackendCalc("flame",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair},accurate);
   // Autoignition delay (Cantera 0D). Only fetched in accurate mode.
-  const bkIgn=useBackendCalc("autoignition",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),max_time_s:0.5,T_fuel_K:Tfuel,T_air_K:Tair,mechanism:"gri30"},accurate);
+  const bkIgn=useBackendCalc("autoignition",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),max_time_s:10.0,T_fuel_K:Tfuel,T_air_K:Tair,mechanism:"gri30"},accurate);
   const SL=accurate&&bk.data?bk.data.SL*100:localSL;  // bk.data.SL is m/s → cm/s
   // In accurate mode the headline SL comes from Cantera but the sweeps are always JS correlation. Anchor the
   // JS curves to the Cantera value at the current phi so the marker lies ON the curve and τ_chem / Da /
@@ -585,10 +640,44 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
   const SL_scale=(accurate&&bk.data&&localSL>1e-6)?SL/localSL:1;
   const SL_scale2=SL_scale*SL_scale;
   const mk={x:phi,y:uv(units,"SL",SL),label:`${uv(units,"SL",SL).toFixed(1)} ${uu(units,"SL")}`};
+  // ───── Cantera-backed sweep curves (button-triggered only, Accurate mode) ─────
+  // Running a 1D FreeFlame per point is 5–15 s. 12 φ + 10 T + 7 P ≈ 30 points → ~3 min.
+  // We do NOT auto-fire this on every parameter change — the user explicitly clicks to refresh.
+  // Cached results are considered fresh only while the input hash (fuel/ox/phi/T0/P/Tfuel)
+  // matches the current inputs; otherwise the scaled-correlation trend is shown.
+  const {begin:beginBusy}=useContext(BusyCtx);
+  const [canteraSweeps,setCanteraSweeps]=useState(null);  // {hash, phi:[...], T:[...], P:[...]}
+  const [sweepErr,setSweepErr]=useState(null);
+  const [sweepRunning,setSweepRunning]=useState(false);
+  const sweepHash=useMemo(()=>JSON.stringify({fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),Tfuel,Tair}),[fuel,ox,phi,T0,P,Tfuel,Tair]);
+  const sweepIsFresh=accurate&&canteraSweeps&&canteraSweeps.hash===sweepHash;
+  const runCanteraSweeps=useCallback(async()=>{
+    if(sweepRunning)return;
+    setSweepRunning(true);setSweepErr(null);
+    const endBusy=beginBusy(BUSY_LABELS.flame_sweep);
+    const base={fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair};
+    const phiVals=Array.from({length:12},(_,i)=>+(0.4+(2.0-0.4)*i/11).toFixed(3));
+    const TVals=[250,300,350,400,450,500,600,700,800,900];
+    const PVals_bar=[0.5,1,2,5,10,20,40].map(atmToBar);
+    try{
+      const[phiRes,TRes,PRes]=await Promise.all([
+        api.calcFlameSpeedSweep({...base,sweep_var:"phi",sweep_values:phiVals}),
+        api.calcFlameSpeedSweep({...base,sweep_var:"T",sweep_values:TVals}),
+        api.calcFlameSpeedSweep({...base,sweep_var:"P",sweep_values:PVals_bar}),
+      ]);
+      setCanteraSweeps({hash:sweepHash,phi:phiRes.points,T:TRes.points,P:PRes.points});
+    }catch(e){setSweepErr(e.message||String(e));}
+    finally{setSweepRunning(false);endBusy();}
+  },[sweepRunning,beginBusy,fuel,ox,phi,T0,P,Tfuel,Tair,sweepHash]);
   // phi sweep recomputes T_mixed at each phi (Z depends on phi).
-  const sweep=useMemo(()=>{const r=[];for(let p=0.4;p<=1.01;p+=0.02){const Tm=mixT(fuel,ox,p,Tfuel,Tair);r.push({phi:+p.toFixed(2),SL:uv(units,"SL",calcSL(fuel,p,Tm,P)*100*SL_scale)});}return r;},[fuel,ox,Tfuel,Tair,P,units,SL_scale]);
-  const pSw=useMemo(()=>[0.5,1,2,5,10,20,40].map(p=>({P:uv(units,"P",p),SL:uv(units,"SL",calcSL(fuel,phi,Tmix,p)*100*SL_scale)})),[fuel,phi,Tmix,P,units,SL_scale]);
-  const tSw=useMemo(()=>{const r=[];for(let t=250;t<=800;t+=25)r.push({T:uv(units,"T",t),SL:uv(units,"SL",calcSL(fuel,phi,t,P)*100*SL_scale)});return r;},[fuel,phi,P,units,SL_scale]);
+  const jsPhiSweep=useMemo(()=>{const r=[];for(let p=0.4;p<=1.01;p+=0.02){const Tm=mixT(fuel,ox,p,Tfuel,Tair);r.push({phi:+p.toFixed(2),SL:uv(units,"SL",calcSL(fuel,p,Tm,P)*100*SL_scale)});}return r;},[fuel,ox,Tfuel,Tair,P,units,SL_scale]);
+  const jsPSw=useMemo(()=>[0.5,1,2,5,10,20,40].map(p=>({P:uv(units,"P",p),SL:uv(units,"SL",calcSL(fuel,phi,Tmix,p)*100*SL_scale)})),[fuel,phi,Tmix,P,units,SL_scale]);
+  const jsTSw=useMemo(()=>{const r=[];for(let t=250;t<=800;t+=25)r.push({T:uv(units,"T",t),SL:uv(units,"SL",calcSL(fuel,phi,t,P)*100*SL_scale)});return r;},[fuel,phi,P,units,SL_scale]);
+  // Charts pick Cantera data when the cached sweep matches current inputs. SL from backend is
+  // in m/s → ×100 → cm/s → uv() for display units. Points that failed to converge are dropped.
+  const sweep=useMemo(()=>sweepIsFresh?canteraSweeps.phi.filter(p=>p.converged).map(p=>({phi:+p.x.toFixed(3),SL:uv(units,"SL",p.SL*100)})):jsPhiSweep,[sweepIsFresh,canteraSweeps,units,jsPhiSweep]);
+  const pSw=useMemo(()=>sweepIsFresh?canteraSweeps.P.filter(p=>p.converged).map(p=>({P:uv(units,"P",p.x/1.01325),SL:uv(units,"SL",p.SL*100)})):jsPSw,[sweepIsFresh,canteraSweeps,units,jsPSw]);
+  const tSw=useMemo(()=>sweepIsFresh?canteraSweeps.T.filter(p=>p.converged).map(p=>({T:uv(units,"T",p.x),SL:uv(units,"SL",p.SL*100)})):jsTSw,[sweepIsFresh,canteraSweeps,units,jsTSw]);
   const bo=useMemo(()=>{const b=calcBlowoff(fuel,phi,Tmix,P,velocity,Lchar);const Da=b.Da*SL_scale2;return{SL:b.SL*SL_scale,tau_chem:b.tau_chem/SL_scale2,tau_flow:b.tau_flow,Da,blowoff_velocity:b.blowoff_velocity*SL_scale2,stable:Da>1};},[fuel,phi,Tmix,P,velocity,Lchar,SL_scale,SL_scale2]);
   const daSw=useMemo(()=>{const r=[];for(let v=1;v<=200;v+=2){const b=calcBlowoff(fuel,phi,Tmix,P,v,Lchar);r.push({V:uv(units,"vel",v),Da:Math.min(b.Da*SL_scale2,100)});}return r;},[fuel,phi,Tmix,P,Lchar,units,SL_scale2]);
   // ───── Premixer stability metrics ─────
@@ -600,14 +689,26 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
   const alphaTh=(accurate&&bk.data&&bk.data.alpha_th_u)?bk.data.alpha_th_u:alphaThU(Tmix,P);
   // Lewis–von Elbe critical boundary-velocity gradient (1/s): g_c = S_L² / α_th. Higher g_c = higher flashback resistance.
   const g_c=(SL_ms*SL_ms)/Math.max(alphaTh,1e-20);
-  // Autoignition delay (s): backend Cantera 0D if available, else Spadaccini–Colket NG correlation.
-  const tau_ign=(accurate&&bkIgn.data&&bkIgn.data.ignited)?bkIgn.data.tau_ign_s:calcTauIgnFree(Tmix,P);
-  const tau_ign_ignited=accurate&&bkIgn.data?bkIgn.data.ignited:true; // free-mode correlation always returns a value
+  // Autoignition delay (s).
+  //   Accurate mode → Cantera 0D const-P reactor; if the run reaches its cutoff without ignition,
+  //                   we report τ_ign > cutoff and use the cutoff as a conservative lower bound
+  //                   for the margin (never fall through to the NG-only correlation).
+  //   Free mode     → Spadaccini–Colket NG correlation. Suppressed for fuels with H2>5% or
+  //                   non-hydrocarbon species, where the correlation is outside its calibration.
+  const H2_frac=(fuel.H2||0)/Math.max(Object.values(fuel).reduce((a,b)=>a+b,0),1e-9);
+  const nonNGFuel=H2_frac>0.05||(fuel.CO||0)>0.01||(fuel.NH3||0)>0;
+  const freeCorrValid=!nonNGFuel;
+  const accurateIgn=accurate&&bkIgn.data;
+  const tau_ign_source=accurateIgn?"cantera":(freeCorrValid?"spad_colk":"none");
+  let tau_ign, tau_ign_is_lower_bound;
+  if(accurateIgn){tau_ign=bkIgn.data.tau_ign_s;tau_ign_is_lower_bound=!bkIgn.data.ignited;}
+  else if(freeCorrValid){tau_ign=calcTauIgnFree(Tmix,P);tau_ign_is_lower_bound=false;}
+  else{tau_ign=NaN;tau_ign_is_lower_bound=false;}
   // Premixer residence time (s): τ_res = L_premix / V_premix.
   const tau_res=Lpremix/Math.max(Vpremix,1e-20);
   // Safety margin — τ_res must be shorter than τ_ign to avoid autoignition inside the premixer.
-  const ignition_safe=tau_res<tau_ign;
-  const ignition_margin=tau_ign/Math.max(tau_res,1e-20);
+  const ignition_safe=isFinite(tau_ign)&&tau_res<tau_ign;
+  const ignition_margin=isFinite(tau_ign)?tau_ign/Math.max(tau_res,1e-20):NaN;
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works"><p style={{margin:"0 0 6px"}}><span style={hs.em}>Laminar Flame Speed (S_L)</span> is computed using Gülder/Metghalchi-Keck empirical correlations: S_L = S_L0 · f(φ) · (T_u/T_0)^α · (P/P_0)^β. For mixtures, species contributions are mole-fraction-weighted.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Blowoff Analysis:</span> τ_chem = α_th / S_L² (chemical timescale), τ_flow = L_char / V (flow timescale). The <span style={hs.em}>Damköhler number Da = τ_flow / τ_chem</span>. When Da &lt; 1, the flame cannot sustain itself and blows off.</p><p style={{margin:0}}><span style={hs.warn}>V_ref</span> is your reference approach velocity. <span style={hs.warn}>L_char</span> is the characteristic recirculation length (typically flameholder diameter or step height).</p></HelpBox>
     <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}</div>
@@ -626,17 +727,16 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Characteristic recirculation length — typically the flameholder diameter, bluff body width, or step height."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_char ({uu(units,"len")}) ⓘ:</label></Tip>
           <NumField value={uv(units,"len",Lchar)} decimals={4} onCommit={v=>setLchar(uvI(units,"len",v))} style={{...S.inp,width:75}}/></div>
       </div></div>
-    {accurate&&bk.data&&Math.abs(SL_scale-1)>0.05&&<div style={{background:`${C.accent}10`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.45}}>ℹ Sweep curves use the JS correlation <em>shape</em> scaled by ×{SL_scale.toFixed(2)} so the marker sits on the curve at the Cantera value ({uv(units,"SL",SL).toFixed(2)} {uu(units,"SL")}). At operating points far from the current (φ, T_u, P), the correlation-based trend may diverge from a full Cantera sweep.</div>}
     <div style={S.card}><div style={S.cardT}>Premixer Stability — Flashback & Autoignition {accurate&&(bkIgn.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA 0D…</span>:bkIgn.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bkIgn.err}</span>:bkIgn.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (0D const-P reactor)</span>:null)}</div>
       <div style={{...S.row,gap:8,marginBottom:10}}>
         <M l="Zukoski BOT (τ_BO)" v={(tau_BO*1000).toFixed(3)} u="ms" c={C.accent3} tip="Zukoski blow-off / flashback time: τ_BO = D_flameholder / (1.5·S_L). Longer τ_BO indicates the flameholder is less prone to flashback."/>
         <M l="Thermal Diffusivity (α_th)" v={(alphaTh*1e6).toFixed(2)} u="mm²/s" c={C.violet} tip={`Thermal diffusivity of unburnt mixture at T_mixed. α_th = k/(ρ·c_p). ${accurate&&bk.data&&bk.data.alpha_th_u?"Value from Cantera transport model.":"Free-mode approximation: α_th = 2.0e-5·(T/300)^1.7/P[atm]."}`}/>
         <M l="Lewis-von Elbe g_c" v={g_c.toFixed(0)} u="1/s" c={C.accent} tip="Lewis–von Elbe critical boundary velocity gradient: g_c = S_L² / α_th. Flame flashes back if actual near-wall velocity gradient falls below g_c. Higher g_c = more flashback-resistant."/>
-        <M l="Autoignition Delay (τ_ign)" v={(tau_ign*1000).toFixed(3)} u="ms" c={C.accent2} tip={accurate&&bkIgn.data?(bkIgn.data.ignited?"Ignition delay time from Cantera 0D const-P reactor (max dT/dt criterion).":`Mixture did not ignite within ${(bkIgn.data.tau_ign_s*1000).toFixed(0)} ms window — reported value is the integration cutoff.`):"Free-mode Spadaccini–Colket NG correlation: τ_ign = 3.09e-5·P^-1.12·exp(20130/T). Order-of-magnitude estimate only."}/>
+        <M l="Autoignition Delay (τ_ign)" v={tau_ign_source==="none"?"N/A":(tau_ign_is_lower_bound?">":"")+(tau_ign*1000).toFixed(tau_ign<1?3:tau_ign<10?2:1)} u={tau_ign_source==="none"?"—":"ms"} c={tau_ign_source==="none"?C.txtMuted:C.accent2} tip={tau_ign_source==="cantera"?(bkIgn.data.ignited?"Ignition delay time from Cantera 0D const-P reactor (max dT/dt criterion) — first-principles kinetics from GRI-Mech 3.0.":`Mixture did not ignite within the ${(bkIgn.data.tau_ign_s).toFixed(1)} s integration window — τ_ign is at least this value, and the displayed margin is a lower bound.`):tau_ign_source==="spad_colk"?"Free-mode Spadaccini–Colket NG correlation: τ_ign = 3.09e-5·P^-1.12·exp(20130/T). Valid for natural-gas-like fuels only.":`Free-mode τ_ign correlation is disabled — this fuel contains ${(H2_frac*100).toFixed(0)}% H₂ or CO/NH₃ components. The Spadaccini-Colket correlation is calibrated for pure NG and is unreliable here. Switch to Accurate mode for Cantera 0D.`}/>
         <M l="Premixer Residence (τ_res)" v={(tau_res*1000).toFixed(3)} u="ms" c={C.accent3} tip="Premixer residence time: τ_res = L_premix / V_premix. Must be shorter than τ_ign to avoid autoignition inside the premixer."/>
-        <M l="Safety Margin (τ_ign/τ_res)" v={ignition_margin>999?">999":ignition_margin.toFixed(2)} u="—" c={ignition_safe?C.good:C.warm} tip="Ratio τ_ign/τ_res. Values > 3 indicate a robust safety margin for premixer autoignition. Values < 1 indicate the mixture can autoignite before leaving the premixer."/>
+        <M l="Safety Margin (τ_ign/τ_res)" v={!isFinite(ignition_margin)?"N/A":(tau_ign_is_lower_bound?">":"")+(ignition_margin>=1e4?ignition_margin.toExponential(1):ignition_margin.toFixed(1))} u="—" c={tau_ign_source==="none"?C.txtMuted:(ignition_safe?C.good:C.warm)} tip={tau_ign_is_lower_bound?"Lower bound on the safety margin — Cantera did not observe ignition within the integration window, so τ_ign (and therefore the margin) is at least this value.":"Ratio τ_ign / τ_res. Values > 3 indicate a robust margin against premixer autoignition. Values < 1 indicate the mixture can autoignite before leaving the premixer."}/>
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
-          <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",background:ignition_safe?`${C.good}1F`:`${C.warm}1F`,color:ignition_safe?C.good:C.warm,border:`1px solid ${ignition_safe?C.good+"44":C.warm+"44"}`}}>{ignition_safe?"● PREMIXER SAFE":"● AUTOIGNITION RISK"}</span></div>
+          <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",background:tau_ign_source==="none"?`${C.txtMuted}1F`:(ignition_safe?`${C.good}1F`:`${C.warm}1F`),color:tau_ign_source==="none"?C.txtMuted:(ignition_safe?C.good:C.warm),border:`1px solid ${tau_ign_source==="none"?C.txtMuted+"44":(ignition_safe?C.good+"44":C.warm+"44")}`}}>{tau_ign_source==="none"?"● NEEDS ACCURATE MODE":(ignition_safe?"● PREMIXER SAFE":"● AUTOIGNITION RISK")}</span></div>
       </div>
       <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Flameholder diameter (bluff body, burner rod, or swirler hub diameter). Used for Zukoski τ_BO."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>D_flameholder ({uu(units,"len")}) ⓘ:</label></Tip>
@@ -646,7 +746,29 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Bulk velocity of the premixed mixture through the premixer channel."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>V_premix ({uu(units,"vel")}) ⓘ:</label></Tip>
           <NumField value={uv(units,"vel",Vpremix)} decimals={2} onCommit={v=>setVpremix(uvI(units,"vel",v))} style={{...S.inp,width:65}}/></div>
       </div>
-      {!accurate&&<div style={{marginTop:8,background:`${C.txtMuted}10`,border:`1px solid ${C.border}`,borderRadius:5,padding:"6px 10px",fontSize:10,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.45}}>ℹ τ_ign uses the Spadaccini–Colket NG correlation — order-of-magnitude only. Switch to <strong>Accurate</strong> mode for Cantera 0D constant-pressure reactor integration.</div>}
+      {!accurate&&freeCorrValid&&<div style={{marginTop:8,background:`${C.txtMuted}10`,border:`1px solid ${C.border}`,borderRadius:5,padding:"6px 10px",fontSize:10,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.45}}>ℹ τ_ign uses the Spadaccini–Colket NG correlation — order-of-magnitude only, valid for NG-like fuels. Switch to <strong>Accurate</strong> mode for Cantera 0D constant-pressure reactor integration.</div>}
+      {!accurate&&!freeCorrValid&&<div style={{marginTop:8,background:`${C.warm}12`,border:`1px solid ${C.warm}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.warm,fontFamily:"monospace",lineHeight:1.45}}>⚠ This fuel contains {(H2_frac*100).toFixed(0)}% H₂ (or CO / NH₃). The free-mode Spadaccini–Colket τ_ign correlation is calibrated for pure natural gas and gives unreliable values for H₂ blends — it has been suppressed. Switch to <strong>Accurate</strong> mode for first-principles Cantera 0D kinetics.</div>}
+      {accurate&&bkIgn.data&&!bkIgn.data.ignited&&<div style={{marginTop:8,background:`${C.accent}10`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.45}}>ℹ Cantera 0D integrated for {bkIgn.data.tau_ign_s.toFixed(1)} s without the mixture igniting (T_peak rose from {bkIgn.data.T_mixed_inlet_K.toFixed(0)} to {bkIgn.data.T_peak.toFixed(0)} K). τ_ign is therefore at least {bkIgn.data.tau_ign_s.toFixed(1)} s — the premixer margin shown is a <em>lower bound</em>. Very long τ_ign indicates the mixture is thermo-kinetically stable at T_mixed and cannot autoignite within the premixer.</div>}
+    </div>
+    {/* Sweep curves — banner + button. In accurate mode the charts below show correlation-based
+        TRENDS unless the user clicks "Run" to fetch first-principles Cantera sweeps (slow, ~2-3 min).
+        Fresh Cantera results are used automatically and marked green. */}
+    <div style={{padding:"11px 14px",background:sweepIsFresh?`${C.good}0C`:(accurate?`${C.accent2}10`:`${C.txtMuted}10`),border:`1.5px solid ${sweepIsFresh?C.good+"55":(accurate?C.accent2+"55":C.border)}`,borderRadius:7,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+      <div style={{flex:"1 1 360px",fontSize:11.5,color:C.txtDim,lineHeight:1.5,fontFamily:"'Barlow',sans-serif"}}>
+        {sweepIsFresh?(
+          <><strong style={{color:C.good,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>✓ CANTERA SWEEP CURVES</strong> — Curves below are first-principles Cantera 1D FreeFlame solves at every sampled point, not a correlation. Change any input (fuel, φ, T, P) to re-enable the Run button.</>
+        ):accurate?(
+          <><strong style={{color:C.accent2,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>⚠ CURVES ARE TRENDS ONLY</strong> — The curves below use the fast Gülder/Metghalchi-Keck correlation scaled to your current Cantera operating point (×{SL_scale.toFixed(2)}). For H₂ blends or rich operation the trend shape may differ from Cantera. Click <strong>Run Cantera Sweep Curves</strong> to replace the trends with ~30 real Cantera flame solves — this takes about 2–3 minutes; a "Calculations in Progress" box will be shown until complete.</>
+        ):(
+          <>Accurate mode is off — curves below are computed with the in-browser Gülder/Metghalchi-Keck correlation. Switch to <strong>Accurate</strong> mode and click <strong>Run Cantera Sweep Curves</strong> to replace these trends with first-principles Cantera solves.</>
+        )}
+        {sweepErr&&<div style={{marginTop:6,color:C.warm,fontFamily:"monospace",fontSize:10.5}}>⚠ Sweep failed: {sweepErr}</div>}
+      </div>
+      {accurate&&(
+        <button onClick={runCanteraSweeps} disabled={sweepRunning||sweepIsFresh} style={{padding:"9px 16px",fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",color:(sweepRunning||sweepIsFresh)?C.txtMuted:C.bg,background:sweepIsFresh?C.good:(sweepRunning?C.bg3:C.accent2),border:`1.5px solid ${sweepIsFresh?C.good:C.accent2}`,borderRadius:6,cursor:(sweepRunning||sweepIsFresh)?"default":"pointer",whiteSpace:"nowrap"}}>
+          {sweepRunning?"⟳ RUNNING CANTERA…":sweepIsFresh?"✓ CURVES UP TO DATE":"▶ RUN CANTERA SWEEP CURVES"}
+        </button>
+      )}
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>Laminar Flame Speed vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Peak S_L occurs near stoichiometric (slightly rich for hydrocarbons, φ≈1.8 for H₂).</div><Chart data={sweep} xK="phi" yK="SL" xL="Equivalence Ratio (φ)" yL={`Flame Speed (${uu(units,"SL")})`} color={C.violet} marker={mk}/></div>
@@ -1010,6 +1132,7 @@ export default function App(){
   return(
     <UnitCtx.Provider value={units}>
     <AccurateCtx.Provider value={{accurate:accurate&&hasOnline,setAccurate,available:hasOnline}}>
+    <BusyProvider>
       <div style={{fontFamily:"'Barlow','Segoe UI',sans-serif",background:C.bg,color:C.txt,minHeight:"100vh",display:"flex",flexDirection:"column"}}>
         <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700;800&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet"/>
         <HelpModal show={showHelp} onClose={()=>setShowHelp(false)}/>
@@ -1135,5 +1258,6 @@ export default function App(){
           </div>
         </div>
       </div>
+    </BusyProvider>
     </AccurateCtx.Provider>
     </UnitCtx.Provider>);}

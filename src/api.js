@@ -118,6 +118,9 @@ export async function calcAFT(payload) {
 export async function calcFlameSpeed(payload) {
   return request("/calc/flame-speed", { method: "POST", body: payload, auth: true });
 }
+export async function calcFlameSpeedSweep(payload) {
+  return request("/calc/flame-speed-sweep", { method: "POST", body: payload, auth: true });
+}
 export async function calcCombustor(payload) {
   return request("/calc/combustor", { method: "POST", body: payload, auth: true });
 }
