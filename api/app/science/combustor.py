@@ -1,19 +1,37 @@
 """PSR → PFR combustor network using Cantera ReactorNet.
 
-PSR seeding strategy (cold-ignited):
-    The PSR is seeded with the HP-equilibrium state of the inlet mixture with
-    all NOx-family species zeroed out. This represents an ignited primary zone
-    where NOx has not yet formed — NO then builds up kinetically via the
-    Zeldovich mechanism as the reactor is integrated forward in time. This
-    avoids the bias of a naive `equilibrate("HP")` warm start, which seeds NO
-    already near its (very high) equilibrium level and can leave the reactor
-    stuck near that value at short residence times.
+PSR seed strategies (`psr_seed`):
+    unreacted    — seed the reactor with the cold inlet mixture; rely on
+                   the integrator to ignite. Most honest, most fragile: short
+                   tau or weak mixtures can leave the reactor extinguished.
+    hot_eq       — seed with a plain `equilibrate(constraint)` of the inlet.
+                   All species at their equilibrium levels, including NO. Fast
+                   to converge on T but tends to lock NO near its (very high)
+                   equilibrium value.
+    cold_ignited — like hot_eq but with NOx-family species zeroed after
+                   equilibration, so NO has to rebuild kinetically (Zeldovich).
+                   Default: gives physically sensible NO for short residence
+                   times without being stuck at equilibrium NO.
+    autoignition — integrate a closed 0D constant-HP reactor from the
+                   inlet state long enough to ignite, then use THAT state as
+                   the seed. Honest about ignition delay; still a useful warm
+                   start for the steady-PSR integration.
 
-Integration strategy:
-    Instead of `advance_to_steady_state()` (which can return prematurely with
-    Zeldovich-dominated reactors), we advance explicitly in chunks and check
-    for true convergence of both T and NO. The solver keeps stepping until
-    the state stabilizes or a safety cap is hit.
+Equilibrium constraint (`eq_constraint`):
+    HP — constant enthalpy + pressure (physically correct for an
+         adiabatic PSR at steady pressure; the default)
+    UV — constant internal energy + specific volume (closed vessel)
+    TP — isothermal at the inlet T (rarely what you want)
+    Only relevant for `hot_eq` and `cold_ignited` seeds.
+
+Integration strategy (`integration`):
+    steady_state — Cantera's built-in `advance_to_steady_state()`. Fast when
+                   it works; can return prematurely for reactors dominated
+                   by slow kinetics (e.g. Zeldovich NO).
+    chunked      — advance in `100*tau` chunks, test ΔT and ΔNO for
+                   convergence, stop once both stabilize. Robust; default.
+    step         — call `net.step()` repeatedly and track convergence on
+                   each internal timestep. Finest control, slowest.
 
 Fuel/air temperatures:
     Fuel and air can be provided at different temperatures. They are mixed
@@ -37,6 +55,11 @@ _NOX_FAMILY = (
     "NH", "NH2", "NH3", "NNH", "HNO",
     "CN", "HCN", "H2CN", "HCNN", "HCNO", "HOCN", "HNCO", "NCO",
 )
+
+# Allowed dispatch keys
+_SEED_OPTIONS = ("unreacted", "hot_eq", "cold_ignited", "autoignition")
+_CONSTRAINT_OPTIONS = ("HP", "UV", "TP")
+_INTEGRATION_OPTIONS = ("steady_state", "chunked", "step")
 
 
 def _ppm_vd(gas: ct.Solution, species: str) -> float:
@@ -67,12 +90,37 @@ def _o2_pct_dry(gas: ct.Solution) -> float:
     return float(X[idx] / s * 100.0) if s > 0 else 0.0
 
 
-def _seed_ignited_no_NOx(inlet_T: float, inlet_P: float, inlet_X, mech: str = "gri30.yaml") -> ct.Solution:
-    """Return a Cantera Solution initialized to HP-equilibrium of the inlet with
-    all NOx-family species zeroed out, to allow kinetic NO build-up."""
+# ---------- PSR seeders ----------
+
+def _seed_unreacted(inlet_T: float, inlet_P: float, inlet_X, mech: str = "gri30.yaml") -> ct.Solution:
+    """Seed with the cold, unreacted inlet mixture. The integrator is left
+    to ignite on its own."""
     g = ct.Solution(mech)
     g.TPX = float(inlet_T), float(inlet_P), inlet_X
-    g.equilibrate("HP")
+    return g
+
+
+def _seed_hot_equilibrium(
+    inlet_T: float, inlet_P: float, inlet_X,
+    constraint: str = "HP", mech: str = "gri30.yaml",
+) -> ct.Solution:
+    """Seed with a plain equilibrium of the inlet under the given constraint."""
+    g = ct.Solution(mech)
+    g.TPX = float(inlet_T), float(inlet_P), inlet_X
+    g.equilibrate(constraint)
+    return g
+
+
+def _seed_ignited_no_NOx(
+    inlet_T: float, inlet_P: float, inlet_X,
+    constraint: str = "HP", mech: str = "gri30.yaml",
+) -> ct.Solution:
+    """Return a Cantera Solution initialized to equilibrium of the inlet (under
+    the given constraint) with all NOx-family species zeroed out, to allow
+    kinetic NO build-up."""
+    g = ct.Solution(mech)
+    g.TPX = float(inlet_T), float(inlet_P), inlet_X
+    g.equilibrate(constraint)
     X = np.array(g.X, dtype=float)
     for sp in _NOX_FAMILY:
         idx = g.species_index(sp)
@@ -85,9 +133,69 @@ def _seed_ignited_no_NOx(inlet_T: float, inlet_P: float, inlet_X, mech: str = "g
     return g
 
 
-def _advance_psr_to_steady(net: ct.ReactorNet, psr: ct.IdealGasReactor,
-                           tau_psr_s: float,
-                           max_wall_time_s: float = 30.0) -> None:
+def _seed_autoignition(
+    inlet_T: float, inlet_P: float, inlet_X,
+    mech: str = "gri30.yaml",
+    max_time_s: float = 1.0,
+) -> ct.Solution:
+    """Integrate a closed 0D constant-HP reactor from the cold inlet state
+    forward in time past ignition (defined as a >200 K rise from inlet).
+    Returns a Solution at the post-ignition burnt state. If ignition doesn't
+    happen within max_time_s, returns the final (possibly still-cold) state."""
+    g = ct.Solution(mech)
+    g.TPX = float(inlet_T), float(inlet_P), inlet_X
+    r = ct.IdealGasConstPressureReactor(g, energy="on")
+    net = ct.ReactorNet([r])
+    net.rtol = 1e-9
+    net.atol = 1e-15
+    T0 = float(g.T)
+    t = 0.0
+    dt = 1e-4
+    while t < max_time_s:
+        t += dt
+        try:
+            net.advance(t)
+        except Exception:
+            break
+        if float(r.phase.T) - T0 > 200.0:
+            # push a little past ignition to stabilize
+            try:
+                net.advance(t + 10.0 * dt)
+            except Exception:
+                pass
+            break
+        if dt < 0.01:
+            dt *= 1.5
+    g2 = ct.Solution(mech)
+    g2.TPX = float(r.phase.T), float(inlet_P), r.phase.X
+    return g2
+
+
+def _dispatch_seed(
+    psr_seed: str,
+    eq_constraint: str,
+    inlet_T: float,
+    inlet_P: float,
+    inlet_X,
+) -> ct.Solution:
+    if psr_seed == "unreacted":
+        return _seed_unreacted(inlet_T, inlet_P, inlet_X)
+    if psr_seed == "hot_eq":
+        return _seed_hot_equilibrium(inlet_T, inlet_P, inlet_X, eq_constraint)
+    if psr_seed == "cold_ignited":
+        return _seed_ignited_no_NOx(inlet_T, inlet_P, inlet_X, eq_constraint)
+    if psr_seed == "autoignition":
+        return _seed_autoignition(inlet_T, inlet_P, inlet_X)
+    raise ValueError(f"Unknown psr_seed: {psr_seed!r}")
+
+
+# ---------- PSR integrators ----------
+
+def _integrate_chunked(
+    net: ct.ReactorNet, psr: ct.IdealGasReactor,
+    tau_psr_s: float,
+    max_wall_time_s: float = 30.0,
+) -> None:
     """Integrate the PSR in chunks until both T and NO stop changing, or until
     a safety cap is reached.
 
@@ -122,6 +230,69 @@ def _advance_psr_to_steady(net: ct.ReactorNet, psr: ct.IdealGasReactor,
         prev_T, prev_NO = T, NO
 
 
+def _integrate_steady_state(
+    net: ct.ReactorNet, psr: ct.IdealGasReactor,
+    tau_psr_s: float,
+    max_wall_time_s: float = 30.0,
+) -> None:
+    """Use Cantera's built-in advance_to_steady_state. Falls back to
+    chunked on error."""
+    try:
+        net.advance_to_steady_state()
+    except Exception:
+        _integrate_chunked(net, psr, tau_psr_s, max_wall_time_s)
+
+
+def _integrate_step(
+    net: ct.ReactorNet, psr: ct.IdealGasReactor,
+    tau_psr_s: float,
+    max_wall_time_s: float = 30.0,
+) -> None:
+    """Step-by-step integration using net.step() with convergence check on
+    each internal timestep."""
+    NO_idx = psr.phase.species_index("NO")
+    prev_T = -1.0
+    prev_NO = -1.0
+    max_total = max(1.0e5 * tau_psr_s, 30.0)
+    stable_count = 0
+    wall0 = time.monotonic()
+    for _ in range(200000):
+        if time.monotonic() - wall0 > max_wall_time_s:
+            break
+        try:
+            t_now = net.step()
+        except Exception:
+            break
+        if t_now > max_total:
+            break
+        T = float(psr.phase.T)
+        NO = float(psr.phase.X[NO_idx]) if NO_idx >= 0 else 0.0
+        if prev_T >= 0 and abs(T - prev_T) < 0.02 and abs(NO - prev_NO) < 1e-4 * max(NO, 1e-12):
+            stable_count += 1
+            if stable_count >= 20:  # require sustained stability
+                break
+        else:
+            stable_count = 0
+        prev_T, prev_NO = T, NO
+
+
+def _dispatch_integration(
+    integration: str,
+    net: ct.ReactorNet, psr: ct.IdealGasReactor,
+    tau_psr_s: float,
+) -> None:
+    if integration == "chunked":
+        _integrate_chunked(net, psr, tau_psr_s)
+        return
+    if integration == "steady_state":
+        _integrate_steady_state(net, psr, tau_psr_s)
+        return
+    if integration == "step":
+        _integrate_step(net, psr, tau_psr_s)
+        return
+    raise ValueError(f"Unknown integration: {integration!r}")
+
+
 def run(
     fuel_pct: Dict[str, float],
     ox_pct: Dict[str, float],
@@ -134,12 +305,32 @@ def run(
     profile_points: int = 60,
     T_fuel_K: Optional[float] = None,
     T_air_K: Optional[float] = None,
+    psr_seed: str = "cold_ignited",
+    eq_constraint: str = "HP",
+    integration: str = "chunked",
 ) -> dict:
     """PSR then PFR. Returns emissions at PSR exit and PFR exit, plus a profile.
 
     If T_fuel_K / T_air_K are provided, the two streams are mixed adiabatically
     before entering the PSR. Otherwise both default to T0_K (old behavior).
+
+    Reactor-option parameters (`psr_seed`, `eq_constraint`, `integration`)
+    default to the original behavior ("cold_ignited" + "HP" + "chunked"), so
+    callers who don't set them get identical results to the legacy
+    implementation.
     """
+    # Validate option strings up front for clearer errors
+    if psr_seed not in _SEED_OPTIONS:
+        raise ValueError(f"psr_seed must be one of {_SEED_OPTIONS}, got {psr_seed!r}")
+    if eq_constraint not in _CONSTRAINT_OPTIONS:
+        raise ValueError(
+            f"eq_constraint must be one of {_CONSTRAINT_OPTIONS}, got {eq_constraint!r}"
+        )
+    if integration not in _INTEGRATION_OPTIONS:
+        raise ValueError(
+            f"integration must be one of {_INTEGRATION_OPTIONS}, got {integration!r}"
+        )
+
     T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0_K)
     T_a = float(T_air_K) if T_air_K is not None else float(T0_K)
     gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar)
@@ -151,8 +342,8 @@ def run(
     inlet_gas.TPX = T_mixed, P_Pa, X_in
     upstream = ct.Reservoir(inlet_gas)
 
-    # PSR seeded "ignited but NOx-free" so thermal NO has to form kinetically
-    psr_gas = _seed_ignited_no_NOx(T_mixed, P_Pa, X_in)
+    # PSR seed — dispatch based on psr_seed + eq_constraint
+    psr_gas = _dispatch_seed(psr_seed, eq_constraint, T_mixed, P_Pa, X_in)
     psr = ct.IdealGasReactor(psr_gas, energy="on")
 
     # Downstream reservoir (state irrelevant at steady state)
@@ -169,7 +360,7 @@ def run(
     net = ct.ReactorNet([psr])
     net.rtol = 1e-9
     net.atol = 1e-15
-    _advance_psr_to_steady(net, psr, tau_psr_s)
+    _dispatch_integration(integration, net, psr, tau_psr_s)
 
     T_psr = float(psr.phase.T)
     NO_psr = _ppm_vd(psr.phase, "NO")
@@ -262,5 +453,8 @@ def run(
         "L_psr_cm": L_psr_equiv_cm,
         "L_pfr_cm": L_pfr_m * 100.0,
         "L_total_cm": L_psr_equiv_cm + L_pfr_m * 100.0,
+        "psr_seed": psr_seed,
+        "eq_constraint": eq_constraint,
+        "integration": integration,
         "profile": profile,
     }

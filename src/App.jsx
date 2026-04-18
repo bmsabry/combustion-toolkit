@@ -561,8 +561,18 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
   const {accurate}=useContext(AccurateCtx);
   // Air inlet T = T0 (sidebar "Air Temperature"); fuel inlet T = Tfuel (sidebar "Fuel Temperature").
   const Tair=T0;
+  // PSR reactor-option state. Defaults reproduce pre-existing behavior.
+  const [psrSeed,setPsrSeed]=useState("cold_ignited");
+  const [eqConstraint,setEqConstraint]=useState("HP");
+  const [integration,setIntegration]=useState("chunked");
+  // Compatibility: unreacted seed has no equilibrium to constrain; autoignition is constant-HP by construction.
+  const constraintDisabled=psrSeed==="unreacted"||psrSeed==="autoignition";
+  const effectiveConstraint=psrSeed==="autoignition"?"HP":eqConstraint;
+  const showIgnitionWarning=psrSeed==="unreacted"&&integration==="steady_state";
+  // If user switches to autoignition while UV/TP was selected, snap the constraint back to HP.
+  useEffect(()=>{if(psrSeed==="autoignition"&&eqConstraint!=="HP")setEqConstraint("HP");},[psrSeed]);
   const localNet=useMemo(()=>calcCombustorNetwork(fuel,ox,phi,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair),[fuel,ox,phi,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair]);
-  const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60,T_fuel_K:Tfuel,T_air_K:Tair},accurate);
+  const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60,T_fuel_K:Tfuel,T_air_K:Tair,psr_seed:psrSeed,eq_constraint:effectiveConstraint,integration},accurate);
   // Adapt backend response to local combustor format.
   const backendNet=bk.data?{
     T_ad:bk.data.T_exit,T_psr:bk.data.T_psr,conv_psr:bk.data.conv_psr,
@@ -599,6 +609,51 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
           &nbsp;<span style={{color:C.txtMuted,fontSize:9}}>(set in sidebar)</span>
         </div>
       </div>
+      {accurate&&(
+        <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12,padding:"8px 10px",background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:4}}>
+          <div style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",letterSpacing:".3px"}}>PSR REACTOR OPTIONS (advanced — defaults reproduce standard behavior)</div>
+          {/* Seed row */}
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <Tip text="How the PSR is initialized before the ReactorNet integrates to steady state. Unreacted = cold inlet, integrator must ignite it. Hot-Eq = plain equilibrium, NO locked at eq. Cold-Ignited (default) = equilibrium with NOx-family zeroed, so thermal NO builds kinetically. Autoignition = pre-solve a closed 0D constant-HP reactor past ignition, then use that as the seed.">
+              <label style={{fontSize:10,color:C.txtDim,fontFamily:"monospace",cursor:"help",minWidth:98}}>PSR seed ⓘ:</label>
+            </Tip>
+            {[
+              {v:"unreacted",l:"Unreacted"},
+              {v:"hot_eq",l:"Hot Eq"},
+              {v:"cold_ignited",l:"Cold-Ignited"},
+              {v:"autoignition",l:"Autoignition"},
+            ].map(o=>(
+              <button key={o.v} onClick={()=>setPsrSeed(o.v)} style={{padding:"4px 9px",fontSize:10,fontWeight:psrSeed===o.v?700:400,color:psrSeed===o.v?C.bg:C.txtDim,background:psrSeed===o.v?C.accent:"transparent",border:`1px solid ${psrSeed===o.v?C.accent:C.border}`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".3px",transition:"all .15s"}}>{o.l}</button>
+            ))}
+          </div>
+          {/* Constraint row */}
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",opacity:constraintDisabled?0.5:1}}>
+            <Tip text="Thermodynamic constraint for the equilibrium seed. HP = constant enthalpy + pressure (correct for adiabatic PSR; default). UV = closed vessel. TP = isothermal at inlet T (rarely correct). Only active for Hot-Eq and Cold-Ignited seeds.">
+              <label style={{fontSize:10,color:C.txtDim,fontFamily:"monospace",cursor:constraintDisabled?"not-allowed":"help",minWidth:98}}>Eq constraint ⓘ:</label>
+            </Tip>
+            {["HP","UV","TP"].map(c=>{
+              const sel=effectiveConstraint===c;
+              return(<button key={c} disabled={constraintDisabled} onClick={()=>!constraintDisabled&&setEqConstraint(c)} style={{padding:"4px 9px",fontSize:10,fontWeight:sel?700:400,color:sel?C.bg:C.txtDim,background:sel?C.accent3:"transparent",border:`1px solid ${sel?C.accent3:C.border}`,borderRadius:3,cursor:constraintDisabled?"not-allowed":"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".3px",transition:"all .15s"}}>{c}</button>);
+            })}
+            {psrSeed==="unreacted"&&<span style={{fontSize:9,color:C.txtMuted,fontStyle:"italic"}}>n/a — unreacted seed has no equilibrium to constrain</span>}
+            {psrSeed==="autoignition"&&<span style={{fontSize:9,color:C.txtMuted,fontStyle:"italic"}}>forced to HP (autoignition is constant-HP)</span>}
+          </div>
+          {/* Integration row */}
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <Tip text="PSR time-integration strategy. Steady-State = Cantera's built-in advance_to_steady_state (fast but can return prematurely for Zeldovich-dominated reactors). Chunked (default) = advance in 100τ chunks with ΔT/ΔNO convergence check. Step-by-Step = net.step() with per-step convergence (slowest, finest control).">
+              <label style={{fontSize:10,color:C.txtDim,fontFamily:"monospace",cursor:"help",minWidth:98}}>Integration ⓘ:</label>
+            </Tip>
+            {[
+              {v:"steady_state",l:"Steady-State"},
+              {v:"chunked",l:"Chunked"},
+              {v:"step",l:"Step-by-Step"},
+            ].map(o=>(
+              <button key={o.v} onClick={()=>setIntegration(o.v)} style={{padding:"4px 9px",fontSize:10,fontWeight:integration===o.v?700:400,color:integration===o.v?C.bg:C.txtDim,background:integration===o.v?C.accent2:"transparent",border:`1px solid ${integration===o.v?C.accent2:C.border}`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".3px",transition:"all .15s"}}>{o.l}</button>
+            ))}
+            {showIgnitionWarning&&<span style={{fontSize:9,color:C.warm,fontStyle:"italic"}}>⚠ Steady-State + Unreacted may not ignite; Chunked is safer</span>}
+          </div>
+        </div>
+      )}
       {Math.abs(Tfuel-Tair)>0.5&&(
         <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",marginBottom:8,padding:"6px 10px",background:`${C.accent}08`,border:`1px dashed ${C.accent}40`,borderRadius:4}}>
           <div style={{marginBottom:2}}>

@@ -89,6 +89,9 @@ def calc_combustor(
         body.profile_points,
         body.T_fuel_K,
         body.T_air_K,
+        body.psr_seed,
+        body.eq_constraint,
+        body.integration,
     )
     return CombustorResponse(**result)
 

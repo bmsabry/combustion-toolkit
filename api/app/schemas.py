@@ -163,6 +163,22 @@ class CombustorRequest(BaseCalcRequest):
     # both default to T0 (previous single-inlet behavior).
     T_fuel_K: Optional[float] = Field(default=None, gt=0, description="Fuel inlet T in K")
     T_air_K: Optional[float] = Field(default=None, gt=0, description="Air inlet T in K")
+    # PSR reactor options. Defaults reproduce pre-existing behavior exactly.
+    psr_seed: str = Field(
+        default="cold_ignited",
+        pattern="^(unreacted|hot_eq|cold_ignited|autoignition)$",
+        description="PSR warm-start strategy",
+    )
+    eq_constraint: str = Field(
+        default="HP",
+        pattern="^(HP|UV|TP)$",
+        description="Equilibrium constraint for hot_eq / cold_ignited seeds",
+    )
+    integration: str = Field(
+        default="chunked",
+        pattern="^(steady_state|chunked|step)$",
+        description="PSR time-integration strategy",
+    )
 
 
 class CombustorProfilePoint(BaseModel):
@@ -193,6 +209,9 @@ class CombustorResponse(BaseModel):
     L_psr_cm: float
     L_pfr_cm: float
     L_total_cm: float
+    psr_seed: Optional[str] = None
+    eq_constraint: Optional[str] = None
+    integration: Optional[str] = None
     profile: List[CombustorProfilePoint]
 
 
