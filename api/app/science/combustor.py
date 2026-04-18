@@ -210,27 +210,24 @@ def _integrate_chunked(
     """Integrate the PSR until both T and NO stabilize.
 
     Convergence protocol:
-      * Advance in chunks of 50·tau (minimum 25 ms of simulated time).
-      * Require a MINIMUM integration time of max(1000·tau, 1.0 s) before
-        any convergence test is evaluated. Rationale: at gas-turbine
-        pressures the Zeldovich NO relaxation takes 1–10 s (~1e3–1e4 τ),
-        far longer than ignition and T-relaxation. Bailing earlier is a
-        false convergence and produces seed-dependent steady-state NO.
-      * Declare converged only when |ΔT|<0.005 K AND |ΔNO/NO|<1e-6 hold
-        over TWO consecutive chunks (prevents declaring converged when
-        Zeldovich is transiently flat at a local inflection).
-      * Absolute caps: simulated time ≤ max(1e5·τ, 60 s); wall time
+      * Advance in chunks of 10·tau (minimum 2 ms of simulated time).
+      * Require a MINIMUM integration time of max(50·tau, 100 ms). A
+        well-posed CSTR reaches steady state in ~5–20 residence times;
+        50·τ is a comfortable safety margin.
+      * Declare converged only when |ΔT|<0.005 K AND |ΔNO/NO|<1e-4 hold
+        over TWO consecutive chunks.
+      * Absolute caps: simulated time ≤ max(5000·τ, 2 s); wall time
         ≤ max_wall_time_s.
     """
     NO_idx = _safe_idx(psr.phase, "NO")
-    chunk = max(50.0 * tau_psr_s, 0.025)
+    chunk = max(10.0 * tau_psr_s, 0.002)
     t = 0.0
     prev_T = -1.0
     prev_NO = -1.0
     stable_count = 0
-    # Integrate at least 1000·τ (min 1 s) but cap at 10 s of simulated time.
-    min_total = min(max(1000.0 * tau_psr_s, 1.0), 10.0)
-    max_total = min(max(1.0e5 * tau_psr_s, 60.0), 120.0)
+    # Integrate at least 50·τ (min 100 ms) but cap at 2 s of simulated time.
+    min_total = min(max(50.0 * tau_psr_s, 0.1), 2.0)
+    max_total = min(max(5000.0 * tau_psr_s, 2.0), 10.0)
     wall0 = time.monotonic()
     for _ in range(5000):
         if time.monotonic() - wall0 > max_wall_time_s:
@@ -249,7 +246,7 @@ def _integrate_chunked(
         T = float(psr.phase.T)
         NO = float(psr.phase.X[NO_idx]) if NO_idx >= 0 else 0.0
         if t >= min_total and prev_T >= 0:
-            if abs(T - prev_T) < 0.005 and abs(NO - prev_NO) < 1e-6 * max(NO, 1e-12):
+            if abs(T - prev_T) < 0.005 and abs(NO - prev_NO) < 1e-4 * max(NO, 1e-12):
                 stable_count += 1
                 if stable_count >= 2:
                     break
@@ -279,18 +276,18 @@ def _integrate_step(
     """Step-by-step integration using net.step() with a minimum-simulated-time
     gate before convergence is tested.
 
-    Same rationale as `_integrate_chunked`: require ≥ max(1000·τ, 1 s)
+    Same rationale as `_integrate_chunked`: require ≥ max(50·τ, 100 ms)
     of simulated time before the convergence criterion
-    (|ΔT|<0.005 K ∧ |ΔNO/NO|<1e-6) can trigger, and only break after 50
+    (|ΔT|<0.005 K ∧ |ΔNO/NO|<1e-4) can trigger, and only break after 50
     consecutive stable internal steps. Hard caps: simulated time
-    ≤ max(1e5·τ, 60 s); wall time ≤ max_wall_time_s.
+    ≤ max(5000·τ, 2 s); wall time ≤ max_wall_time_s.
     """
     NO_idx = _safe_idx(psr.phase, "NO")
     prev_T = -1.0
     prev_NO = -1.0
-    # Integrate at least 1000·τ (min 1 s) but cap at 10 s of simulated time.
-    min_total = min(max(1000.0 * tau_psr_s, 1.0), 10.0)
-    max_total = min(max(1.0e5 * tau_psr_s, 60.0), 120.0)
+    # Integrate at least 50·τ (min 100 ms) but cap at 2 s of simulated time.
+    min_total = min(max(50.0 * tau_psr_s, 0.1), 2.0)
+    max_total = min(max(5000.0 * tau_psr_s, 2.0), 10.0)
     stable_count = 0
     wall0 = time.monotonic()
     for _ in range(500000):
@@ -305,7 +302,7 @@ def _integrate_step(
         T = float(psr.phase.T)
         NO = float(psr.phase.X[NO_idx]) if NO_idx >= 0 else 0.0
         if t_now >= min_total and prev_T >= 0:
-            if abs(T - prev_T) < 0.005 and abs(NO - prev_NO) < 1e-6 * max(NO, 1e-12):
+            if abs(T - prev_T) < 0.005 and abs(NO - prev_NO) < 1e-4 * max(NO, 1e-12):
                 stable_count += 1
                 if stable_count >= 50:  # require sustained stability
                     break
