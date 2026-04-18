@@ -28,6 +28,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .schemas import (
     AFTRequest,
     AFTResponse,
+    AutoignitionRequest,
+    AutoignitionResponse,
     CombustorRequest,
     CombustorResponse,
     ExhaustRequest,
@@ -38,7 +40,7 @@ from .schemas import (
     PropsRequest,
     PropsResponse,
 )
-from .science import aft, combustor, exhaust, flame_speed, props
+from .science import aft, autoignition, combustor, exhaust, flame_speed, props
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("desktop-solver")
@@ -148,6 +150,14 @@ def create_desktop_app() -> FastAPI:
     def calc_props(body: PropsRequest, _lic=Depends(_license_dep)) -> PropsResponse:  # noqa: B008
         r = _run(props.run, body.mixture, body.T, body.P)
         return PropsResponse(**r)
+
+    @app.post("/calc/autoignition", response_model=AutoignitionResponse)
+    def calc_autoign(body: AutoignitionRequest, _lic=Depends(_license_dep)) -> AutoignitionResponse:  # noqa: B008
+        r = _run(
+            autoignition.run, body.fuel, body.oxidizer, body.phi, body.T0, body.P,
+            body.max_time_s, body.T_fuel_K, body.T_air_K, body.mechanism,
+        )
+        return AutoignitionResponse(**r)
 
     return app
 

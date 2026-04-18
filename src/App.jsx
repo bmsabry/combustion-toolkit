@@ -207,6 +207,16 @@ function calcSL(fuel,phi,Tu,P_atm){
   return Math.max(0,sl);
 }
 function calcBlowoff(fuel,phi,Tu,P_atm,velocity,Lchar){const SL=calcSL(fuel,phi,Tu,P_atm);const alpha_th=2.0e-5*Math.pow(Tu/300,1.7)/P_atm;const tau_chem=alpha_th/(SL*SL+1e-20);const tau_flow=Lchar/(velocity+1e-20);const Da=tau_flow/tau_chem;return{SL,tau_chem:tau_chem*1000,tau_flow:tau_flow*1000,Da,blowoff_velocity:Lchar/tau_chem,stable:Da>1};}
+// Thermal diffusivity of unburnt mixture (m²/s). Free-mode approximation used when Cantera isn't available.
+// α_th = 2.0e-5 · (T/300)^1.7 / P[atm]. Matches the form in calcBlowoff.
+function alphaThU(Tu,P_atm){return 2.0e-5*Math.pow(Tu/300,1.7)/Math.max(P_atm,1e-6);}
+// Spadaccini–Colket natural-gas autoignition delay (s). τ_ign = 3.09e-5·P^-1.12·exp(20130/T).
+// Rough order-of-magnitude estimate only — accurate solver uses Cantera 0D const-P reactor.
+function calcTauIgnFree(Tu,P_atm){
+  const P_Pa=P_atm*101325;
+  const A=3.09e-5,nP=-1.12,Ea_over_R=20130;
+  return A*Math.pow(P_Pa/101325,nP)*Math.exp(Ea_over_R/Math.max(Tu,200));
+}
 /* Adiabatic fuel/air mixing (constant-cp approximation). Used by every science panel
    so the user's T_fuel and T_air controls actually flow through to AFT, SL, Exhaust, etc.
    Returns the pre-combustion mixture temperature. If both streams share the same T,
@@ -310,12 +320,21 @@ const _PSR_SEED_LBL={unreacted:"Unreacted (cold)",hot_eq:"Hot equilibrium",cold_
 const _EQ_LBL={HP:"HP (constant enthalpy+pressure)",UV:"UV (constant internal energy+volume)",TP:"TP (constant temperature+pressure)"};
 const _INT_LBL={steady_state:"Steady-state solver",chunked:"Chunked time advance (default)",step:"Step-by-step"};
 const _MECH_LBL={gri30:"GRI-Mech 3.0 (53 species, 325 rxns)",glarborg:"Glarborg 2018 (151 species, 1395 rxns)",usc2:"USC-Mech II (coming soon)",aramco30:"AramcoMech 3.0 (coming soon)"};
-function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",accurate=false}=ps||{};
+function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",accurate=false}=ps||{};
   // Adiabatic fuel/air mix T that's used everywhere downstream
   const T_mix_phi=mixT(fuel,ox,phi,T_fuel??T0,T_air??T0);
   const aft=calcAFTx(fuel,ox,phi,T_mix_phi,P,combMode);
 const s1=[["COMBUSTION ENGINEERING TOOLKIT — ProReadyEngineer LLC"],["Generated: "+new Date().toISOString().slice(0,16)],["Unit System: "+(u==="SI"?"SI (Metric)":"English (Imperial)")],["Combustion Mode: "+(combMode==="equilibrium"?"Chemical Equilibrium (with dissociation)":"Complete Combustion (no dissociation)")],[],["═══ FUEL COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(fuel).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OXIDIZER COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(ox).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OPERATING CONDITIONS (INPUTS) ═══"],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(fp.AFR_mass/phi).toFixed(4),uu(u,"afr_mass")],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["Adiabatic Mixed Inlet T (T_mixed @ φ)",+uv(u,"T",T_mix_phi).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],[],["═══ COMBUSTION PROPERTIES (OUTPUTS) ═══"],["Parameter","Value","Unit"],["Adiabatic Flame Temperature",+uv(u,"T",aft.T_ad).toFixed(1),uu(u,"T")],["Lower Heating Value (mass)",+uv(u,"energy_mass",fp.LHV_mass).toFixed(4),uu(u,"energy_mass")],["Lower Heating Value (volumetric)",+uv(u,"energy_vol",fp.LHV_vol).toFixed(4),uu(u,"energy_vol")],["Higher Heating Value (mass)",+uv(u,"energy_mass",fp.HHV_mass).toFixed(4),uu(u,"energy_mass")],["Higher Heating Value (volumetric)",+uv(u,"energy_vol",fp.HHV_vol).toFixed(4),uu(u,"energy_vol")],["Fuel Molecular Weight",+fp.MW_fuel.toFixed(4),"g/mol"],["Specific Gravity",+fp.SG.toFixed(5),"—"],["Wobbe Index",+uv(u,"energy_vol",fp.WI).toFixed(2),uu(u,"energy_vol")],["Stoichiometric Air/Fuel (mass)",+fp.AFR_mass.toFixed(4),uu(u,"afr_mass")],["Stoichiometric Air/Fuel (vol)",+fp.AFR_vol.toFixed(4),"mol/mol"],["Stoichiometric O₂ Demand",+fp.stoichO2.toFixed(5),"mol O₂ / mol fuel"],[],["═══ EQUILIBRIUM PRODUCTS — WET BASIS (mol%) ═══"],["Species","Mole Fraction (%)"],...Object.entries(aft.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ EQUILIBRIUM PRODUCTS — DRY BASIS (mol%, H₂O removed) ═══"],["Species","Mole Fraction (%)"],...Object.entries(dryBasis(aft.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ AFT vs φ SWEEP ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed_inlet ("+uu(u,"T")+")","Adiabatic Flame Temperature ("+uu(u,"T")+")"],...Array.from({length:18},(_,i)=>{const p=0.3+i*0.04;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);const a=calcAFTx(fuel,ox,p,Tm,P,combMode);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"T",a.T_ad).toFixed(1)];})];const ws1=XLSX.utils.aoa_to_sheet(s1);ws1["!cols"]=[{wch:32},{wch:20},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,"Flame Temp & Props");
-const SL=calcSL(fuel,phi,T_mix_phi,P)*100;const bo=calcBlowoff(fuel,phi,T_mix_phi,P,velocity,Lchar);const s2=[["═══ FLAME SPEED & BLOWOFF — INPUTS ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["Unburned Temperature (T_mixed @ φ)",+uv(u,"T",T_mix_phi).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],["Reference Velocity",+uv(u,"vel",velocity).toFixed(2),uu(u,"vel")],["Characteristic Length (L_char)",+uv(u,"len",Lchar).toFixed(4),uu(u,"len")],[],["═══ OUTPUTS ═══"],[],["Parameter","Value","Unit"],["Laminar Flame Speed (S_L)",+uv(u,"SL",SL).toFixed(4),uu(u,"SL")],["Chemical Timescale (τ_chem)",+bo.tau_chem.toFixed(6),"ms"],["Flow Timescale (τ_flow)",+bo.tau_flow.toFixed(6),"ms"],["Damköhler Number (Da)",+bo.Da.toFixed(4),"—"],["Blowoff Velocity",+uv(u,"vel",bo.blowoff_velocity).toFixed(2),uu(u,"vel")],["Flame Stability",bo.stable?"STABLE":"BLOWOFF RISK","—"],[],["═══ S_L vs Equivalence Ratio ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],...Array.from({length:13},(_,i)=>{const p=0.4+i*0.05;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"SL",calcSL(fuel,p,Tm,P)*100).toFixed(4)]}),[],["═══ S_L vs Pressure (@T_mixed) ═══"],["Pressure ("+uu(u,"P")+")","Flame Speed ("+uu(u,"SL")+")"],...[0.5,1,2,5,10,20,40].map(p=>[+uv(u,"P",p).toFixed(2),+uv(u,"SL",calcSL(fuel,phi,T_mix_phi,p)*100).toFixed(4)]),[],["═══ S_L vs Unburned Temperature (user sweep) ═══"],["Temperature ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],...Array.from({length:23},(_,i)=>{const t=250+i*25;return[+uv(u,"T",t).toFixed(1),+uv(u,"SL",calcSL(fuel,phi,t,P)*100).toFixed(4)]}),[],["═══ Damköhler vs Velocity ═══"],["Velocity ("+uu(u,"vel")+")","Damköhler (Da)","Status"],...Array.from({length:40},(_,i)=>{const v=1+i*5;const b=calcBlowoff(fuel,phi,T_mix_phi,P,v,Lchar);return[+uv(u,"vel",v).toFixed(1),+b.Da.toFixed(4),b.stable?"Stable":"Blowoff"]})];const ws2=XLSX.utils.aoa_to_sheet(s2);ws2["!cols"]=[{wch:32},{wch:18},{wch:14}];XLSX.utils.book_append_sheet(wb,ws2,"Flame Speed & Blowoff");
+const SL=calcSL(fuel,phi,T_mix_phi,P)*100;const bo=calcBlowoff(fuel,phi,T_mix_phi,P,velocity,Lchar);
+// Premixer stability derived quantities (SL_ms = m/s, SL export is in user units; internal calcs use m/s).
+const _SLms=SL/100;
+const _alphaTh=alphaThU(T_mix_phi,P);
+const _tauBO=Dfh/Math.max(1.5*_SLms,1e-20);
+const _gc=(_SLms*_SLms)/Math.max(_alphaTh,1e-20);
+const _tauIgn=calcTauIgnFree(T_mix_phi,P);
+const _tauRes=Lpremix/Math.max(Vpremix,1e-20);
+const _ignSafe=_tauRes<_tauIgn;
+const s2=[["═══ FLAME SPEED & BLOWOFF — INPUTS ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["Unburned Temperature (T_mixed @ φ)",+uv(u,"T",T_mix_phi).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],["Reference Velocity",+uv(u,"vel",velocity).toFixed(2),uu(u,"vel")],["Characteristic Length (L_char)",+uv(u,"len",Lchar).toFixed(4),uu(u,"len")],["Flameholder Diameter (D_fh)",+uv(u,"len",Dfh).toFixed(4),uu(u,"len")],["Premixer Length (L_premix)",+uv(u,"len",Lpremix).toFixed(4),uu(u,"len")],["Premixer Velocity (V_premix)",+uv(u,"vel",Vpremix).toFixed(2),uu(u,"vel")],[],["═══ OUTPUTS ═══"],[],["Parameter","Value","Unit"],["Laminar Flame Speed (S_L)",+uv(u,"SL",SL).toFixed(4),uu(u,"SL")],["Chemical Timescale (τ_chem)",+bo.tau_chem.toFixed(6),"ms"],["Flow Timescale (τ_flow)",+bo.tau_flow.toFixed(6),"ms"],["Damköhler Number (Da)",+bo.Da.toFixed(4),"—"],["Blowoff Velocity",+uv(u,"vel",bo.blowoff_velocity).toFixed(2),uu(u,"vel")],["Flame Stability",bo.stable?"STABLE":"BLOWOFF RISK","—"],[],["═══ PREMIXER STABILITY — FLASHBACK & AUTOIGNITION ═══"],["Parameter","Value","Unit"],["Zukoski Blow-off Time (τ_BO)",+(_tauBO*1000).toFixed(4),"ms"],["Thermal Diffusivity (α_th, unburnt)",+(_alphaTh*1e6).toFixed(4),"mm²/s"],["Lewis-von Elbe Gradient (g_c)",+_gc.toFixed(1),"1/s"],["Autoignition Delay (τ_ign, Spadaccini-Colket)",+(_tauIgn*1000).toFixed(4),"ms"],["Premixer Residence Time (τ_res)",+(_tauRes*1000).toFixed(4),"ms"],["Safety Margin (τ_ign / τ_res)",+(_tauIgn/_tauRes).toFixed(3),"—"],["Premixer Status",_ignSafe?"SAFE":"AUTOIGNITION RISK","—"],["Note","τ_ign uses Spadaccini-Colket NG correlation (order-of-magnitude). Use Accurate mode for Cantera 0D values.",""],[],["═══ S_L vs Equivalence Ratio ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],...Array.from({length:13},(_,i)=>{const p=0.4+i*0.05;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"SL",calcSL(fuel,p,Tm,P)*100).toFixed(4)]}),[],["═══ S_L vs Pressure (@T_mixed) ═══"],["Pressure ("+uu(u,"P")+")","Flame Speed ("+uu(u,"SL")+")"],...[0.5,1,2,5,10,20,40].map(p=>[+uv(u,"P",p).toFixed(2),+uv(u,"SL",calcSL(fuel,phi,T_mix_phi,p)*100).toFixed(4)]),[],["═══ S_L vs Unburned Temperature (user sweep) ═══"],["Temperature ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],...Array.from({length:23},(_,i)=>{const t=250+i*25;return[+uv(u,"T",t).toFixed(1),+uv(u,"SL",calcSL(fuel,phi,t,P)*100).toFixed(4)]}),[],["═══ Damköhler vs Velocity ═══"],["Velocity ("+uu(u,"vel")+")","Damköhler (Da)","Status"],...Array.from({length:40},(_,i)=>{const v=1+i*5;const b=calcBlowoff(fuel,phi,T_mix_phi,P,v,Lchar);return[+uv(u,"vel",v).toFixed(1),+b.Da.toFixed(4),b.stable?"Stable":"Blowoff"]})];const ws2=XLSX.utils.aoa_to_sheet(s2);ws2["!cols"]=[{wch:32},{wch:18},{wch:14}];XLSX.utils.book_append_sheet(wb,ws2,"Flame Speed & Blowoff");
 const net=calcCombustorNetwork(fuel,ox,phi,T0,P,tau_psr,L_pfr,V_pfr,T_fuel,T_air);
 // Canonical equilibrium AFT (same calc as Flame Temp sheet). Distinct from net.T_ad, which in this reduced-order model is the PFR exit T.
 const combAFT=calcAFT_EQ(fuel,ox,phi,mixT(fuel,ox,phi,T_fuel??T0,T_air??T0),P);
@@ -469,7 +488,7 @@ function useBackendCalc(kind, args, enabled){
   const key=JSON.stringify(args||{});
   useEffect(()=>{
     if(!enabled){setData(null);setErr(null);setLoading(false);return;}
-    const fn={aft:api.calcAFT,flame:api.calcFlameSpeed,combustor:api.calcCombustor,exhaust:api.calcExhaust,props:api.calcProps}[kind];
+    const fn={aft:api.calcAFT,flame:api.calcFlameSpeed,combustor:api.calcCombustor,exhaust:api.calcExhaust,props:api.calcProps,autoignition:api.calcAutoignition}[kind];
     if(!fn){return;}
     let cancelled=false;setLoading(true);setErr(null);
     fn(args).then(d=>{if(!cancelled){setData(d);setLoading(false);}})
@@ -548,7 +567,7 @@ function AFTPanel({fuel,ox,phi,T0,P,Tfuel,combMode,setCombMode}){
       </div>
     </div></div>);}
 
-function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setLchar}){
+function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setLchar,Dfh,setDfh,Lpremix,setLpremix,Vpremix,setVpremix}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   const Tair=T0;
@@ -556,6 +575,8 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
   const Tmix=useMemo(()=>mixT(fuel,ox,phi,Tfuel,Tair),[fuel,ox,phi,Tfuel,Tair]);
   const localSL=calcSL(fuel,phi,Tmix,P)*100;
   const bk=useBackendCalc("flame",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair},accurate);
+  // Autoignition delay (Cantera 0D). Only fetched in accurate mode.
+  const bkIgn=useBackendCalc("autoignition",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),max_time_s:0.5,T_fuel_K:Tfuel,T_air_K:Tair,mechanism:"gri30"},accurate);
   const SL=accurate&&bk.data?bk.data.SL*100:localSL;  // bk.data.SL is m/s → cm/s
   // In accurate mode the headline SL comes from Cantera but the sweeps are always JS correlation. Anchor the
   // JS curves to the Cantera value at the current phi so the marker lies ON the curve and τ_chem / Da /
@@ -570,6 +591,23 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
   const tSw=useMemo(()=>{const r=[];for(let t=250;t<=800;t+=25)r.push({T:uv(units,"T",t),SL:uv(units,"SL",calcSL(fuel,phi,t,P)*100*SL_scale)});return r;},[fuel,phi,P,units,SL_scale]);
   const bo=useMemo(()=>{const b=calcBlowoff(fuel,phi,Tmix,P,velocity,Lchar);const Da=b.Da*SL_scale2;return{SL:b.SL*SL_scale,tau_chem:b.tau_chem/SL_scale2,tau_flow:b.tau_flow,Da,blowoff_velocity:b.blowoff_velocity*SL_scale2,stable:Da>1};},[fuel,phi,Tmix,P,velocity,Lchar,SL_scale,SL_scale2]);
   const daSw=useMemo(()=>{const r=[];for(let v=1;v<=200;v+=2){const b=calcBlowoff(fuel,phi,Tmix,P,v,Lchar);r.push({V:uv(units,"vel",v),Da:Math.min(b.Da*SL_scale2,100)});}return r;},[fuel,phi,Tmix,P,Lchar,units,SL_scale2]);
+  // ───── Premixer stability metrics ─────
+  // SL in m/s for these formulas (SL state variable is cm/s).
+  const SL_ms=SL/100;
+  // Zukoski blow-off time (s): τ_BO = D_flameholder / (1.5 · S_L). Longer = more flashback-resistant.
+  const tau_BO=Dfh/Math.max(1.5*SL_ms,1e-20);
+  // Thermal diffusivity of unburnt mixture (m²/s). Prefer Cantera α_th from the flame response.
+  const alphaTh=(accurate&&bk.data&&bk.data.alpha_th_u)?bk.data.alpha_th_u:alphaThU(Tmix,P);
+  // Lewis–von Elbe critical boundary-velocity gradient (1/s): g_c = S_L² / α_th. Higher g_c = higher flashback resistance.
+  const g_c=(SL_ms*SL_ms)/Math.max(alphaTh,1e-20);
+  // Autoignition delay (s): backend Cantera 0D if available, else Spadaccini–Colket NG correlation.
+  const tau_ign=(accurate&&bkIgn.data&&bkIgn.data.ignited)?bkIgn.data.tau_ign_s:calcTauIgnFree(Tmix,P);
+  const tau_ign_ignited=accurate&&bkIgn.data?bkIgn.data.ignited:true; // free-mode correlation always returns a value
+  // Premixer residence time (s): τ_res = L_premix / V_premix.
+  const tau_res=Lpremix/Math.max(Vpremix,1e-20);
+  // Safety margin — τ_res must be shorter than τ_ign to avoid autoignition inside the premixer.
+  const ignition_safe=tau_res<tau_ign;
+  const ignition_margin=tau_ign/Math.max(tau_res,1e-20);
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works"><p style={{margin:"0 0 6px"}}><span style={hs.em}>Laminar Flame Speed (S_L)</span> is computed using Gülder/Metghalchi-Keck empirical correlations: S_L = S_L0 · f(φ) · (T_u/T_0)^α · (P/P_0)^β. For mixtures, species contributions are mole-fraction-weighted.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Blowoff Analysis:</span> τ_chem = α_th / S_L² (chemical timescale), τ_flow = L_char / V (flow timescale). The <span style={hs.em}>Damköhler number Da = τ_flow / τ_chem</span>. When Da &lt; 1, the flame cannot sustain itself and blows off.</p><p style={{margin:0}}><span style={hs.warn}>V_ref</span> is your reference approach velocity. <span style={hs.warn}>L_char</span> is the characteristic recirculation length (typically flameholder diameter or step height).</p></HelpBox>
     <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}</div>
@@ -589,6 +627,27 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
           <NumField value={uv(units,"len",Lchar)} decimals={4} onCommit={v=>setLchar(uvI(units,"len",v))} style={{...S.inp,width:75}}/></div>
       </div></div>
     {accurate&&bk.data&&Math.abs(SL_scale-1)>0.05&&<div style={{background:`${C.accent}10`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.45}}>ℹ Sweep curves use the JS correlation <em>shape</em> scaled by ×{SL_scale.toFixed(2)} so the marker sits on the curve at the Cantera value ({uv(units,"SL",SL).toFixed(2)} {uu(units,"SL")}). At operating points far from the current (φ, T_u, P), the correlation-based trend may diverge from a full Cantera sweep.</div>}
+    <div style={S.card}><div style={S.cardT}>Premixer Stability — Flashback & Autoignition {accurate&&(bkIgn.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA 0D…</span>:bkIgn.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bkIgn.err}</span>:bkIgn.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (0D const-P reactor)</span>:null)}</div>
+      <div style={{...S.row,gap:8,marginBottom:10}}>
+        <M l="Zukoski BOT (τ_BO)" v={(tau_BO*1000).toFixed(3)} u="ms" c={C.accent3} tip="Zukoski blow-off / flashback time: τ_BO = D_flameholder / (1.5·S_L). Longer τ_BO indicates the flameholder is less prone to flashback."/>
+        <M l="Thermal Diffusivity (α_th)" v={(alphaTh*1e6).toFixed(2)} u="mm²/s" c={C.violet} tip={`Thermal diffusivity of unburnt mixture at T_mixed. α_th = k/(ρ·c_p). ${accurate&&bk.data&&bk.data.alpha_th_u?"Value from Cantera transport model.":"Free-mode approximation: α_th = 2.0e-5·(T/300)^1.7/P[atm]."}`}/>
+        <M l="Lewis-von Elbe g_c" v={g_c.toFixed(0)} u="1/s" c={C.accent} tip="Lewis–von Elbe critical boundary velocity gradient: g_c = S_L² / α_th. Flame flashes back if actual near-wall velocity gradient falls below g_c. Higher g_c = more flashback-resistant."/>
+        <M l="Autoignition Delay (τ_ign)" v={(tau_ign*1000).toFixed(3)} u="ms" c={C.accent2} tip={accurate&&bkIgn.data?(bkIgn.data.ignited?"Ignition delay time from Cantera 0D const-P reactor (max dT/dt criterion).":`Mixture did not ignite within ${(bkIgn.data.tau_ign_s*1000).toFixed(0)} ms window — reported value is the integration cutoff.`):"Free-mode Spadaccini–Colket NG correlation: τ_ign = 3.09e-5·P^-1.12·exp(20130/T). Order-of-magnitude estimate only."}/>
+        <M l="Premixer Residence (τ_res)" v={(tau_res*1000).toFixed(3)} u="ms" c={C.accent3} tip="Premixer residence time: τ_res = L_premix / V_premix. Must be shorter than τ_ign to avoid autoignition inside the premixer."/>
+        <M l="Safety Margin (τ_ign/τ_res)" v={ignition_margin>999?">999":ignition_margin.toFixed(2)} u="—" c={ignition_safe?C.good:C.warm} tip="Ratio τ_ign/τ_res. Values > 3 indicate a robust safety margin for premixer autoignition. Values < 1 indicate the mixture can autoignite before leaving the premixer."/>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
+          <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",background:ignition_safe?`${C.good}1F`:`${C.warm}1F`,color:ignition_safe?C.good:C.warm,border:`1px solid ${ignition_safe?C.good+"44":C.warm+"44"}`}}>{ignition_safe?"● PREMIXER SAFE":"● AUTOIGNITION RISK"}</span></div>
+      </div>
+      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Flameholder diameter (bluff body, burner rod, or swirler hub diameter). Used for Zukoski τ_BO."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>D_flameholder ({uu(units,"len")}) ⓘ:</label></Tip>
+          <NumField value={uv(units,"len",Dfh)} decimals={4} onCommit={v=>setDfh(uvI(units,"len",v))} style={{...S.inp,width:75}}/></div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Premixer channel length from fuel injection point to flame front. Determines residence time of unburnt mixture."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_premix ({uu(units,"len")}) ⓘ:</label></Tip>
+          <NumField value={uv(units,"len",Lpremix)} decimals={4} onCommit={v=>setLpremix(uvI(units,"len",v))} style={{...S.inp,width:75}}/></div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Bulk velocity of the premixed mixture through the premixer channel."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>V_premix ({uu(units,"vel")}) ⓘ:</label></Tip>
+          <NumField value={uv(units,"vel",Vpremix)} decimals={2} onCommit={v=>setVpremix(uvI(units,"vel",v))} style={{...S.inp,width:65}}/></div>
+      </div>
+      {!accurate&&<div style={{marginTop:8,background:`${C.txtMuted}10`,border:`1px solid ${C.border}`,borderRadius:5,padding:"6px 10px",fontSize:10,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.45}}>ℹ τ_ign uses the Spadaccini–Colket NG correlation — order-of-magnitude only. Switch to <strong>Accurate</strong> mode for Cantera 0D constant-pressure reactor integration.</div>}
+    </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>Laminar Flame Speed vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Peak S_L occurs near stoichiometric (slightly rich for hydrocarbons, φ≈1.8 for H₂).</div><Chart data={sweep} xK="phi" yK="SL" xL="Equivalence Ratio (φ)" yL={`Flame Speed (${uu(units,"SL")})`} color={C.violet} marker={mk}/></div>
       <div style={S.card}><div style={S.cardT}>Damköhler Number vs Flow Velocity</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Da decreases linearly with velocity. Below Da=1 (horizontal line), blowoff occurs.</div><Chart data={daSw} xK="V" yK="Da" xL={`Velocity (${uu(units,"vel")})`} yL="Damköhler Number" color={C.accent2}/></div>
@@ -898,6 +957,11 @@ export default function App(){
   const auth=useAuth();
   const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.555);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("ENG");
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
+  // Premixer stability inputs. D_fh = flameholder diameter (Zukoski τ_BO).
+  // L_premix / V_premix = premixer geometry (autoignition safety: τ_res < τ_ign).
+  const[Dfh,setDfh]=useState(0.02);       // 20 mm — typical bluff-body / burner rod
+  const[Lpremix,setLpremix]=useState(0.10); // 100 mm
+  const[Vpremix,setVpremix]=useState(60);   // 60 m/s
   const[tau_psr,setTauPsr]=useState(0.5);const[L_pfr,setLpfr]=useState(0.21336);const[V_pfr,setVpfr]=useState(30.48);
   // Fuel-stream inlet temperature (K). Air inlet T = T0 (sidebar). When T_fuel != T0
   // the combustor mixes them adiabatically before the PSR.
@@ -914,7 +978,7 @@ export default function App(){
   const[integration,setIntegration]=useState("chunked");
   const[heatLossFrac,setHeatLossFrac]=useState(0);
   const[mechanism,setMechanism]=useState("gri30");
-  const panelState={velocity,Lchar,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,accurate:accurate&&!!auth.hasOnlineAccess};
+  const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,accurate:accurate&&!!auth.hasOnlineAccess};
   const hasOnline=!!auth.hasOnlineAccess;
 
   // Checkout return — refresh subscription state after coming back from Stripe
@@ -1050,7 +1114,7 @@ export default function App(){
           {/* CONTENT */}
           <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
             {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} combMode={combMode} setCombMode={setCombMode}/>}
-            {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar}/>}
+            {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar} Dfh={Dfh} setDfh={setDfh} Lpremix={Lpremix} setLpremix={setLpremix} Vpremix={Vpremix} setVpremix={setVpremix}/>}
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="props"&&<PropsPanel/>}

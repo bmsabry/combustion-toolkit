@@ -148,9 +148,36 @@ class FlameSpeedResponse(BaseModel):
     flame_thickness: float  # m
     T_max: float
     T_mixed_inlet_K: float = 0.0  # adiabatic mix T of fuel+air at flame base
+    alpha_th_u: float = 0.0  # thermal diffusivity of unburned mixture (m²/s); used for Lewis–von Elbe g_c = S_L² / α_th
     T_profile: List[float]
     x_profile: List[float]
     grid_points: int
+
+
+class AutoignitionRequest(BaseCalcRequest):
+    """Constant-pressure autoignition delay for the premixed (fuel+air) mixture.
+
+    Used to assess premixer flashback-by-autoignition safety: the residence
+    time of unburnt mixture in the premixer should be shorter than this τ_ign.
+    """
+
+    max_time_s: float = Field(default=0.5, gt=0, le=10.0, description="Integration cutoff (s)")
+    T_fuel_K: Optional[float] = Field(default=None, gt=0, description="Fuel inlet T in K")
+    T_air_K: Optional[float] = Field(default=None, gt=0, description="Air inlet T in K")
+    mechanism: str = Field(
+        default="gri30",
+        pattern="^(gri30|glarborg)$",
+        description="Kinetic mechanism selector.",
+    )
+
+
+class AutoignitionResponse(BaseModel):
+    tau_ign_s: float  # ignition delay time (s); equals max_time_s if no ignition observed
+    ignited: bool
+    T_mixed_inlet_K: float = 0.0
+    T_peak: float
+    t_trace: List[float]
+    T_trace: List[float]
 
 
 class CombustorRequest(BaseCalcRequest):

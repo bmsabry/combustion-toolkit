@@ -127,6 +127,9 @@ export async function calcExhaust(payload) {
 export async function calcProps(payload) {
   return request("/calc/props", { method: "POST", body: payload, auth: true });
 }
+export async function calcAutoignition(payload) {
+  return request("/calc/autoignition", { method: "POST", body: payload, auth: true });
+}
 
 // ---- health ----
 export async function health() {

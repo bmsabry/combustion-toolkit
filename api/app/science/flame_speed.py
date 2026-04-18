@@ -33,6 +33,11 @@ def run(
         gas, _, _ = make_gas(fuel_pct, ox_pct, phi, T0_K, P_bar)
         T_mixed = float(T0_K)
 
+    # Thermal diffusivity of the unburned (premixed) gas at (T_mixed, P, X).
+    # α_th = k / (ρ · c_p). Used by the frontend for the Lewis-von Elbe
+    # critical boundary velocity gradient g_c = S_L² / α_th.
+    alpha_th_u = float(gas.thermal_conductivity / (gas.density * gas.cp_mass))
+
     flame = ct.FreeFlame(gas, width=domain_length_m)
     flame.set_refine_criteria(ratio=3.0, slope=0.08, curve=0.15)
     flame.transport_model = "mixture-averaged"
@@ -63,6 +68,7 @@ def run(
         "flame_thickness": thickness,
         "T_max": float(T.max()),
         "T_mixed_inlet_K": float(T_mixed),
+        "alpha_th_u": alpha_th_u,
         "T_profile": T_out,
         "x_profile": x_out,
         "grid_points": int(n),
