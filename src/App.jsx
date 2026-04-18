@@ -660,11 +660,14 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,velocity,setVelocity,Lchar,setL
     const TVals=[250,300,350,400,450,500,600,700,800,900];
     const PVals_bar=[0.5,1,2,5,10,20,40].map(atmToBar);
     try{
-      const[phiRes,TRes,PRes]=await Promise.all([
-        api.calcFlameSpeedSweep({...base,sweep_var:"phi",sweep_values:phiVals}),
-        api.calcFlameSpeedSweep({...base,sweep_var:"T",sweep_values:TVals}),
-        api.calcFlameSpeedSweep({...base,sweep_var:"P",sweep_values:PVals_bar}),
-      ]);
+      // Run sweeps SEQUENTIALLY. Backend solver pool has max_workers=1 (Cantera is
+      // not thread-safe), so Promise.all just serializes them anyway *and* leaks
+      // the 300 s HTTP timeout budget: later requests wait in the pool queue and
+      // time out before the worker ever reaches them. Sequential execution gives
+      // each sweep its own uncontested 300 s window.
+      const PRes=await api.calcFlameSpeedSweep({...base,sweep_var:"P",sweep_values:PVals_bar});
+      const TRes=await api.calcFlameSpeedSweep({...base,sweep_var:"T",sweep_values:TVals});
+      const phiRes=await api.calcFlameSpeedSweep({...base,sweep_var:"phi",sweep_values:phiVals});
       setCanteraSweeps({hash:sweepHash,phi:phiRes.points,T:TRes.points,P:PRes.points});
     }catch(e){setSweepErr(e.message||String(e));}
     finally{setSweepRunning(false);endBusy();}
