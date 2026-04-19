@@ -24,6 +24,8 @@ def run(
     T_fuel_K: Optional[float] = None,
     T_air_K: Optional[float] = None,
     domain_length_m: float = 0.03,
+    WFR: float = 0.0,
+    water_mode: str = "liquid",
 ) -> dict:
     """Run FreeFlame at each sweep value, holding other params at the baseline.
 
@@ -41,18 +43,21 @@ def run(
                 fuel_pct=fuel_pct, ox_pct=ox_pct, phi=float(v),
                 T0_K=T0_K, P_bar=P_bar, domain_length_m=domain_length_m,
                 T_fuel_K=T_fuel_K, T_air_K=T_air_K,
+                WFR=WFR, water_mode=water_mode,
             )
         elif sweep_var == "P":
             args = dict(
                 fuel_pct=fuel_pct, ox_pct=ox_pct, phi=phi,
                 T0_K=T0_K, P_bar=float(v), domain_length_m=domain_length_m,
                 T_fuel_K=T_fuel_K, T_air_K=T_air_K,
+                WFR=WFR, water_mode=water_mode,
             )
         else:  # T
             args = dict(
                 fuel_pct=fuel_pct, ox_pct=ox_pct, phi=phi,
                 T0_K=float(v), P_bar=P_bar, domain_length_m=domain_length_m,
                 T_fuel_K=float(v), T_air_K=float(v),
+                WFR=WFR, water_mode=water_mode,
             )
         try:
             r = _free_flame_run(**args)

@@ -6,6 +6,7 @@ from typing import Dict, Optional
 import cantera as ct
 
 from .mixture import compute_ratios, make_gas, make_gas_mixed
+from .water_mix import make_gas_mixed_with_water
 
 
 def run(
@@ -17,6 +18,8 @@ def run(
     heat_loss_fraction: float = 0.0,
     T_fuel_K: Optional[float] = None,
     T_air_K: Optional[float] = None,
+    WFR: float = 0.0,
+    water_mode: str = "liquid",
 ) -> dict:
     """Equilibrium adiabatic flame temp with optional heat-loss fraction.
 
@@ -30,7 +33,12 @@ def run(
     """
     T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0_K)
     T_a = float(T_air_K) if T_air_K is not None else float(T0_K)
-    if T_fuel_K is not None or T_air_K is not None:
+    if WFR and WFR > 0:
+        # 3-stream path: fuel + air + water (liquid or steam), adiabatic premix
+        gas, _, _, T_mixed, _Y_w = make_gas_mixed_with_water(
+            fuel_pct, ox_pct, phi, T_f, T_a, P_bar, WFR, water_mode
+        )
+    elif T_fuel_K is not None or T_air_K is not None:
         gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar)
     else:
         gas, _, _ = make_gas(fuel_pct, ox_pct, phi, T0_K, P_bar)

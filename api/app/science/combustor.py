@@ -47,6 +47,7 @@ import cantera as ct
 import numpy as np
 
 from .mixture import make_gas_mixed, mech_yaml
+from .water_mix import make_gas_mixed_with_water
 
 
 # NOx-family species to zero out in the cold-ignited warm start.
@@ -345,6 +346,8 @@ def run(
     integration: str = "chunked",
     heat_loss_fraction: float = 0.0,
     mechanism: str = "gri30",
+    WFR: float = 0.0,
+    water_mode: str = "liquid",
 ) -> dict:
     """PSR then PFR. Returns emissions at PSR exit and PFR exit, plus a profile.
 
@@ -375,7 +378,12 @@ def run(
     T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0_K)
     T_a = float(T_air_K) if T_air_K is not None else float(T0_K)
     mech_path = mech_yaml(mechanism)
-    gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar, mechanism=mechanism)
+    if WFR and WFR > 0:
+        gas, _, _, T_mixed, _Y_w = make_gas_mixed_with_water(
+            fuel_pct, ox_pct, phi, T_f, T_a, P_bar, WFR, water_mode, mechanism=mechanism
+        )
+    else:
+        gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar, mechanism=mechanism)
     X_in = np.array(gas.X, dtype=float)
     P_Pa = gas.P
 

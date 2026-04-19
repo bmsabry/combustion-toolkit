@@ -7,6 +7,7 @@ import cantera as ct
 import numpy as np
 
 from .mixture import make_gas, make_gas_mixed
+from .water_mix import make_gas_mixed_with_water
 
 
 def run(
@@ -18,16 +19,22 @@ def run(
     domain_length_m: float = 0.03,
     T_fuel_K: Optional[float] = None,
     T_air_K: Optional[float] = None,
+    WFR: float = 0.0,
+    water_mode: str = "liquid",
 ) -> dict:
     """Solve a 1D freely-propagating premixed flame and return burning velocity + T(x).
 
     If T_fuel_K / T_air_K are provided, the unburnt-mixture temperature is the
     adiabatic enthalpy-balance mix of the two streams. Otherwise both default
-    to T0_K.
+    to T0_K. WFR>0 enables 3-stream water injection (liquid or steam).
     """
     T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0_K)
     T_a = float(T_air_K) if T_air_K is not None else float(T0_K)
-    if T_fuel_K is not None or T_air_K is not None:
+    if WFR and WFR > 0:
+        gas, _, _, T_mixed, _Y_w = make_gas_mixed_with_water(
+            fuel_pct, ox_pct, phi, T_f, T_a, P_bar, WFR, water_mode
+        )
+    elif T_fuel_K is not None or T_air_K is not None:
         gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar)
     else:
         gas, _, _ = make_gas(fuel_pct, ox_pct, phi, T0_K, P_bar)

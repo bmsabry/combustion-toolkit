@@ -15,6 +15,7 @@ import cantera as ct
 import numpy as np
 
 from .mixture import make_gas, make_gas_mixed, mech_yaml
+from .water_mix import make_gas_mixed_with_water
 
 
 def run(
@@ -27,6 +28,8 @@ def run(
     T_fuel_K: Optional[float] = None,
     T_air_K: Optional[float] = None,
     mechanism: str = "gri30",
+    WFR: float = 0.0,
+    water_mode: str = "liquid",
 ) -> dict:
     """Integrate a const-P reactor from the premixed (fuel+air) state until
     max|dT/dt| occurs or max_time_s elapses.
@@ -36,7 +39,11 @@ def run(
     """
     T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0_K)
     T_a = float(T_air_K) if T_air_K is not None else float(T0_K)
-    if T_fuel_K is not None or T_air_K is not None:
+    if WFR and WFR > 0:
+        gas, _, _, T_mixed, _Y_w = make_gas_mixed_with_water(
+            fuel_pct, ox_pct, phi, T_f, T_a, P_bar, WFR, water_mode, mechanism=mechanism
+        )
+    elif T_fuel_K is not None or T_air_K is not None:
         gas, _, _, T_mixed = make_gas_mixed(
             fuel_pct, ox_pct, phi, T_f, T_a, P_bar, mechanism=mechanism
         )

@@ -109,6 +109,14 @@ class BaseCalcRequest(BaseModel):
     phi: float = Field(gt=0, le=5.0, description="Equivalence ratio")
     T0: float = Field(gt=0, description="Inlet temperature in K")
     P: float = Field(gt=0, description="Pressure in bar")
+    # Water injection (0 = disabled). Liquid vs steam sets whether we subtract
+    # the latent heat of vaporization from the water-stream enthalpy.
+    WFR: float = Field(default=0.0, ge=0.0, le=2.0, description="Water-to-fuel mass ratio")
+    water_mode: str = Field(
+        default="liquid",
+        pattern="^(liquid|steam)$",
+        description="Water injection phase: 'liquid' (absorbs h_fg) or 'steam'",
+    )
 
 
 class AFTRequest(BaseCalcRequest):
@@ -302,6 +310,12 @@ class ExhaustRequest(BaseModel):
     combustion_mode: str = Field(default="complete", pattern="^(complete|equilibrium)$")
     T_fuel_K: Optional[float] = Field(default=None, gt=0, description="Fuel inlet T in K")
     T_air_K: Optional[float] = Field(default=None, gt=0, description="Air inlet T in K")
+    WFR: float = Field(default=0.0, ge=0.0, le=2.0, description="Water-to-fuel mass ratio")
+    water_mode: str = Field(
+        default="liquid",
+        pattern="^(liquid|steam)$",
+        description="Water injection phase: 'liquid' (absorbs h_fg) or 'steam'",
+    )
 
 
 class ExhaustResponse(BaseModel):

@@ -8,6 +8,7 @@ import numpy as np
 from scipy.optimize import brentq
 
 from .mixture import compute_ratios, make_gas, make_gas_mixed
+from .water_mix import make_gas_mixed_with_water
 
 
 def _equilibrium_at_phi(
@@ -19,12 +20,18 @@ def _equilibrium_at_phi(
     mode: str,
     T_fuel_K: Optional[float] = None,
     T_air_K: Optional[float] = None,
+    WFR: float = 0.0,
+    water_mode: str = "liquid",
 ) -> tuple:
     """Return (gas_at_equilibrium, T_mixed_inlet_K). If T_fuel/T_air provided,
     the adiabatic mix T is used as the pre-combustion inlet T; otherwise T0."""
-    if T_fuel_K is not None or T_air_K is not None:
-        T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0)
-        T_a = float(T_air_K) if T_air_K is not None else float(T0)
+    T_f = float(T_fuel_K) if T_fuel_K is not None else float(T0)
+    T_a = float(T_air_K) if T_air_K is not None else float(T0)
+    if WFR and WFR > 0:
+        gas, _, _, T_mixed, _Y_w = make_gas_mixed_with_water(
+            fuel_pct, ox_pct, phi, T_f, T_a, P_bar, WFR, water_mode
+        )
+    elif T_fuel_K is not None or T_air_K is not None:
         gas, _, _, T_mixed = make_gas_mixed(fuel_pct, ox_pct, phi, T_f, T_a, P_bar)
     else:
         gas, _, _ = make_gas(fuel_pct, ox_pct, phi, T0, P_bar)
@@ -56,11 +63,14 @@ def run(
     combustion_mode: str = "equilibrium",
     T_fuel_K: Optional[float] = None,
     T_air_K: Optional[float] = None,
+    WFR: float = 0.0,
+    water_mode: str = "liquid",
 ) -> dict:
     """Given a measurement of either O2 or CO2 in dry exhaust, invert to find phi and return full exhaust state.
 
     If T_fuel_K / T_air_K are provided, the pre-combustion mixture T is the
     adiabatic enthalpy-balance mix of the two streams. Otherwise both default to T0_K.
+    WFR > 0 enables 3-stream water injection (liquid or steam).
     """
     if measured_O2_pct_dry is None and measured_CO2_pct_dry is None:
         raise ValueError("Provide measured_O2_pct_dry or measured_CO2_pct_dry")
@@ -68,13 +78,15 @@ def run(
     # Binary search phi in [0.1, 1.5]
     def delta_O2(phi: float) -> float:
         gas, _ = _equilibrium_at_phi(
-            fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode, T_fuel_K, T_air_K
+            fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode, T_fuel_K, T_air_K,
+            WFR, water_mode,
         )
         return _dry_frac(gas, "O2") * 100.0 - (measured_O2_pct_dry or 0)
 
     def delta_CO2(phi: float) -> float:
         gas, _ = _equilibrium_at_phi(
-            fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode, T_fuel_K, T_air_K
+            fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode, T_fuel_K, T_air_K,
+            WFR, water_mode,
         )
         return _dry_frac(gas, "CO2") * 100.0 - (measured_CO2_pct_dry or 0)
 
@@ -88,7 +100,8 @@ def run(
         phi = 0.5  # fallback
 
     gas, T_mixed = _equilibrium_at_phi(
-        fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode, T_fuel_K, T_air_K
+        fuel_pct, ox_pct, phi, T0_K, P_bar, combustion_mode, T_fuel_K, T_air_K,
+        WFR, water_mode,
     )
     FAR, FAR_stoich, AFR, AFR_stoich = compute_ratios(fuel_pct, ox_pct, phi)
 

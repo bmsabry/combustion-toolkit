@@ -59,6 +59,8 @@ def calc_aft(body: AFTRequest, _: User = Depends(require_full_subscription)) -> 
         body.heat_loss_fraction if body.mode == "heat_loss" else 0.0,
         body.T_fuel_K,
         body.T_air_K,
+        body.WFR,
+        body.water_mode,
     )
     return AFTResponse(**result)
 
@@ -77,6 +79,8 @@ def calc_flame_speed(
         body.domain_length_m,
         body.T_fuel_K,
         body.T_air_K,
+        body.WFR,
+        body.water_mode,
     )
     return FlameSpeedResponse(**result)
 
@@ -106,6 +110,8 @@ def calc_flame_speed_sweep(
             body.T_fuel_K,
             body.T_air_K,
             body.domain_length_m,
+            body.WFR,
+            body.water_mode,
         ).result(timeout=540)
     except Exception as e:
         log.exception("flame-speed-sweep error: %s", e)
@@ -138,6 +144,8 @@ def calc_combustor(
         body.integration,
         body.heat_loss_fraction,
         body.mechanism,
+        body.WFR,
+        body.water_mode,
     )
     result["mechanism"] = body.mechanism
     return CombustorResponse(**result)
@@ -156,6 +164,8 @@ def calc_exhaust(body: ExhaustRequest, _: User = Depends(require_full_subscripti
         body.combustion_mode,
         body.T_fuel_K,
         body.T_air_K,
+        body.WFR,
+        body.water_mode,
     )
     return ExhaustResponse(**result)
 
@@ -181,5 +191,7 @@ def calc_autoignition(
         body.T_fuel_K,
         body.T_air_K,
         body.mechanism,
+        body.WFR,
+        body.water_mode,
     )
     return AutoignitionResponse(**result)
