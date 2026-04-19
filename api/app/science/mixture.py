@@ -51,6 +51,66 @@ FUEL_SUBSTITUTIONS = {
 OXIDIZER_SPECIES = {"O2", "N2", "AR", "H2O", "CO2"}
 
 
+def fuel_mass_fraction_at_phi(
+    fuel_x: Dict[str, float],
+    ox_x: Dict[str, float],
+    phi: float,
+    mech_path: str,
+) -> float:
+    """Physical fuel mass fraction Y_f = m_fuel / (m_fuel + m_air) at equivalence
+    ratio phi, for the given normalized fuel and oxidizer compositions.
+
+    Computed from stoichiometry directly — NOT from Cantera's Bilger mixture_fraction.
+    Bilger Z agrees with Y_f only when the oxidizer is free of C/H atoms (dry air).
+    For humid air, EGR, or vitiated oxidizers, Bilger under-counts fuel mass by
+    20–30 %, which silently biases every enthalpy-mix path that consumes it.
+
+    Atom-count stoichiometry: per mole of fuel, O2 demand = nC + nH/4 - nO/2.
+    Combined with X_O2 in the oxidizer stream, this fixes the molar ratio
+    α = n_fuel/(n_fuel+n_ox) at the requested phi; mass fraction follows via
+    the two stream MWs.
+    """
+    g_tmp = ct.Solution(mech_path)
+    stoich_O2 = 0.0
+    for s, v in fuel_x.items():
+        try:
+            nC = g_tmp.n_atoms(s, "C")
+            nH = g_tmp.n_atoms(s, "H")
+            nO = g_tmp.n_atoms(s, "O")
+        except Exception:
+            nC = nH = nO = 0
+        stoich_O2 += v * (nC + nH / 4.0 - nO / 2.0)
+    X_O2 = ox_x.get("O2", 0.0)
+    if stoich_O2 <= 0 or X_O2 <= 0:
+        # Fallback: treat composition as pure-methane-ish. Still better than 0.
+        return 0.05
+    frac_f_per_ox = float(phi) * X_O2 / stoich_O2
+    alpha = frac_f_per_ox / (1.0 + frac_f_per_ox)
+
+    # Stream MWs from normalized compositions
+    g_f = ct.Solution(mech_path)
+    Xf = np.zeros(g_f.n_species)
+    for s, v in fuel_x.items():
+        idx = g_f.species_index(s)
+        if idx >= 0:
+            Xf[idx] = v
+    Xf /= max(Xf.sum(), 1e-30)
+    g_f.TPX = 298.15, 101325.0, Xf
+    MW_f = g_f.mean_molecular_weight
+
+    g_a = ct.Solution(mech_path)
+    Xa = np.zeros(g_a.n_species)
+    for s, v in ox_x.items():
+        idx = g_a.species_index(s)
+        if idx >= 0:
+            Xa[idx] = v
+    Xa /= max(Xa.sum(), 1e-30)
+    g_a.TPX = 298.15, 101325.0, Xa
+    MW_a = g_a.mean_molecular_weight
+
+    return (alpha * MW_f) / (alpha * MW_f + (1.0 - alpha) * MW_a)
+
+
 def _normalize_to_mech(comp_mol_pct: Dict[str, float], mechanism: str = "gri30") -> Dict[str, float]:
     """Take user composition (mole%), map exotic species to mechanism-available substitutes, return dict normalized to sum 1.0."""
     gas = ct.Solution(mech_yaml(mechanism))
@@ -165,15 +225,13 @@ def make_gas_mixed(
     g_a.TPX = float(T_air_K), P_Pa, X_air_vec
     h_air = g_a.enthalpy_mass
 
-    # Mass fraction of fuel-stream in the combined mixture (via Cantera's mixture_fraction).
-    # Note: set_equivalence_ratio was already called; mixture_fraction reports Z for the phi mixture.
-    try:
-        Z = float(gas.mixture_fraction(fuel=fuel_str, oxidizer=ox_str, basis="mass"))
-    except Exception:
-        # approximate for unreachable mechs — shouldn't happen with GRI
-        Z = 0.0
-    Y_fuel = Z
-    Y_air = 1.0 - Z
+    # Physical fuel mass fraction Y_f = m_fuel/(m_fuel+m_air) at this phi.
+    # We compute it stoichiometrically, NOT via Cantera's Bilger mixture_fraction.
+    # Bilger Z agrees with Y_f only when the oxidizer is free of C/H atoms (dry air).
+    # With humid air (3% H2O) or EGR, Bilger under-counts fuel by 20–30 %, which
+    # silently biases the enthalpy mix and produces a wrong T_mixed.
+    Y_fuel = fuel_mass_fraction_at_phi(fuel_x, ox_x, float(phi), mech_path)
+    Y_air = 1.0 - Y_fuel
     h_mix = Y_fuel * h_fuel + Y_air * h_air
 
     # Mixed state: given (h_mix, P, X_mix) solve for T

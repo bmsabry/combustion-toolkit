@@ -39,7 +39,7 @@ from typing import Dict, Tuple
 import cantera as ct
 import numpy as np
 
-from .mixture import _normalize_to_mech, mech_yaml
+from .mixture import _normalize_to_mech, mech_yaml, fuel_mass_fraction_at_phi
 
 
 # Latent heat of vaporization for pure water — linear fit to IAPWS-IF97
@@ -116,15 +116,10 @@ def make_gas_mixed_with_water(
         )
         return gas, fstr, ostr, T_mixed, 0.0
 
-    # --- Stream mass fractions (fuel + air only, pre-water) ---
-    # Use Cantera's mixture_fraction to get Z_f = m_fuel / (m_fuel + m_air) at phi.
-    gas_base = ct.Solution(mech_path)
-    gas_base.TP = 298.15, P_Pa
-    gas_base.set_equivalence_ratio(float(phi), fuel=fuel_str, oxidizer=ox_str)
-    try:
-        Z_f_noWater = float(gas_base.mixture_fraction(fuel=fuel_str, oxidizer=ox_str, basis="mass"))
-    except Exception:
-        Z_f_noWater = 0.05  # methane-ish fallback; exercise path rarely hit
+    # True fuel mass fraction in the dry (fuel+air) premix at this phi,
+    # computed stoichiometrically. See fuel_mass_fraction_at_phi() for why
+    # Cantera's Bilger mixture_fraction would be wrong here (humid air / EGR).
+    Z_f_noWater = fuel_mass_fraction_at_phi(fuel_x, ox_x, float(phi), mech_path)
 
     # Convert WFR (water/fuel mass ratio) into mass fractions of each stream in the combined mix.
     # Let m_f + m_a = 1. Then m_f = Z_f_noWater, m_a = 1 - Z_f_noWater, m_w = WFR * m_f.

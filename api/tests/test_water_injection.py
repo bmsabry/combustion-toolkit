@@ -103,9 +103,18 @@ def test_T_ad_monotonically_decreases_with_WFR_liquid():
 # ---------- Quantitative pins (±15 K) ----------
 
 def test_liquid_WFR_1_drops_T_ad_into_pinned_range():
-    """At WFR=1 liquid the T_ad drop should be in the 250–400 K range for
-    lean NG with hot air preheat. Value re-derived 2026-04-19 against
-    Cantera 3.2.0 GRI-Mech 3.0."""
+    """At WFR=1 liquid the T_ad drop should be in the 100–200 K range for
+    lean NG with hot-air preheat.
+
+    Re-pinned 2026-04-19 after fixing the Bilger-vs-physical fuel-mass-fraction
+    bug: `make_gas_mixed` and `make_gas_mixed_with_water` previously used
+    Cantera's `mixture_fraction` (Bilger's definition) to partition stream
+    enthalpies. Bilger Z agrees with the physical fuel mass fraction only when
+    the oxidizer is free of C/H atoms AND the fuel stream contains no inert
+    (N2/CO2) diluent. Here the fuel has 1 % N2, so Bilger Z under-counted
+    fuel mass by 17 %, which in turn made the pre-fix WFR=1 drop read as
+    ~300 K instead of the true 135 K. Verified against an independent
+    Cantera enthalpy-balance + equilibrate-HP oracle."""
     r_ref = aft.run(
         _FUEL, _OX, _PHI, _T_AIR_K, _P_BAR,
         T_fuel_K=_T_FUEL_K, T_air_K=_T_AIR_K,
@@ -116,7 +125,7 @@ def test_liquid_WFR_1_drops_T_ad_into_pinned_range():
         WFR=1.0, water_mode="liquid",
     )
     drop = r_ref["T_ad"] - r_wet["T_ad"]
-    assert 200.0 < drop < 450.0, f"T_ad drop at WFR=1 liquid was {drop:.1f} K"
+    assert 100.0 < drop < 200.0, f"T_ad drop at WFR=1 liquid was {drop:.1f} K"
 
 
 def test_steam_at_T_air_gives_smaller_drop_than_liquid():

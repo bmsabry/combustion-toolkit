@@ -132,8 +132,10 @@ def result_C():
 def test_C_mixed_inlet_T_is_lower(result_C, result_B):
     # Adiabatic mix of cold fuel + hot air must be below the hot-air-only inlet T
     assert result_C["T_mixed_inlet_K"] < T_1000F
-    # From psr_new_scheme.py validation: T_mixed ~ 798 K
-    assert 790 < result_C["T_mixed_inlet_K"] < 805, f'T_mixed={result_C["T_mixed_inlet_K"]}'
+    # Oracle _ref_psr_pfr.py (physical Y_f stoichiometry, humid air): T_mixed = 771.97 K.
+    # The previous pin (790-805 K) was based on the buggy Bilger mixture_fraction path
+    # that under-counts fuel mass by 21% when the oxidizer contains H2O (3.11% here).
+    assert 765 < result_C["T_mixed_inlet_K"] < 780, f'T_mixed={result_C["T_mixed_inlet_K"]}'
 
 
 def test_C_T_psr_lower_than_case_B(result_C, result_B):

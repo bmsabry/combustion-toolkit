@@ -62,11 +62,12 @@ def _adiabatic_mix(T_fuel: float, T_air: float, phi: float) -> tuple[float, dict
     if abs(T_fuel - T_air) < 1e-6:
         return T_fuel, X_mixed
 
-    # 2. Mass fraction of fuel stream in the mixture = sum Y_i for species originating in fuel.
-    #    (Diluents CO2/N2 appear in both streams — assign them by mole-fraction share of each inlet.)
-    fuel_mole_frac = sum(v / 100.0 for v in FUEL.values())  # mole of fuel stream per mole of (fuel+air)... no, this is wrong.
-    # Easier: rebuild fuel and air streams as independent Solutions, get their mass fractions
-    # in the final mixture by matching the molar amounts set_equivalence_ratio implies.
+    # 2. Mass fraction of fuel stream in the mixture, computed stoichiometrically.
+    # Atom-count: per mole of fuel, O2 demand = nC + nH/4 - nO/2. Combined with
+    # X_O2 in the oxidizer stream, this fixes α = n_fuel/(n_fuel+n_ox) exactly.
+    # Mass fraction follows from the two stream MWs.
+    # This avoids Cantera's Bilger mixture_fraction, which under-counts fuel by
+    # 20-30 % when the oxidizer contains C/H/O atoms (e.g. humid air, EGR).
     gas_f = ct.Solution(MECH)
     gas_f.TP = T_fuel, P_PA
     gas_f.X = _mass_fractions_from_pct(FUEL, gas_f)
@@ -74,18 +75,21 @@ def _adiabatic_mix(T_fuel: float, T_air: float, phi: float) -> tuple[float, dict
     gas_a.TP = T_air, P_PA
     gas_a.X = _mass_fractions_from_pct(OX, gas_a)
 
-    # Moles of fuel per mole of oxidizer to hit phi:
-    # phi * (O2_stoich / fuel_frac) ≈ molar_fuel_per_O2 · phi.
-    # Use Cantera's mixture_fraction in reverse: set_equivalence_ratio sets the mix;
-    # then the mass ratio is Y_fuel_stream / Y_ox_stream.
-    # Moles of each stream per unit mole of mix:
-    m_f_per_mix = sum(gas_mix.X[gas_mix.species_index(sp)]
-                      for sp in FUEL if sp in gas_mix.species_names) * gas_f.mean_molecular_weight
-    m_a_per_mix = sum(gas_mix.X[gas_mix.species_index(sp)]
-                      for sp in OX if sp in gas_mix.species_names) * gas_a.mean_molecular_weight
-    # NOTE: diluents appearing in both streams get attributed by name match above — imperfect but
-    # the fuel used in this test has only trace CO2/N2 diluent, so the T_mixed error is small.
-    Y_f = m_f_per_mix / (m_f_per_mix + m_a_per_mix) if (m_f_per_mix + m_a_per_mix) > 0 else 0.0
+    # Stoichiometric O2 demand per mole of fuel stream
+    fuel_x_norm = _mass_fractions_from_pct(FUEL, gas_mix)
+    ox_x_norm = _mass_fractions_from_pct(OX, gas_mix)
+    stoich_O2 = 0.0
+    for sp, x in fuel_x_norm.items():
+        nC = gas_mix.n_atoms(sp, "C")
+        nH = gas_mix.n_atoms(sp, "H")
+        nO = gas_mix.n_atoms(sp, "O")
+        stoich_O2 += x * (nC + nH / 4.0 - nO / 2.0)
+    X_O2 = ox_x_norm.get("O2", 0.0)
+    frac_f_per_ox = phi * X_O2 / stoich_O2
+    alpha = frac_f_per_ox / (1.0 + frac_f_per_ox)
+    MW_f = gas_f.mean_molecular_weight
+    MW_a = gas_a.mean_molecular_weight
+    Y_f = alpha * MW_f / (alpha * MW_f + (1.0 - alpha) * MW_a)
     Y_a = 1.0 - Y_f
 
     h_target = Y_f * gas_f.enthalpy_mass + Y_a * gas_a.enthalpy_mass
