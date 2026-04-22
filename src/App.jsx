@@ -333,7 +333,7 @@ const _PSR_SEED_LBL={unreacted:"Unreacted (cold)",hot_eq:"Hot equilibrium",cold_
 const _EQ_LBL={HP:"HP (constant enthalpy+pressure)",UV:"UV (constant internal energy+volume)",TP:"TP (constant temperature+pressure)"};
 const _INT_LBL={steady_state:"Steady-state solver",chunked:"Chunked time advance (default)",step:"Step-by-step"};
 const _MECH_LBL={gri30:"GRI-Mech 3.0 (53 species, 325 rxns)",glarborg:"Glarborg 2018 (151 species, 1395 rxns)",usc2:"USC-Mech II (coming soon)",aramco30:"AramcoMech 3.0 (coming soon)"};
-function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",accurate=false}=ps||{};
+function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult}=ps||{};
   // Adiabatic fuel/air mix T that's used everywhere downstream
   const T_mix_phi=mixT(fuel,ox,phi,T_fuel??T0,T_air??T0);
   const aft=calcAFTx(fuel,ox,phi,T_mix_phi,P,combMode);
@@ -361,6 +361,165 @@ const T_mix_O2=mixT(fuel,ox,rO2.phi,T_fuel??T0,T_air??T0);
 const T_mix_CO2=mixT(fuel,ox,rCO2.phi,T_fuel??T0,T_air??T0);
 const s5=[["═══ EXHAUST ANALYSIS — INPUTS ═══"],[],["Parameter","Value","Unit"],["Measured O₂ (dry)",+measO2.toFixed(2),"%"],["Measured CO₂ (dry)",+measCO2.toFixed(2),"%"],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["T_mixed @ φ(O₂ case)",+uv(u,"T",T_mix_O2).toFixed(2),uu(u,"T")],["T_mixed @ φ(CO₂ case)",+uv(u,"T",T_mix_CO2).toFixed(2),uu(u,"T")],["Water/Fuel Mass Ratio (WFR)",+(+WFR).toFixed(3),"kg_water/kg_fuel"],["Water Injection Mode",WFR>0?(waterMode==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],[],["═══ FROM MEASURED O₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ FROM MEASURED CO₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rCO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rCO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rCO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rCO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rCO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rCO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ Adiabatic Temperature vs Exhaust O₂ ═══"],["Exhaust O₂ (%)","Flame Temperature ("+uu(u,"T")+")","Equivalence Ratio (φ)","Fuel/Air Ratio (mass)"],...Array.from({length:30},(_,i)=>{const o2=0.5+i*0.5;const r0=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,0.6,T_fuel??T0,T_air??T0),P,combMode);const r=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,r0.phi,T_fuel??T0,T_air??T0),P,combMode);return[+o2.toFixed(1),+uv(u,"T",r.T_ad).toFixed(1),+r.phi.toFixed(4),+r.FAR_mass.toFixed(6)]})];const ws5=XLSX.utils.aoa_to_sheet(s5);ws5["!cols"]=[{wch:38},{wch:20},{wch:16},{wch:16}];XLSX.utils.book_append_sheet(wb,ws5,"Exhaust Analysis");
 const s4=[["═══ THERMO DATABASE ═══"],["NASA 7-coefficient polynomials"],[]];for(const sp of["CH4","C2H6","C3H8","H2","CO","O2","N2","H2O","CO2","OH","NO","Ar"]){if(!SP[sp])continue;s4.push([SP[sp].nm+" ("+fmt(sp)+")","Molecular Weight: "+SP[sp].MW,"ΔHf: "+(SP[sp].Hf/1000).toFixed(2)+" kJ/mol"]);s4.push(["Temperature (K)","Heat Capacity Cp (J/mol·K)","Enthalpy H (kJ/mol)","Entropy S (J/mol·K)","Gibbs Energy G (kJ/mol)"]);for(let T=200;T<=3000;T+=100){const H=h_mol(sp,T)/1000;const Sv=sR(sp,T)*R_u;s4.push([T,+cp_mol(sp,T).toFixed(4),+H.toFixed(4),+Sv.toFixed(4),+((H*1000-T*Sv)/1000).toFixed(4)]);}s4.push([]);}const ws4=XLSX.utils.aoa_to_sheet(s4);ws4["!cols"]=[{wch:28},{wch:18},{wch:18},{wch:18},{wch:18}];XLSX.utils.book_append_sheet(wb,ws4,"Thermo Database");
+// ══════════════════ CYCLE (Gas Turbine) — Option A + B ══════════════════
+// Only written if we have a cycle result in hand. The cycle backend is
+// Cantera-only, so offline / Simple mode has no numbers to export.
+if(cycleResult){
+  const cr=cycleResult;
+  const ff=cr.fuel_flexibility||{};
+  const fmtN=(v,d=3)=>(Number.isFinite(v)?(+v).toFixed(d):"n/a");
+  const sC=[
+    ["═══ GAS TURBINE CYCLE — INPUTS ═══"],[],
+    ["Parameter","Value","Unit"],
+    ["Engine",cycleEngine||"—","—"],
+    ["Ambient Pressure",fmtN(cyclePamb,3),"bar"],
+    ["Ambient Temperature",fmtN(uv(u,"T",cycleTamb),2),uu(u,"T")],
+    ["Relative Humidity",fmtN(cycleRH,1),"%"],
+    ["Load",fmtN(cycleLoad,1),"%"],
+    ["Intercooler Coolant T (LMS100 only)",cycleEngine==="LMS100PB+"?fmtN(uv(u,"T",cycleTcool),2):"n/a",uu(u,"T")],
+    ["Combustor Air Fraction (flame/total)",fmtN(cycleAirFrac,3),"—"],
+    ["Fuel Temperature",fmtN(uv(u,"T",cr.T_fuel_K??cycleTamb),2),uu(u,"T")],
+    [],
+    ["═══ STATION STATES ═══"],[],
+    ["Station","Temperature ("+uu(u,"T")+")","Pressure (bar)","Mass Flow (kg/s)"],
+    ["1 — Ambient / LPC inlet",fmtN(uv(u,"T",cr.T1_K),1),fmtN(cr.P1_bar,3),fmtN(cr.mdot_air_kg_s,2)],
+    ["2 — LPC exit / IC inlet",fmtN(uv(u,"T",cr.T2_K),1),fmtN(cr.P2_bar,3),fmtN(cr.mdot_air_kg_s,2)],
+    ["2c — IC exit / HPC inlet",fmtN(uv(u,"T",cr.T2c_K),1),fmtN(cr.P2c_bar,3),fmtN(cr.mdot_air_kg_s,2)],
+    ["3 — Compressor exit / combustor inlet",fmtN(uv(u,"T",cr.T3_K),1),fmtN(cr.P3_bar,3),fmtN(cr.mdot_air_kg_s,2)],
+    ["4 — Combustor exit (after dilution)",fmtN(uv(u,"T",cr.T4_K),1),fmtN(cr.P4_bar,3),fmtN((cr.mdot_air_kg_s||0)+(cr.mdot_fuel_kg_s||0),2)],
+    ["Bulk (flame-zone)",fmtN(uv(u,"T",cr.T_Bulk_K),1),fmtN(cr.P3_bar,3),"—"],
+    ["5 — Turbine exit (actual)",fmtN(uv(u,"T",cr.T5_K),1),fmtN(cr.P_exhaust_bar,3),"—"],
+    ["5s — Turbine exit (isentropic)",fmtN(uv(u,"T",cr.T5_isen_K),1),fmtN(cr.P_exhaust_bar,3),"—"],
+    [],
+    ["═══ FUEL / FAR ═══"],[],
+    ["Parameter","Value","Unit"],
+    ["φ₄ (combustor-exit equivalence ratio)",fmtN(cr.phi4,4),"—"],
+    ["FAR₄ (combustor-exit fuel/air)",fmtN(cr.FAR4,6),"—"],
+    ["φ_Bulk (flame-zone equivalence ratio)",fmtN(cr.phi_Bulk,4),"—"],
+    ["FAR_Bulk (flame-zone fuel/air)",fmtN(cr.FAR_Bulk,6),"—"],
+    ["T_Bulk (flame-zone adiabatic T)",fmtN(uv(u,"T",cr.T_Bulk_K),1),uu(u,"T")],
+    ["mdot_fuel",fmtN(cr.mdot_fuel_kg_s,4),"kg/s"],
+    ["mdot_air (total, core + bypass)",fmtN(cr.mdot_air_kg_s,3),"kg/s"],
+    [],
+    ["═══ OPTION A — ENERGY BALANCE ═══"],[],
+    ["Parameter","Value","Unit"],
+    ["W_turbine (Cantera isentropic expansion)",fmtN(cr.W_turbine_MW,3),"MW"],
+    ["W_compressor (HPC + LPC)",fmtN(cr.W_compressor_MW,3),"MW"],
+    ["W_parasitic (aux loads)",fmtN(cr.W_parasitic_MW,3),"MW"],
+    ["MW_gross (turb − comp − parasitic)",fmtN(cr.MW_gross,3),"MW"],
+    ["MW_cap (load × ambient × rated)",fmtN(cr.MW_cap,3),"MW"],
+    ["MW_uncapped_before_derate",fmtN(cr.MW_uncapped_before_derate,3),"MW"],
+    ["Fuel-flexibility derate factor",fmtN(cr.derate_factor,4),"—"],
+    ["MW_net (final electrical output)",fmtN(cr.MW_net,3),"MW"],
+    ["Heat rate (HHV)",fmtN(cr.HR_BTU_per_kWh,1),"BTU/kWh"],
+    ["Thermal efficiency (LHV)",fmtN(100*(cr.eta_LHV||0),2),"%"],
+    [],
+    ["═══ COMPONENT EFFICIENCIES & DECK CONSTANTS ═══"],[],
+    ["Parameter","Value","Unit"],
+    ["η_isen_turb (calibrated per deck)",fmtN(cr.eta_isen_turb,4),"—"],
+    ["η_isen_comp",fmtN(cr.eta_isen_comp,4),"—"],
+    ["Combustor bypass fraction",fmtN(cr.combustor_bypass_frac,4),"—"],
+    ["Combustor air fraction (flame/total)",fmtN(cycleAirFrac,3),"—"],
+    ["P_exhaust",fmtN(cr.P_exhaust_bar,3),"bar"],
+    [],
+    ["═══ OPTION B — FUEL FLEXIBILITY (MWI) ═══"],[],
+    ["Parameter","Value","Unit"],
+    ["LHV_vol (at 60 °F)",fmtN(ff.lhv_vol_BTU_per_scf,1),"BTU/scf"],
+    ["SG (fuel / air)",fmtN(ff.sg_air,4),"—"],
+    ["Modified Wobbe Index (MWI)",fmtN(ff.mwi,2),"BTU/scf·√°R"],
+    ["MWI Status",ff.mwi_status||"—","—"],
+    ["MWI Derate",fmtN(ff.mwi_derate_pct,2),"%"],
+    ["H₂ Fraction in Fuel",fmtN(ff.h2_frac_pct,2),"%"],
+    [],
+    ["═══ WARNINGS ═══"],
+    ...(ff.warnings&&ff.warnings.length?ff.warnings.map(w=>[w]):[["(none)"]]),
+  ];
+  const wsC=XLSX.utils.aoa_to_sheet(sC);
+  wsC["!cols"]=[{wch:44},{wch:20},{wch:22},{wch:18}];
+  XLSX.utils.book_append_sheet(wb,wsC,"Cycle Results");
+}
+
+// ══════════════════ ASSUMPTIONS ══════════════════
+// Mirrors the 12 groups from the in-app Assumptions panel. Keep these two
+// in sync — if a number changes in cycle.py it must be updated both places.
+const sA=[
+  ["═══ MODELING ASSUMPTIONS ═══"],
+  ["Every number below is baked into the cycle and combustion solvers."],
+  ["Matches the in-app Assumptions tab. Not a design tool."],[],
+  ["Group","Parameter","Value","Basis / Rationale"],
+
+  ["1. Ambient & Inlet","Reference pressure","1.01325 bar","Sea-level ISA. P_amb input overrides for off-design."],
+  ["","Reference temperature","288.706 K (60 °F)","LM6000 ISO anchor. LMS100 anchored at 44 °F / 80% RH."],
+  ["","Relative humidity","User input 0–100%","Default 60%. Enters via humid-air R and cp."],
+  ["","Inlet pressure drop","0 bar","No filter / silencer loss."],
+  ["","Inlet ram recovery","1.0","Stationary ground operation."],
+
+  ["2. Humid Air","Dry-air mole fractions","N2 0.78084 / O2 0.20946 / Ar 0.00934","Standard atmospheric composition."],
+  ["","H2O saturation","Antoine / Magnus","Humid-air x_H2O from RH and T_amb."],
+  ["","Mixture thermodynamics","Cantera GRI-Mech 3.0","Same mechanism as combustion."],
+
+  ["3. Compressor","Isentropic efficiency","0.88","Applied to LPC and HPC separately."],
+  ["","Working fluid","Humid air","Real Cantera enthalpy — no ideal-gas shortcut."],
+  ["","Bleed air","0%","No customer bleed / cooling-air extraction."],
+  ["","Mechanical efficiency","1.00","Shaft/gearbox losses folded into deck cap."],
+
+  ["4. Intercooler (LMS100 only)","Outlet T","T_coolant_in + 0 K","Infinite-surface limit."],
+  ["","Pressure drop","0 bar","Not modeled."],
+  ["","Heat rejected","Q_IC = mdot · Δh","Diagnostic only; not used in MW calc."],
+
+  ["5. Combustor","Combustor ΔP","4%","P4 = 0.96 · P3."],
+  ["","Combustor bypass fraction","LM6000: 0.683 / LMS100: 0.747","Per-engine calibration. Core-to-casing split."],
+  ["","Combustor air fraction (flame/total)","0.88 (both)","Flame vs dilution zone split."],
+  ["","T4 target","LM6000: 1755 K / LMS100: 1825 K","Firing temperature — commanded by deck."],
+  ["","φ4 solve","Cantera equilibrate(\"HP\")","Back-solved so product T = T4. Equilibrium only."],
+  ["","T_Bulk","equilibrate(\"HP\") at (T3,P3,φ_Bulk)","Drives downstream panels when linked."],
+  ["","Heat loss","0%","Adiabatic combustor (AFT panel has separate HL input)."],
+
+  ["6. Turbine","η_isen_turb","LM6000: 0.7416 / LMS100: 0.7640","Calibrated so MW_gross lands at cap at anchor."],
+  ["","Expansion path","gas.SP = s_in, P_exh; η correction","Equilibrium products, Cantera enthalpy."],
+  ["","P_exhaust","1.05 bar","Stack + HRSG backpressure."],
+  ["","Cooling air","In bypass fraction","No re-injection mixing."],
+
+  ["7. Power & Load","Parasitic load","1.5% of rated","Lube pumps, controls, cooling fans."],
+  ["","MW_gross","W_turb − W_comp − W_parasitic","Cantera energy balance."],
+  ["","MW_cap","rated · ambient · load_pct/100","Density-lapse & IC-benefit scaling."],
+  ["","MW_net","min(gross, cap) · (1 − derate%)","Cap limit + fuel-flex derate."],
+
+  ["8. Fuel Properties (Option B)","Reference condition","60 °F / 1 atm","US gas-industry reference."],
+  ["","Mixing rule","Linear in mole fractions","LHV_vol_mix = Σ xᵢ · LHV_vol,i."],
+  ["","Components","CH4…C8H18, C2H4, C2H2, H2, CO, N2, CO2, H2O, Ar","16 species tabulated."],
+  ["","Reference LHV","CH4 909.4 / C2H6 1618.7 / C3H8 2314.9 / H2 273.8 BTU/scf","GPA SP 2172."],
+
+  ["9. Fuel Flexibility — MWI Derate (Option B)","Definition","MWI = LHV_vol / √(SG · T_fuel_°R)","T in absolute Rankine."],
+  ["","In-spec band","40 ≤ MWI ≤ 54","No derate. Pure CH4 at 60 °F ≈ 53.6."],
+  ["","Marginal","35–40 or 54–60","Derate 5%."],
+  ["","Out-of-spec","MWI < 35 or > 60","Derate 20%."],
+  ["","H2 warning","x_H2 > 30%","Flashback risk."],
+  ["","Low-LHV warning","LHV_vol < 800 BTU/scf","Dilute fuel — doubles fuel flow."],
+  ["","Derate application","MW_net = MW_uncapped · (1 − derate%)","Stacks with part-load, not with ambient droop."],
+
+  ["10. Engine Deck Anchors","LM6000PF","45.0 MW @ 60 °F / 60% RH","T3 811 K · P3 30.3 bar · T4 1755 K · η 42.4% · HR 8493 BTU/kWh."],
+  ["","LMS100PB+","107.5 MW @ 44 °F / 80% RH","T3 644 K · P3 44.0 bar · T4 1825 K · η 44.0% · HR 8178 BTU/kWh · intercooled."],
+  ["","Anchor method","combustor_bypass_frac + η_isen_turb","Two per-engine knobs fit MW and η at anchor."],
+
+  ["11. Off-design Scaling","Density lapse","mdot_air ∝ ρ_amb · VGV(T_amb)","Engine-specific lapse curve."],
+  ["","LMS100 intercooler benefit","Architectural","HPC inlet pinned to T_cool_in."],
+  ["","Load line","Linear in cap","Cap = load_pct · rated_ambient. Gross super-linear at low load."],
+  ["","Humidity","Via humid-air R only","Higher RH → more volumetric mdot."],
+  ["","Altitude","Not modeled","Use P_amb input if needed."],
+  ["","Inlet cooling","Not modeled","Simulate via T_amb input."],
+
+  ["12. Solver & Numerics","Mechanism","GRI-Mech 3.0 (default)","53 species, 325 reactions."],
+  ["","Combustion equilibrium","Cantera equilibrate(\"HP\")","Element-potential solver, constant H and P."],
+  ["","Turbine expansion","Cantera gas.SP = s, P","Isentropic, then η correction."],
+  ["","Compressor work","Cantera enthalpy difference","Humid-air real-gas."],
+  ["","Thread model","Single-thread Cantera pool","Serialized server-side. 180 s / 540 s timeouts."],
+  ["","Units","SI internal","UI converts to ENG on display."],
+];
+const wsA=XLSX.utils.aoa_to_sheet(sA);
+wsA["!cols"]=[{wch:34},{wch:36},{wch:40},{wch:52}];
+XLSX.utils.book_append_sheet(wb,wsA,"Assumptions");
+
 XLSX.writeFile(wb,"ProReadyEngineer_CombustionReport.xlsx");}
 
 /* ══════════════════ SVG CHART ══════════════════ */
@@ -1123,6 +1282,134 @@ function PropsPanel(){
         <thead><tr>{[`Temperature (${uu(units,"T")})`,`Cp (${uu(units,"cp")})`,`Enthalpy (${uu(units,"h_mol")})`,`Entropy (${uu(units,"s_mol")})`,`Gibbs G (${uu(units,"h_mol")})`].map(h=><th key={h} style={{textAlign:"left",padding:"6px 8px",borderBottom:`1px solid ${C.border}`,color:C.txtDim,fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",position:"sticky",top:0,background:C.bg3}}>{h}</th>)}</tr></thead>
         <tbody>{data.map((r,i)=>(<tr key={i} style={{background:i%2?`${C.bg}55`:"transparent"}}><td style={{padding:"4px 8px",color:C.txt}}>{r.T.toFixed(1)}</td><td style={{padding:"4px 8px",color:C.txtDim}}>{r.Cp.toFixed(3)}</td><td style={{padding:"4px 8px",color:C.txtDim}}>{r.H.toFixed(3)}</td><td style={{padding:"4px 8px",color:C.txtDim}}>{r.S.toFixed(3)}</td><td style={{padding:"4px 8px",color:C.txtDim}}>{r.G.toFixed(3)}</td></tr>))}</tbody></table></div></div></div>);}
 
+/* ══════════════════ ASSUMPTIONS PANEL ══════════════════
+   Read-only reference page listing every modeling assumption the cycle
+   and combustion solvers depend on. Grouped by topic so users can audit
+   what the solver is doing and what it is NOT doing. No inputs — pure
+   documentation. If a number changes in cycle.py (e.g. eta_isen_turb,
+   combustor_bypass_frac, MWI band edges) it must be updated here too.
+*/
+function Assumption({label,value,note}){
+  return(<div style={{display:"grid",gridTemplateColumns:"220px 170px 1fr",gap:10,padding:"6px 8px",borderBottom:`1px solid ${C.border}40`,alignItems:"baseline"}}>
+    <div style={{fontSize:11,color:C.txtDim,fontFamily:"'Barlow',sans-serif",fontWeight:600}}>{label}</div>
+    <div style={{fontSize:11,color:C.accent,fontFamily:"monospace",fontWeight:600}}>{value}</div>
+    <div style={{fontSize:10.5,color:C.txtMuted,fontFamily:"'Barlow',sans-serif",lineHeight:1.5}}>{note}</div>
+  </div>);
+}
+function AssumptionsGroup({title,subtitle,children}){
+  return(<div style={{...S.card,padding:"12px 14px"}}>
+    <div style={{fontSize:12,fontWeight:700,color:C.accent,letterSpacing:".6px",marginBottom:2,fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase"}}>{title}</div>
+    {subtitle&&<div style={{fontSize:10.5,color:C.txtMuted,marginBottom:10,lineHeight:1.5,fontFamily:"'Barlow',sans-serif"}}>{subtitle}</div>}
+    <div style={{marginTop:8}}>
+      <div style={{display:"grid",gridTemplateColumns:"220px 170px 1fr",gap:10,padding:"4px 8px",borderBottom:`1px solid ${C.border}`,fontSize:9,color:C.txtMuted,textTransform:"uppercase",letterSpacing:"1.2px",fontFamily:"monospace",fontWeight:700}}>
+        <div>Parameter</div><div>Value</div><div>Basis / Rationale</div>
+      </div>
+      {children}
+    </div>
+  </div>);
+}
+function AssumptionsPanel(){
+  return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <HelpBox title="ℹ️ How to read this page">
+      <p style={{margin:"0 0 6px"}}>Every number below is baked into the cycle and combustion solvers. They are exposed here so you can audit them, map deviations, and know exactly what the app is and is not modeling.</p>
+      <p style={{margin:"0 0 6px"}}><span style={hs.em}>In-spec for design-point anchors only.</span> LM6000PF and LMS100PB+ off-design behavior is driven by physical scaling (density lapse, humid-air R, load-line droop) anchored at a single published design point per engine.</p>
+      <p style={{margin:0}}><span style={hs.warn}>Not a design tool.</span> The cycle is a reduced-order anchored correlation, not a station-by-station match of the OEM deck. Use high-fidelity tools for design, permitting, or emissions reporting.</p>
+    </HelpBox>
+
+    <AssumptionsGroup title="1. Ambient & Inlet" subtitle="Ambient state feeding the LP compressor inlet. No ram recovery, no inlet loss.">
+      <Assumption label="Reference pressure" value="1.01325 bar" note="Sea-level ISA. Cycle input P_amb overrides for off-design."/>
+      <Assumption label="Reference temperature" value="288.706 K (60 °F)" note="LM6000 ISO anchor. LMS100 anchored at 44 °F / 80% RH."/>
+      <Assumption label="Relative humidity" value="User input 0–100%" note="Default 60%. Enters via humid-air R and cp."/>
+      <Assumption label="Inlet pressure drop" value="0 bar" note="No filter / silencer loss modeled. T1/P1 ≡ ambient."/>
+      <Assumption label="Inlet ram recovery" value="1.0" note="Stationary (aero-derivative on ground). No Mach effect."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="2. Humid Air Composition" subtitle="Humid-air composition uses psychrometric H2O mole fraction; dry-air N2/O2/Ar ratios are fixed at the balance.">
+      <Assumption label="Dry-air mole fractions" value="N2 0.78084 / O2 0.20946 / Ar 0.00934" note="Standard atmospheric composition. CO2 + trace lumped into N2."/>
+      <Assumption label="H2O saturation" value="Antoine / Magnus" note="Humid-air x_H2O from RH and T_amb via Antoine P_sat."/>
+      <Assumption label="Mixture thermodynamics" value="Cantera GRI-Mech 3.0" note="Enthalpies, entropies, cp, R from the same mechanism as combustion."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="3. Compressor" subtitle="Compressors are modeled with a single isentropic efficiency and mechanical efficiency = 1. HPC and LPC use the same efficiency for the LMS100 three-spool.">
+      <Assumption label="Isentropic efficiency (both engines)" value="0.88" note="Applied to LPC and HPC separately. h_out = h_in + (h_out,s − h_in)/η_isen."/>
+      <Assumption label="Working fluid" value="Humid air" note="Real Cantera enthalpy difference — no dry-air ideal-gas shortcut."/>
+      <Assumption label="Bleed air" value="0%" note="No customer bleed / cooling-air extraction modeled."/>
+      <Assumption label="Mechanical efficiency" value="1.00" note="Shaft friction and gearbox losses ignored (folded into the overall cap)."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="4. Intercooler (LMS100 only)" subtitle="The LMS100's water-to-air intercooler sits between the LPC and HPC. Modeled as a fixed outlet temperature equal to the coolant supply.">
+      <Assumption label="Outlet T" value="T_coolant_in + 0 K" note="Infinite-surface limit. T_IC_out = T_cool_in (user input, default 288.15 K)."/>
+      <Assumption label="Pressure drop" value="0 bar" note="Not modeled. P_IC_out = P_LPC_out."/>
+      <Assumption label="Heat rejected" value="Q_IC = mdot · (h_LPC_out − h_IC_out)" note="Reported as diagnostic, not used in MW calculation."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="5. Combustor" subtitle="Two states — flame zone (bulk) and combustor exit (station 4). The flame zone sees only the primary air; dilution air is added after to meet T4.">
+      <Assumption label="Combustor pressure drop" value="4%" note="P4 = 0.96 · P3. Fixed. Typical DLE range is 3–5%."/>
+      <Assumption label="Combustor bypass fraction" value="LM6000: 0.683  /  LMS100: 0.747" note="Fraction of compressor discharge routed to the combustor core. Remainder is casing/HPT cooling. Private per-engine calibration so design-point MW and η land exactly."/>
+      <Assumption label="Combustor air fraction (flame/total)" value="0.88 (both)" note="Flame zone gets 88% of combustor air; dilution zone gets 12%. FAR_Bulk = FAR4 / 0.88."/>
+      <Assumption label="T4 target" value="LM6000: 1755 K  /  LMS100: 1825 K" note="Firing temperature. Commanded by the deck, not solved."/>
+      <Assumption label="φ4 solve" value="Cantera equilibrate(&quot;HP&quot;)" note="Back-solved so equilibrium product T at (T3, P3) equals T4. No kinetics — equilibrium only."/>
+      <Assumption label="T_Bulk (flame zone)" value="Cantera equilibrate(&quot;HP&quot;) at (T3, P3, φ_Bulk)" note="Adiabatic equilibrium. Drives downstream flame-speed / blowoff / autoignition panels when linked."/>
+      <Assumption label="Heat loss" value="0%" note="Adiabatic combustor. The AFT panel has a separate heat-loss option for hand analysis."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="6. Turbine" subtitle="Turbine work comes from an actual Cantera isentropic expansion — not a prescribed η_thermal. This is the core of Option A (energy-balance cycle).">
+      <Assumption label="Isentropic efficiency η_isen,turb" value="LM6000: 0.7416  /  LMS100: 0.7640" note="Calibrated so MW_gross lands at MW_cap at the design anchor. Used for HPT + LPT combined (lumped)."/>
+      <Assumption label="Expansion path" value="gas.SP = s_in, P_exhaust; h_out = h_in − η·(h_in−h_out,s)" note="Equilibrium products; full Cantera enthalpy at outlet."/>
+      <Assumption label="Exhaust pressure" value="1.05 bar" note="Stack + HRSG backpressure. Fixed — not a function of ambient."/>
+      <Assumption label="Cooling air" value="Accounted in bypass fraction" note="No re-injection mixing — modeled as energy not delivered to the turbine."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="7. Power & Load" subtitle="Gross shaft power = turbine − compressor − parasitic. Net electrical = gross · fuel-flexibility derate, capped by the load-and-ambient line.">
+      <Assumption label="Parasitic load" value="1.5% of rated MW" note="Lube pumps, controls, cooling fans. Subtracted from W_turbine − W_compressor."/>
+      <Assumption label="MW_gross formula" value="W_turbine − W_compressor − W_parasitic" note="Pure energy balance from Cantera enthalpies, mdot_air set by T4 back-solve."/>
+      <Assumption label="MW_cap" value="rated_MW · ambient_factor · load_factor" note="Density-lapse & intercooler-benefit ambient factor, times load_pct/100."/>
+      <Assumption label="MW_net" value="min(MW_gross, MW_cap) · (1 − derate_pct/100)" note="Engine will not exceed its published-cap limit line regardless of available thermodynamic power."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="8. Fuel Properties (Option B)" subtitle="Per-component LHV on a volume basis (BTU/scf at 60 °F, 1 atm) and specific gravity relative to air. Used to compute LHV_mix and SG_mix linearly.">
+      <Assumption label="Reference condition" value="60 °F / 1 atm" note="US gas-industry reference. T_fuel input re-maps via absolute T for MWI."/>
+      <Assumption label="Mixing rule" value="Linear in mole fractions" note="LHV_vol_mix = Σ xᵢ · LHV_vol,i. SG_mix = Σ xᵢ · SG,i. Good for most NG-range mixes."/>
+      <Assumption label="Components tabulated" value="CH4, C2H6, C3H8, C4H10, C5H12, C6H14, C7H16, C8H18, C2H4, C2H2, H2, CO, N2, CO2, H2O, Ar" note="Inert diluents dilute LHV_vol and lift SG — drops MWI."/>
+      <Assumption label="Reference LHV values" value="CH4 909.4, C2H6 1618.7, C3H8 2314.9, H2 273.8 BTU/scf" note="Standard gas-industry tabulated values (Cantera/GPA SP 2172)."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="9. Fuel Flexibility — MWI Derate (Option B)" subtitle="Modified Wobbe Index uses the absolute fuel temperature in the denominator. Derate reflects GE DLE combustor limits.">
+      <Assumption label="Definition" value="MWI = LHV_vol / √(SG · T_fuel_°R)" note="LHV_vol in BTU/scf; T_fuel in absolute Rankine. Higher MWI → higher volumetric energy density."/>
+      <Assumption label="In-spec band" value="40 ≤ MWI ≤ 54" note="Nominal GE DLE range. No derate applied. Default pure-CH4 at 60 °F gives MWI ≈ 53.6."/>
+      <Assumption label="Marginal band" value="35–40 or 54–60" note="Derate 5%. Hardware will run but combustor may need tuning / liner life may be affected."/>
+      <Assumption label="Out-of-spec" value="MWI &lt; 35 or &gt; 60" note="Derate 20%. Typical of very dilute or very heavy fuels."/>
+      <Assumption label="H2 warning" value="x_H2 &gt; 30%" note="Flashback risk in DLE premixer — emitted as a warning regardless of MWI."/>
+      <Assumption label="Low LHV warning" value="LHV_vol &lt; 800 BTU/scf" note="Dilute fuel; fuel flow roughly doubles. Emitted as a warning."/>
+      <Assumption label="Derate application" value="MW_net = MW_uncapped · (1 − derate_pct/100)" note="Applied AFTER the MW_cap min(). Derate stacks with part-load but not with ambient droop."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="10. Engine Deck Anchors" subtitle="Design-point numbers each off-design scaling law is anchored at. These must match the published deck exactly.">
+      <Assumption label="LM6000PF" value="45.0 MW @ 60 °F / 60% RH" note="T3 811 K · P3 30.3 bar · T4 1755 K · η_LHV 42.4% · HR 8493 BTU/kWh · no intercooler."/>
+      <Assumption label="LMS100PB+" value="107.5 MW @ 44 °F / 80% RH" note="T3 644 K · P3 44.0 bar · T4 1825 K · η_LHV 44.0% · HR 8178 BTU/kWh · with intercooler."/>
+      <Assumption label="Anchor method" value="Calibrate combustor_bypass_frac + eta_isen_turb" note="Two per-engine knobs fit both MW and η at anchor. Everything else is physical."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="11. Off-design Scaling" subtitle="How the deck behaves away from its anchor. Not all of this is modeled — the list below states what IS.">
+      <Assumption label="Density lapse" value="mdot_air ∝ ρ_amb · VGV(T_amb)" note="VGV is a simple function of ambient — folded into an engine-specific lapse curve."/>
+      <Assumption label="LMS100 intercooler benefit" value="Architectural" note="LMS100 loses less on hot days than LM6000 because HPC inlet is fixed at T_cool_in. Verified in regression tests."/>
+      <Assumption label="Load line" value="Linear in rated" note="Cap is load_pct · MW_rated_ambient. Part-load T4 droops so MW_gross is super-linear at low load."/>
+      <Assumption label="Humidity" value="Via humid-air R only" note="Higher RH → lower molecular weight → more volumetric mdot at fixed corrected flow."/>
+      <Assumption label="Altitude" value="Not modeled" note="Use P_amb input if needed; scales density directly."/>
+      <Assumption label="Inlet cooling" value="Not modeled" note="No evap / chiller hook. Simulate manually by dropping T_amb."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="12. Solver & Numerics" subtitle="What the backend solver is doing and where convergence is enforced.">
+      <Assumption label="Mechanism" value="GRI-Mech 3.0 (default)" note="53 species, 325 reactions. Alternate mechanisms available on combustor panel only."/>
+      <Assumption label="Combustion equilibrium" value="Cantera equilibrate(&quot;HP&quot;)" note="Element-potential solver. Constant enthalpy & pressure. Used for T_Bulk and T4 back-solve."/>
+      <Assumption label="Turbine expansion" value="Cantera gas.SP = s, P" note="Isentropic outlet state, then non-isentropic correction via η_isen."/>
+      <Assumption label="Compressor work" value="Cantera enthalpy difference" note="Humid-air composition with water vapor → real-gas properties."/>
+      <Assumption label="Thread model" value="Single-thread Cantera pool" note="All Cantera calls serialized server-side. Per-request timeout 180 s (540 s for sweeps)."/>
+      <Assumption label="Units" value="SI internally" note="K, Pa, m, kg/s, W. UI converts to ENG (°F, psia, BTU/kWh) on display."/>
+    </AssumptionsGroup>
+  </div>);
+}
+
 /* ══════════════════ CYCLE PANEL (Gas Turbine) ══════════════════
    Takes ambient conditions + load + engine deck; runs the backend /calc/cycle
    solver (anchored aero-derivative correlation + Cantera equilibrate('HP') phi
@@ -1334,7 +1621,7 @@ function KV({k,v}){return(<div style={{display:"flex",justifyContent:"space-betw
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
 
 /* ══════════════════ MAIN APP ══════════════════ */
-const TABS_BASE=[{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"props",label:"Thermo Database",icon:"📊"}];
+const TABS_BASE=[{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
 const ACCOUNT_TAB={id:"account",label:"Account & Billing",icon:"👤"};
 
 export default function App(){
@@ -1395,7 +1682,9 @@ export default function App(){
   const[integration,setIntegration]=useState("chunked");
   const[heatLossFrac,setHeatLossFrac]=useState(0);
   const[mechanism,setMechanism]=useState("gri30");
-  const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,accurate:accurate&&!!auth.hasOnlineAccess};
+  const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,accurate:accurate&&!!auth.hasOnlineAccess,
+    // Cycle (Option A/B) — exposed for Excel export
+    cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult};
   const hasOnline=!!auth.hasOnlineAccess;
 
   // Checkout return — refresh subscription state after coming back from Stripe
@@ -1628,6 +1917,7 @@ export default function App(){
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="props"&&<PropsPanel/>}
+            {tab==="assumptions"&&<AssumptionsPanel/>}
             {tab==="account"&&auth.isAuthenticated&&<AccountPanel C={C}/>}
           </div>
         </div>

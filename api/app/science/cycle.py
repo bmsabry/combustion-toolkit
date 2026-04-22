@@ -1,11 +1,16 @@
 """Gas-turbine thermodynamic cycle — LM6000PF and LMS100PB+.
 
-Given ambient conditions (P, T, RH) and load%, computes:
-  • Station pressures and temperatures (P1/T1, P2/T2, P2.5/T2.5 for LMS100, P3/T3, T4)
+Given ambient conditions (P, T, RH), load%, and fuel composition, computes:
+  • Station pressures and temperatures (P1/T1, P2/T2, P2.5/T2.5 for LMS100, P3/T3, T4, T5)
   • Inlet air mass flow and fuel mass flow
-  • FAR and phi consistent with the target firing temperature T4
-  • Net shaft power (MW)
+  • FAR4/phi4 at the combustor exit (back-solved so the adiabatic equilibrium
+    product T at (T3, P3) equals the commanded T4)
+  • FAR_Bulk/phi_Bulk/T_Bulk at the primary flame zone
+  • Turbine work, compressor work, parasitic loss, and gross shaft power —
+    all from Cantera enthalpy integrals (Option A energy balance)
+  • Net shaft power MW_net = min(MW_gross, MW_cap) × fuel-flexibility derate
   • Intercooler duty (LMS100 only)
+  • Modified Wobbe Index (MWI) and fuel-flexibility warnings (Option B)
 
 Equivalence ratio phi is back-solved via Cantera equilibrate('HP') at the
 combustor inlet state (T3, P3) so that the product temperature equals the
@@ -21,6 +26,25 @@ Design-point anchors (exactly reproduced by the correlations at load=100%):
     LM6000PF at T_amb=60°F, RH=60%, P_amb=1.013 bar, load=100%
       T3 = 811 K (1000°F)        P3 = 30.3 bar (440 psia)
       T4 = 1755 K (2700°F)       MW_net = 45.0
+
+Energy-balance philosophy (Option A):
+  Turbine: set reactants at (T3, P3, phi4), equilibrate HP → products at T4.
+    Expand isentropically (gas.SP) to P_exhaust; apply η_isen_turb to get
+    actual outlet enthalpy; W_turb = m_total_hot × (h4 − h5).
+  Compressor: enthalpy difference between inlet air at (T1, P_amb) and
+    compressor discharge at (T3, P3) using Cantera for the humid-air mixture.
+    T3 is already set with polytropic η baked in, so the enthalpy integral
+    captures real compressor work including composition effects.
+  Gross shaft: MW_gross = (W_turb − W_comp − W_parasitic) / 1e6.
+  Cap: MW_cap = MW_design × (ρ_amb/ρ_des)^β_MW × load_frac  (OEM nameplate).
+  Net: MW_net = min(MW_gross, MW_cap) × (1 − derate_from_fuel_flex).
+
+Fuel-flexibility derate (Option B):
+  MWI = LHV_vol / √(SG × T_fuel). Reference fuel = pure CH4 at 60°F.
+  Bands (GE DLE guidance): 40–54 in-spec (0% derate); 35–40 or 54–60
+  marginal (5% derate); out-of-spec otherwise (20% derate).
+  Additional warnings: H₂ > 30% mol (flashback risk), LHV_vol < 800 BTU/scf
+  (flame-holding risk).
 
 Off-design behavior is modelled with published aero-derivative performance
 correlations anchored at these points:
@@ -88,18 +112,24 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         "T4_design_K": 1825.37,      # 2825°F (turbine inlet / firing temp)
         "MW_design": 107.5,
         "airflow_design_kg_s": 208.0,  # LMS100 rated inlet flow (~460 lb/s)
-        # PRIVATE efficiency calibration factor — NOT the combustor_air_frac.
-        # This is an opaque fuel-flow scaler so that at the design anchor the
-        # correlation reproduces the published heat rate (~8180 kJ/kWh →
-        # η_LHV ≈ 44 %). It rolls together turbine-cooling losses, stack
-        # losses, and mechanical losses that a 1-D cycle model doesn't
-        # resolve. Users never see this — they only tune combustor_air_frac,
-        # which is a pure flame/dilution split and does NOT affect η.
-        "thermal_eff_calibration": 0.747,
+        # Fraction of compressor discharge air that enters the combustor.
+        # The balance (1 − combustor_bypass_frac) is film/cooling air bled
+        # around the combustor that rejoins downstream. Calibrated so the
+        # design anchor with pure CH4 reproduces the published heat rate
+        # (~8180 kJ/kWh → η_LHV ≈ 44 %). Distinct from combustor_air_frac,
+        # which is the intra-combustor flame/dilution split.
+        "combustor_bypass_frac": 0.747,
+        # Polytropic turbine/compressor efficiencies (Option A physics).
+        # Calibrated so MW_gross = W_turb − W_comp − W_parasitic reaches
+        # MW_cap at the design anchor for pure CH4 humid-air operation.
+        "eta_isen_turb": 0.7640,   # HP+IP+LP expansion, P3 → P_exhaust = 1.05 bar
+        "eta_isen_comp": 0.88,     # used in LPC T-rise; HPC captured by T3 anchor
+        "P_exhaust_bar": 1.05,     # back-pressure at LP turbine exit (stack losses)
+        "W_parasitic_frac_of_rated": 0.015,  # 1.5 % of rated MW (oil pumps, gearbox, aux)
         # Intercooler partition between LPC and HPC
         "PR_LPC_design": 5.0,
         "T2_5_design_K": 310.93,     # intercooler exit ≈ 100°F; HPC inlet
-        "eta_poly": 0.88,
+        "eta_poly": 0.88,            # polytropic compressor η used to raise T2 from T1
         # Off-design shape parameters
         "a_T4": 0.62,    # T4_idle ≈ 1130 K at load=0 (quasi-idle)
         "a_P3": 0.45,    # P3_idle ≈ 20 bar at load=0
@@ -123,11 +153,14 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         "T4_design_K": 1755.37,      # 2700°F
         "MW_design": 45.0,
         "airflow_design_kg_s": 125.0,
-        # PRIVATE efficiency calibration factor — see LMS100 note above.
-        # Calibrated so the LM6000PF design anchor reproduces the published
-        # heat rate (~8500 kJ/kWh → η_LHV ≈ 42.4 %). Independent of the
-        # user-facing combustor_air_frac (flame/dilution split).
-        "thermal_eff_calibration": 0.683,
+        # See note on LMS100 above — fraction of compressor discharge air
+        # that enters the combustor. Calibrated so the LM6000PF design
+        # anchor reproduces the published heat rate (~8500 kJ/kWh → η ≈ 42 %).
+        "combustor_bypass_frac": 0.683,
+        "eta_isen_turb": 0.7416,
+        "eta_isen_comp": 0.88,
+        "P_exhaust_bar": 1.05,
+        "W_parasitic_frac_of_rated": 0.015,
         # T3 floats with ambient. Effective exponent calibrated to typical
         # aero-derivative behavior: T3 ≈ T_amb^0.9 at constant load (slightly
         # sublinear because PR drops on hot days). At design, (T_amb/T_amb_des)^α = 1
@@ -242,6 +275,191 @@ def _phi_for_target_T4(
     return 0.5 * (lo + hi)
 
 
+# -------------------------- Option A: energy balance ----------------------
+def _compressor_work_W(
+    air_x: Dict[str, float],
+    T_in_K: float, P_in_bar: float,
+    T_out_K: float, P_out_bar: float,
+    mdot_kg_s: float,
+) -> float:
+    """Actual shaft work into humid-air stream from inlet to outlet state.
+
+    Uses Cantera enthalpy at (T, P, composition) at both endpoints; the outlet
+    T already has polytropic losses baked in (we pass in the real T3), so this
+    directly returns the real compressor shaft power.
+
+    Returns W (watts); positive = work into the gas.
+    """
+    gas = ct.Solution(GRI_MECH)
+    X = [0.0] * gas.n_species
+    for s, v in air_x.items():
+        idx = gas.species_index(s)
+        if idx >= 0:
+            X[idx] = v
+    gas.TPX = float(T_in_K), float(P_in_bar) * 1e5, X
+    h_in = gas.enthalpy_mass
+    gas.TPX = float(T_out_K), float(P_out_bar) * 1e5, X
+    h_out = gas.enthalpy_mass
+    return float(mdot_kg_s * (h_out - h_in))
+
+
+def _turbine_work_W(
+    fuel_x: Dict[str, float],
+    ox_x: Dict[str, float],
+    phi4: float,
+    T3_K: float,
+    P3_bar: float,
+    P_exhaust_bar: float,
+    mdot_total_kg_s: float,
+    eta_isen: float,
+) -> Dict[str, float]:
+    """Isentropic expansion from combustor-exit equilibrium products to P_exhaust,
+    then apply isentropic efficiency η_s to compute actual outlet enthalpy.
+
+    Combustion: start reactants at (T3, P3), set φ=phi4, equilibrate HP →
+      product state at (T4_eq, P3) — T4_eq ≈ T4_target by design.
+    Expansion: gas.SP = (s4, P_exhaust) → isentropic outlet (T5s, h5s).
+    Actual: h5 = h4 − η · (h4 − h5s) ; W_turb = m_total · (h4 − h5).
+
+    Returns dict with W_W, T4_eq_K, T5_isen_K, T5_actual_K.
+    """
+    gas = ct.Solution(GRI_MECH)
+    fuel_str = ", ".join(f"{k}:{v:.10f}" for k, v in fuel_x.items() if v > 0)
+    ox_str = ", ".join(f"{k}:{v:.10f}" for k, v in ox_x.items() if v > 0)
+    gas.TP = float(T3_K), float(P3_bar) * 1e5
+    gas.set_equivalence_ratio(float(phi4), fuel=fuel_str, oxidizer=ox_str)
+    gas.equilibrate("HP")
+    h4 = gas.enthalpy_mass
+    s4 = gas.entropy_mass
+    T4_eq = float(gas.T)
+    gas.SP = s4, float(P_exhaust_bar) * 1e5
+    h5s = gas.enthalpy_mass
+    T5s = float(gas.T)
+    h5 = h4 - float(eta_isen) * (h4 - h5s)
+    # Find actual outlet T at the given h5, P_exhaust with frozen composition.
+    gas.HP = h5, float(P_exhaust_bar) * 1e5
+    T5 = float(gas.T)
+    W = float(mdot_total_kg_s) * (h4 - h5)
+    return {"W_W": float(W), "T4_eq_K": T4_eq, "T5_isen_K": T5s, "T5_actual_K": T5}
+
+
+# ----------------------- Option B: fuel flexibility (MWI) -----------------
+# Component fuel-property table (dry volume basis, 60 °F, 14.696 psia).
+# LHV_vol in BTU/scf (standard cubic foot, 60°F / 14.696 psia); SG = ρ_gas/ρ_air.
+# Sources: GPSA Engineering Data Book (Vol II, §23), Perry's 8th ed (§2-179),
+# NIST WebBook. Values are standard and widely tabulated.
+_FUEL_PROPS_60F: Dict[str, Dict[str, float]] = {
+    # hydrocarbons
+    "CH4":   {"LHV_vol_BTU_per_scf": 909.4,  "SG_air": 0.5539},
+    "C2H6":  {"LHV_vol_BTU_per_scf": 1618.7, "SG_air": 1.0382},
+    "C3H8":  {"LHV_vol_BTU_per_scf": 2314.9, "SG_air": 1.5225},
+    "C4H10": {"LHV_vol_BTU_per_scf": 3010.8, "SG_air": 2.0068},
+    "C5H12": {"LHV_vol_BTU_per_scf": 3706.9, "SG_air": 2.4911},
+    "C6H14": {"LHV_vol_BTU_per_scf": 4403.9, "SG_air": 2.9755},
+    "C7H16": {"LHV_vol_BTU_per_scf": 5100.0, "SG_air": 3.4598},
+    "C8H18": {"LHV_vol_BTU_per_scf": 5796.1, "SG_air": 3.9441},
+    "C2H4":  {"LHV_vol_BTU_per_scf": 1513.4, "SG_air": 0.9686},
+    "C2H2":  {"LHV_vol_BTU_per_scf": 1449.8, "SG_air": 0.8990},
+    # non-hydrocarbon fuels
+    "H2":    {"LHV_vol_BTU_per_scf": 273.8,  "SG_air": 0.0696},
+    "CO":    {"LHV_vol_BTU_per_scf": 320.5,  "SG_air": 0.9671},
+    # inerts (LHV = 0)
+    "N2":    {"LHV_vol_BTU_per_scf": 0.0,    "SG_air": 0.9672},
+    "CO2":   {"LHV_vol_BTU_per_scf": 0.0,    "SG_air": 1.5196},
+    "H2O":   {"LHV_vol_BTU_per_scf": 0.0,    "SG_air": 0.6220},
+    "AR":    {"LHV_vol_BTU_per_scf": 0.0,    "SG_air": 1.3796},
+}
+
+# Modified Wobbe Index bands for GE DLE combustors (typical guidance).
+# MWI = LHV_vol / √(SG × T_fuel_absolute[°R]), units = BTU/scf·√°R.
+# In-spec 40–54 BTU/scf·√°R (zero derate).
+# Marginal: 35–40 or 54–60 → 5 % performance derate.
+# Out-of-spec: < 35 or > 60 → 20 % performance derate.
+_MWI_IN_SPEC_LO = 40.0
+_MWI_IN_SPEC_HI = 54.0
+_MWI_MARGINAL_LO = 35.0
+_MWI_MARGINAL_HI = 60.0
+_MWI_DERATE_MARGINAL = 0.05
+_MWI_DERATE_OUT_OF_SPEC = 0.20
+
+
+def _fuel_flexibility(fuel_x: Dict[str, float], T_fuel_K: float) -> Dict[str, Any]:
+    """Compute MWI, derate factor, and warnings for the supplied fuel.
+
+    fuel_x    : normalized mole fractions (sum to 1.0), GRI-species keys.
+    T_fuel_K  : fuel delivery temperature (Kelvin); used in MWI denominator.
+
+    Returns a dict with:
+      lhv_vol_BTU_per_scf  : volumetric LHV at 60 °F / 14.696 psia
+      sg_air               : specific gravity vs dry air at same conditions
+      mwi                  : Modified Wobbe Index in BTU/scf·√°R
+      mwi_status           : 'in_spec' | 'marginal' | 'out_of_spec'
+      mwi_derate_pct       : 0.0, 5.0, or 20.0 — applied to MW_net
+      h2_frac_pct          : H₂ mole fraction (%) in fuel
+      warnings             : list of operator-facing strings
+    """
+    total = sum(fuel_x.values())
+    if total <= 0:
+        return {
+            "lhv_vol_BTU_per_scf": 0.0, "sg_air": 0.0, "mwi": 0.0,
+            "mwi_status": "out_of_spec", "mwi_derate_pct": _MWI_DERATE_OUT_OF_SPEC * 100.0,
+            "h2_frac_pct": 0.0, "warnings": ["Fuel composition is empty"],
+        }
+    xnorm = {k: v / total for k, v in fuel_x.items()}
+
+    lhv_vol = 0.0
+    sg = 0.0
+    for s, x in xnorm.items():
+        p = _FUEL_PROPS_60F.get(s)
+        if p is None:
+            # unknown species → treat as inert (SG=1, LHV=0)
+            sg += x * 1.0
+            continue
+        lhv_vol += x * p["LHV_vol_BTU_per_scf"]
+        sg += x * p["SG_air"]
+
+    # Fuel-delivery temperature in Rankine. Default ~520 °R (60 °F) if unset.
+    T_R = max(1.0, float(T_fuel_K) * 9.0 / 5.0)
+    mwi = lhv_vol / math.sqrt(max(sg, 1e-9) * T_R)
+
+    warnings: list[str] = []
+    h2_frac = 100.0 * xnorm.get("H2", 0.0)
+    if h2_frac > 30.0:
+        warnings.append(
+            f"H₂ content is {h2_frac:.1f}% — exceeds 30% DLE premixer flashback limit"
+        )
+    if lhv_vol > 0.0 and lhv_vol < 800.0:
+        warnings.append(
+            f"Volumetric LHV is {lhv_vol:.0f} BTU/scf — below 800 BTU/scf flame-holding threshold"
+        )
+
+    if _MWI_IN_SPEC_LO <= mwi <= _MWI_IN_SPEC_HI:
+        status = "in_spec"
+        derate = 0.0
+    elif _MWI_MARGINAL_LO <= mwi <= _MWI_MARGINAL_HI:
+        status = "marginal"
+        derate = _MWI_DERATE_MARGINAL
+        warnings.append(
+            f"MWI {mwi:.1f} is outside the 40–54 in-spec band — marginal fuel; 5% performance derate applied"
+        )
+    else:
+        status = "out_of_spec"
+        derate = _MWI_DERATE_OUT_OF_SPEC
+        warnings.append(
+            f"MWI {mwi:.1f} is outside the 35–60 acceptable range — out-of-spec fuel; 20% performance derate applied"
+        )
+
+    return {
+        "lhv_vol_BTU_per_scf": float(lhv_vol),
+        "sg_air": float(sg),
+        "mwi": float(mwi),
+        "mwi_status": status,
+        "mwi_derate_pct": float(derate * 100.0),
+        "h2_frac_pct": float(h2_frac),
+        "warnings": warnings,
+    }
+
+
 # ------------------------------- Main entry --------------------------------
 def run(
     engine: str,
@@ -252,6 +470,7 @@ def run(
     T_cool_in_K: Optional[float] = None,
     fuel_pct: Optional[Dict[str, float]] = None,
     combustor_air_frac: Optional[float] = None,
+    T_fuel_K: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Solve the cycle at the requested operating point.
 
@@ -295,6 +514,10 @@ def run(
         Typical DLE primary-zone fractions: 0.80–0.95. Default = 0.88.
         Set = 1.0 to collapse the flame zone onto the combustor exit
         (T_Bulk = T4, phi_Bulk = phi4) — useful for debugging linkage.
+    T_fuel_K
+        Fuel delivery temperature (K). Used only in the Modified Wobbe Index
+        denominator MWI = LHV_vol / √(SG × T_fuel_absolute). Defaults to
+        288.706 K (60 °F) — the reference T for tabulated MWI values.
 
     Returns a dict with all station properties and diagnostics (see
     docstring and CycleResponse schema for fields).
@@ -307,6 +530,8 @@ def run(
         combustor_air_frac = 0.88     # nominal DLE primary-zone split
     # Safety bounds — a value outside [0.3, 1.0] makes no physical sense.
     combustor_air_frac = max(0.30, min(1.00, float(combustor_air_frac)))
+    if T_fuel_K is None:
+        T_fuel_K = 288.706   # 60 °F — reference T for MWI tables
 
     # Normalize load to [20, 100] — gas turbines don't run under 20% load
     load_pct_eff = max(20.0, min(100.0, float(load_pct)))
@@ -414,17 +639,76 @@ def run(
     phi_Bulk = phi4 / f_safe
     T_Bulk_K = _t_ad_at_phi(fuel_x, ox_x, stations["T3_K"], P3_bar, phi_Bulk)
 
-    # --- Fuel flow & efficiency --------------------------------------------
-    # Fuel flow is fixed by the combustor-exit energy balance and is
-    # therefore INDEPENDENT of combustor_air_frac. The private
-    # thermal_eff_calibration factor folds in cooling / stack / mechanical
-    # losses that a 1-D cycle model doesn't resolve, so the design anchor
-    # matches published heat rates. Users never see this knob.
-    thermal_eff_cal = deck["thermal_eff_calibration"]
-    mdot_air_combustor = mdot_air * thermal_eff_cal
+    # --- Fuel flow ----------------------------------------------------------
+    # combustor_bypass_frac is the fraction of compressor-discharge air that
+    # actually enters the combustor; the rest is bypass / film-cooling air
+    # that rejoins downstream of combustion. Fuel flow is pinned by the
+    # combustor-exit energy balance: FAR4 × m_combustor_air produces the
+    # equilibrium product T that equals the commanded T4 at (T3, P3).
+    combustor_bypass_frac = float(deck["combustor_bypass_frac"])
+    mdot_air_combustor = mdot_air * combustor_bypass_frac
     mdot_fuel = mdot_air_combustor * FAR4
 
-    # --- Heat rate & efficiency ---
+    # --- Option A: energy-balance cycle (turbine − compressor − parasitic) --
+    eta_isen_turb = float(deck["eta_isen_turb"])
+    eta_isen_comp = float(deck["eta_isen_comp"])
+    P_exhaust_bar = float(deck["P_exhaust_bar"])
+    W_parasitic_frac = float(deck["W_parasitic_frac_of_rated"])
+    W_parasitic_MW = W_parasitic_frac * deck["MW_design"]
+
+    # Turbine work — hot-section mass flow is combustor air + fuel; the
+    # bypass/cooling air rejoins the hot gas downstream, so the full
+    # compressor-discharge mass eventually passes through the LP turbine.
+    # We use (m_combustor_air + m_fuel) × h-drop through HP+IP+LP turbines
+    # as a simplified total-expansion work. This understates W_turb slightly
+    # (bypass air contributes LP-stage work only), which is absorbed by
+    # η_isen_turb calibrated against the design anchor.
+    mdot_hot = mdot_air + mdot_fuel
+    t_out = _turbine_work_W(
+        fuel_x, ox_x, phi4, stations["T3_K"], stations["P3_bar"],
+        P_exhaust_bar, mdot_hot, eta_isen_turb,
+    )
+    W_turbine_W = t_out["W_W"]
+    T5_actual_K = t_out["T5_actual_K"]
+    T5_isen_K = t_out["T5_isen_K"]
+
+    # Compressor work — sum of LPC + HPC (LMS100) or single stage (LM6000).
+    # The T-rise uses polytropic η (baked into T2 for LMS100 and into the
+    # T_amb^α scaling for LM6000), so a direct Cantera enthalpy difference
+    # captures the real shaft power.
+    if deck["intercooled"]:
+        W_LPC_W = _compressor_work_W(
+            ox_x, T_amb_K, P_amb_bar,
+            stations["T2_K"], stations["P2_bar"], mdot_air,
+        )
+        W_HPC_W = _compressor_work_W(
+            ox_x, stations["T2_5_K"], stations["P2_5_bar"],
+            stations["T3_K"], stations["P3_bar"], mdot_air,
+        )
+        W_compressor_W = W_LPC_W + W_HPC_W
+    else:
+        W_compressor_W = _compressor_work_W(
+            ox_x, T_amb_K, P_amb_bar,
+            stations["T3_K"], stations["P3_bar"], mdot_air,
+        )
+
+    W_turbine_MW = W_turbine_W / 1e6
+    W_compressor_MW = W_compressor_W / 1e6
+    MW_gross = W_turbine_MW - W_compressor_MW - W_parasitic_MW
+
+    # --- Option B: fuel-flexibility derate ---------------------------------
+    fuel_flex = _fuel_flexibility(fuel_x, T_fuel_K)
+    derate_factor = 1.0 - fuel_flex["mwi_derate_pct"] / 100.0
+
+    # --- Net power: min(physics, nameplate) × fuel-flexibility derate -------
+    # MW_max_ambient × load_frac is the OEM nameplate cap (what the engine
+    # is allowed to produce on this ambient day). MW_gross is the physics-
+    # consistent upper bound. The controller takes the smaller of the two.
+    MW_cap = MW_max_ambient * load_frac
+    MW_uncapped = min(max(MW_gross, 0.0), MW_cap)
+    MW_net = max(MW_uncapped * derate_factor, 0.0)
+
+    # --- Heat rate & efficiency --------------------------------------------
     LHV_fuel = _estimate_LHV_mass_J_per_kg(fuel_x)     # J/kg
     Q_fuel_MW = mdot_fuel * LHV_fuel / 1e6
     if MW_net > 1e-6 and Q_fuel_MW > 1e-6:
@@ -448,6 +732,20 @@ def run(
         "load_pct": float(load_pct_eff),
         "MW_max_ambient": float(MW_max_ambient),
         "MW_net": float(MW_net),
+        # Option A — energy-balance decomposition (all in MW)
+        "MW_gross": float(MW_gross),
+        "MW_cap": float(MW_cap),
+        "MW_uncapped_before_derate": float(MW_uncapped),
+        "W_turbine_MW": float(W_turbine_MW),
+        "W_compressor_MW": float(W_compressor_MW),
+        "W_parasitic_MW": float(W_parasitic_MW),
+        "derate_factor": float(derate_factor),
+        "eta_isen_turb": float(eta_isen_turb),
+        "eta_isen_comp": float(eta_isen_comp),
+        "combustor_bypass_frac": float(combustor_bypass_frac),
+        "T5_K": float(T5_actual_K),
+        "T5_isen_K": float(T5_isen_K),
+        "P_exhaust_bar": float(P_exhaust_bar),
         # Stations
         "T1_K": float(stations["T1_K"]),
         "P1_bar": float(stations["P1_bar"]),
@@ -484,6 +782,17 @@ def run(
         "efficiency_LHV": float(efficiency),
         "heat_rate_kJ_per_kWh": float(heat_rate_kJ_per_kWh),
         "LHV_fuel_MJ_per_kg": float(LHV_fuel / 1e6),
+        # Option B — fuel-flexibility block
+        "fuel_flexibility": {
+            "lhv_vol_BTU_per_scf": float(fuel_flex["lhv_vol_BTU_per_scf"]),
+            "sg_air": float(fuel_flex["sg_air"]),
+            "mwi": float(fuel_flex["mwi"]),
+            "mwi_status": fuel_flex["mwi_status"],
+            "mwi_derate_pct": float(fuel_flex["mwi_derate_pct"]),
+            "h2_frac_pct": float(fuel_flex["h2_frac_pct"]),
+            "warnings": list(fuel_flex["warnings"]),
+        },
+        "T_fuel_K": float(T_fuel_K),
         # Humid-air composition at inlet (for reference / Oxidizer linkage)
         "oxidizer_humid_mol_pct": {k: float(v) for k, v in ox_pct.items()},
     }

@@ -396,6 +396,28 @@ class CycleRequest(BaseModel):
             "Default 0.88 (typical DLE primary-zone fraction)."
         ),
     )
+    T_fuel_K: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Fuel delivery temperature in K. Used as denominator in the Modified "
+            "Wobbe Index MWI = LHV_vol/√(SG·T_fuel_absolute). Default 288.706 K (60°F)."
+        ),
+    )
+
+
+class FuelFlexibility(BaseModel):
+    """Modified Wobbe Index analysis and operator warnings (Option B)."""
+
+    lhv_vol_BTU_per_scf: float = 0.0
+    sg_air: float = 0.0
+    mwi: float = 0.0
+    # Classification band: 'in_spec' | 'marginal' | 'out_of_spec'
+    mwi_status: str = "in_spec"
+    # Performance derate (%): 0 / 5 / 20 for in-spec / marginal / out-of-spec
+    mwi_derate_pct: float = 0.0
+    h2_frac_pct: float = 0.0
+    warnings: List[str] = Field(default_factory=list)
 
 
 class CycleResponse(BaseModel):
@@ -412,6 +434,21 @@ class CycleResponse(BaseModel):
     load_pct: float
     MW_max_ambient: float
     MW_net: float
+    # Option A — energy-balance decomposition (all in MW)
+    MW_gross: float = 0.0          # W_turb − W_comp − W_parasitic (physics)
+    MW_cap: float = 0.0            # MW_design × (ρ/ρ_des)^β × load (nameplate)
+    MW_uncapped_before_derate: float = 0.0  # min(MW_gross, MW_cap), before fuel-flex derate
+    W_turbine_MW: float = 0.0
+    W_compressor_MW: float = 0.0
+    W_parasitic_MW: float = 0.0
+    derate_factor: float = 1.0     # (1 − mwi_derate_pct/100)
+    eta_isen_turb: float = 0.0
+    eta_isen_comp: float = 0.0
+    combustor_bypass_frac: float = 1.0
+    T5_K: float = 0.0              # actual turbine exit T
+    T5_isen_K: float = 0.0         # isentropic (ideal) turbine exit T
+    P_exhaust_bar: float = 1.05
+    T_fuel_K: float = 288.706
     # Stations
     T1_K: float
     P1_bar: float
@@ -444,5 +481,7 @@ class CycleResponse(BaseModel):
     efficiency_LHV: float
     heat_rate_kJ_per_kWh: float
     LHV_fuel_MJ_per_kg: float
+    # Option B — fuel-flexibility analysis
+    fuel_flexibility: FuelFlexibility = Field(default_factory=FuelFlexibility)
     # Humid-air composition (reference)
     oxidizer_humid_mol_pct: Dict[str, float]
