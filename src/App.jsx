@@ -1132,7 +1132,7 @@ function PropsPanel(){
       • linkP3  → sidebar Pressure        = P3
       • linkFAR → sidebar phi (and FAR)   = cycle-computed phi at target T4
 */
-function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct,setLoadPct,Tcool,setTcool,linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,result,loading,err}){
+function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct,setLoadPct,Tcool,setTcool,airFrac,setAirFrac,linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx,setLinkOx,result,loading,err}){
   const units=useContext(UnitCtx);
   const {accurate,available}=useContext(AccurateCtx);
   const isLMS=engine==="LMS100PB+";
@@ -1198,6 +1198,14 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
             <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="Intercooler cooling-water supply temperature. LMS100 holds T3 ≈ 644 K as long as the IC can drop air to ~311 K (approach ≈10 K). Warmer supply → T3 creeps up.">Cooling Water T ({uu(units,"T")})</label>
             <NumField value={uv(units,"T",Tcool)} decimals={1} onCommit={v=>setTcool(uvI(units,"T",v))} style={S.inp}/>
           </div>}
+          <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}} title="Fraction of inlet airflow that actually passes through the combustor (primary + dilution). The rest bypasses to cool the turbine hot section. This is the knob that sets thermal efficiency: smaller fraction (more cooling bypass) → less fuel burned to reach T4 → higher η_LHV. Aero-derivative defaults ≈0.60–0.75.">Combustor Air Fraction</label>
+              <NumField value={airFrac} decimals={3} onCommit={v=>setAirFrac(Math.max(0.30,Math.min(1.00,+v)))} style={{width:72,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+            </div>
+            <input type="range" min="0.30" max="1.00" step="0.005" value={airFrac} onChange={e=>setAirFrac(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
+            <div style={{fontSize:9.5,color:C.txtMuted,marginTop:-2,fontStyle:"italic",lineHeight:1.3}}>{(airFrac*100).toFixed(1)}% through combustor · {((1-airFrac)*100).toFixed(1)}% cooling bypass · sets thermal efficiency</div>
+          </div>
         </div>
       </div>
 
@@ -1211,6 +1219,7 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
           {on:linkT3,set:setLinkT3,label:"Air Temperature → T3",tip:"Sidebar Air Temperature (K) ← cycle T3 (combustor inlet / HPC exit)"},
           {on:linkP3,set:setLinkP3,label:"Pressure → P3",tip:"Sidebar Pressure ← cycle P3 (combustor inlet pressure)"},
           {on:linkFAR,set:setLinkFAR,label:"FAR / φ → cycle φ at T4",tip:"Sidebar φ (and FAR) ← cycle φ back-solved from the commanded T4"},
+          {on:linkOx,set:setLinkOx,label:"Oxidizer comp → humid air @ ambient",tip:"Sidebar Oxidizer composition ← cycle's computed humid-air mol % at ambient T/RH. Required for T_ad on Flame Temp to match T4 on this panel (they use the same mechanism and same air)."},
         ].map(l=>(
           <div key={l.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",border:`1px solid ${l.on?C.accent:C.border}`,borderRadius:6,marginBottom:6,background:l.on?`${C.accent}10`:"transparent"}}>
             <div style={{fontSize:11,color:C.txt,fontFamily:"monospace"}} title={l.tip}>
@@ -1271,14 +1280,17 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
       <div style={S.card}>
         <div style={S.cardT}>Flows & Performance</div>
         <div style={{display:"flex",flexDirection:"column",gap:6,fontFamily:"monospace",fontSize:11.5}}>
-          <KV k="Air flow"  v={fmtMdot(result.mdot_air_kg_s)}/>
-          <KV k="Fuel flow" v={fmtMdot(result.mdot_fuel_kg_s)}/>
-          <KV k="FAR (mass)" v={result.FAR.toFixed(5)}/>
-          <KV k="φ"         v={result.phi.toFixed(4)}/>
-          <KV k="Efficiency (LHV)" v={(result.efficiency_LHV*100).toFixed(2)+" %"}/>
-          <KV k="Heat rate"        v={result.heat_rate_kJ_per_kWh.toFixed(0)+" kJ/kWh"}/>
-          <KV k="LHV (fuel)"       v={result.LHV_fuel_MJ_per_kg.toFixed(2)+" MJ/kg"}/>
-          <KV k="ρ_ambient"        v={result.rho_amb_kg_m3.toFixed(3)+" kg/m³"}/>
+          <KV k="Air flow (inlet)"        v={fmtMdot(result.mdot_air_kg_s)}/>
+          <KV k="Air flow (combustor)"    v={fmtMdot(result.mdot_air_combustor_kg_s||result.mdot_air_kg_s*(result.combustor_air_frac||1))}/>
+          <KV k="Fuel flow"               v={fmtMdot(result.mdot_fuel_kg_s)}/>
+          <KV k="FAR (bulk, mass)"        v={result.FAR.toFixed(5)}/>
+          <KV k="FAR_flame (at φ)"        v={(result.FAR_flame||result.FAR).toFixed(5)}/>
+          <KV k="φ (flame zone)"          v={result.phi.toFixed(4)}/>
+          <KV k="Combustor air fraction"  v={((result.combustor_air_frac||1)*100).toFixed(1)+" %"}/>
+          <KV k="Efficiency (LHV)"        v={(result.efficiency_LHV*100).toFixed(2)+" %"}/>
+          <KV k="Heat rate"               v={result.heat_rate_kJ_per_kWh.toFixed(0)+" kJ/kWh"}/>
+          <KV k="LHV (fuel)"              v={result.LHV_fuel_MJ_per_kg.toFixed(2)+" MJ/kg"}/>
+          <KV k="ρ_ambient"               v={result.rho_amb_kg_m3.toFixed(3)+" kg/m³"}/>
           {result.intercooled&&<KV k="Intercooler duty" v={result.intercooler_duty_MW.toFixed(2)+" MW_th"}/>}
         </div>
       </div>
@@ -1336,9 +1348,15 @@ export default function App(){
   const[cycleRH,setCycleRH]=useState(60.0);            // %
   const[cycleLoad,setCycleLoad]=useState(100.0);       // %
   const[cycleTcool,setCycleTcool]=useState(288.15);    // K (15 C) — LMS100 IC supply
+  // Combustor-air fraction is the real physical knob that sets thermal efficiency.
+  // Per-engine defaults are calibrated so the published design-point η matches
+  // (LM6000PF → 42.4 % at 0.683, LMS100PB+ → 44.0 % at 0.747).
+  const CYCLE_AIRFRAC_DEFAULT={"LM6000PF":0.683,"LMS100PB+":0.747};
+  const[cycleAirFrac,setCycleAirFrac]=useState(CYCLE_AIRFRAC_DEFAULT["LM6000PF"]);
   const[linkT3,setLinkT3]=useState(true);
   const[linkP3,setLinkP3]=useState(true);
   const[linkFAR,setLinkFAR]=useState(true);
+  const[linkOx,setLinkOx]=useState(true);
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
   // Premixer stability inputs. D_fh = flameholder diameter (Zukoski τ_BO).
   // L_premix / V_premix = premixer geometry (autoignition safety: τ_res < τ_ign).
@@ -1398,6 +1416,14 @@ export default function App(){
   // Gas-turbine cycle backend call. Fires only in Accurate Mode (requires FULL subscription).
   // Uses the same fuel composition as the rest of the toolkit so linked phi is self-consistent.
   // Result drives the CyclePanel *and* the sidebar linkage toggles (T_air←T3, P←P3, phi←cycle phi).
+  // Reset the combustor-air fraction to the per-engine default whenever the user
+  // picks a different engine. They can still over-ride it via the Cycle-panel slider.
+  useEffect(()=>{
+    const d=CYCLE_AIRFRAC_DEFAULT[cycleEngine];
+    if(d!==undefined)setCycleAirFrac(d);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[cycleEngine]);
+
   const bkCycle=useBackendCalc("cycle",{
     engine:cycleEngine,
     P_amb_bar:cyclePamb,
@@ -1406,6 +1432,7 @@ export default function App(){
     load_pct:cycleLoad,
     T_cool_in_K:cycleEngine==="LMS100PB+"?cycleTcool:null,
     fuel_pct:nonzero(fuel),
+    combustor_air_frac:cycleAirFrac,
   },accurate&&hasOnline);
   const cycleResult=bkCycle.data;
 
@@ -1418,6 +1445,23 @@ export default function App(){
     if(linkFAR)setPhiClamped(cycleResult.phi);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[cycleResult,linkT3,linkP3,linkFAR]);
+
+  // Oxidizer linkage — propagate the cycle's humid-air composition (at ambient
+  // T/RH) into the sidebar Oxidizer state. Required so T_ad on Flame Temp uses
+  // the exact same oxidizer as the cycle's T4 back-solve. Backend returns keys
+  // in GRI-Mech-style casing (O2, N2, AR, CO2, H2O) — normalize AR → Ar.
+  useEffect(()=>{
+    if(!cycleResult||!linkOx)return;
+    const src=cycleResult.oxidizer_humid_mol_pct;
+    if(!src||typeof src!=="object")return;
+    const next={};OX_SP.forEach(s=>next[s]=0);
+    Object.entries(src).forEach(([k,v])=>{
+      const K=k==="AR"?"Ar":k;
+      if(K in next)next[K]=Number(v)||0;
+    });
+    setOx(next);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[cycleResult,linkOx]);
 
   return(
     <UnitCtx.Provider value={units}>
@@ -1483,8 +1527,11 @@ export default function App(){
               <strong style={{color:C.accent2,fontSize:11}}>📌 Quick Start:</strong> <span style={{fontSize:10}}>Select a fuel preset below (e.g., "Pipeline NG"), set your equivalence ratio and conditions, then explore each tab. All panels share these settings.</span></div>
             <CompEditor title="Fuel (mol%)" comp={fuel} setComp={setFuel} presets={FUEL_PRESETS} speciesList={FUEL_SP} accent={C.accent2} initialPreset="Pipeline NG (US)"
               helpText="Enter fuel composition in mole percent. Select a preset for common fuels or enter custom values. Total must sum to 100%. CO₂ and N₂ in fuel are treated as diluents."/>
-            <CompEditor title="Oxidizer (mol%)" comp={ox} setComp={setOx} presets={OX_PRESETS} speciesList={OX_SP} accent={C.accent3} initialPreset="Humid Air (60%RH 25°C)"
-              helpText="Enter oxidizer composition in mole percent. 'Dry Air' is the standard. Use humid air, O₂-enriched, or vitiated air for specialized analyses."/>
+            <div style={{position:"relative"}}>
+              {accurate&&hasOnline&&linkOx&&<div style={{position:"absolute",top:10,right:12,zIndex:2}}><LinkChip onBreak={()=>setLinkOx(false)} label="Linked to Cycle humid air"/></div>}
+              <CompEditor title="Oxidizer (mol%)" comp={ox} setComp={setOx} presets={OX_PRESETS} speciesList={OX_SP} accent={C.accent3} initialPreset="Humid Air (60%RH 25°C)"
+                helpText="Enter oxidizer composition in mole percent. 'Dry Air' is the standard. Use humid air, O₂-enriched, or vitiated air for specialized analyses."/>
+            </div>
             <div style={{background:C.bg2,border:`1px solid ${C.accent}25`,borderRadius:8,padding:12}}>
               <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6}}>Operating Conditions</div>
               <div style={{fontSize:9.5,color:C.txtMuted,lineHeight:1.5,marginBottom:8,fontStyle:"italic"}}>These conditions apply to all tabs. φ=1 is stoichiometric; φ&lt;1 lean; φ&gt;1 rich.</div>
@@ -1556,9 +1603,11 @@ export default function App(){
               RH={cycleRH} setRH={setCycleRH}
               loadPct={cycleLoad} setLoadPct={setCycleLoad}
               Tcool={cycleTcool} setTcool={setCycleTcool}
+              airFrac={cycleAirFrac} setAirFrac={setCycleAirFrac}
               linkT3={linkT3} setLinkT3={setLinkT3}
               linkP3={linkP3} setLinkP3={setLinkP3}
               linkFAR={linkFAR} setLinkFAR={setLinkFAR}
+              linkOx={linkOx} setLinkOx={setLinkOx}
               result={cycleResult} loading={bkCycle.loading} err={bkCycle.err}
             />}
             {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} combMode={combMode} setCombMode={setCombMode}/>}

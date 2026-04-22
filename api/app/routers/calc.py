@@ -189,6 +189,7 @@ def calc_cycle(body: CycleRequest, _: User = Depends(require_full_subscription))
         body.load_pct,
         body.T_cool_in_K,
         body.fuel_pct,
+        body.combustor_air_frac,
     )
     return CycleResponse(**result)
 

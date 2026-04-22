@@ -88,6 +88,14 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         "T4_design_K": 1825.37,      # 2825°F (turbine inlet / firing temp)
         "MW_design": 107.5,
         "airflow_design_kg_s": 208.0,  # LMS100 rated inlet flow (~460 lb/s)
+        # Default combustor air fraction: fraction of inlet airflow that
+        # actually passes through the combustor primary + dilution path.
+        # The remainder (~25 %) bypasses to cool the turbine hot section.
+        # 0.747 is calibrated to reproduce the published design heat rate
+        # (~8180 kJ/kWh → η_LHV ≈ 44 %) at the 44°F / 80 %RH anchor.
+        # Users can override on the panel to match a specific machine's
+        # cooling fraction — this is the knob that sets thermal efficiency.
+        "combustor_air_frac_default": 0.747,
         # Intercooler partition between LPC and HPC
         "PR_LPC_design": 5.0,
         "T2_5_design_K": 310.93,     # intercooler exit ≈ 100°F; HPC inlet
@@ -115,6 +123,11 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         "T4_design_K": 1755.37,      # 2700°F
         "MW_design": 45.0,
         "airflow_design_kg_s": 125.0,
+        # Default combustor air fraction: fraction of inlet airflow that
+        # actually passes through the combustor primary + dilution path.
+        # Calibrated to reproduce the published design heat rate
+        # (~8560 kJ/kWh → η_LHV ≈ 42 %) at the design anchor.
+        "combustor_air_frac_default": 0.683,
         # T3 floats with ambient. Effective exponent calibrated to typical
         # aero-derivative behavior: T3 ≈ T_amb^0.9 at constant load (slightly
         # sublinear because PR drops on hot days). At design, (T_amb/T_amb_des)^α = 1
@@ -224,6 +237,7 @@ def run(
     load_pct: float,
     T_cool_in_K: Optional[float] = None,
     fuel_pct: Optional[Dict[str, float]] = None,
+    combustor_air_frac: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Solve the cycle at the requested operating point.
 
@@ -246,6 +260,16 @@ def run(
         hold T3 at its design value and T3 will drift upward.
     fuel_pct
         Fuel composition in mol %. Defaults to US pipeline natural gas.
+    combustor_air_frac
+        Fraction of inlet airflow that actually passes through the
+        combustor (primary + dilution). The rest bypasses to cool the
+        turbine hot section. This is the knob that sets thermal
+        efficiency: at fixed T3 / T4 / MW_net, a smaller combustor
+        fraction means less fuel burned (because flame-zone phi is
+        fixed by T4), and therefore higher efficiency. Typical aero-
+        derivative values are 0.60–0.75 (i.e. 25–40 % cooling bypass).
+        If None, uses the deck default (0.700 for LMS100PB+, 0.683
+        for LM6000PF — calibrated to reproduce published heat rates).
 
     Returns a dict with all station properties and diagnostics (see
     docstring and CycleResponse schema for fields).
@@ -254,6 +278,10 @@ def run(
         raise ValueError(f"Unknown engine '{engine}'. Options: {list(ENGINE_DECKS)}")
     deck = ENGINE_DECKS[engine]
     fuel_pct = fuel_pct or dict(_DEFAULT_FUEL)
+    if combustor_air_frac is None:
+        combustor_air_frac = deck["combustor_air_frac_default"]
+    # Safety bounds — a value outside [0.3, 1.0] makes no physical sense.
+    combustor_air_frac = max(0.30, min(1.00, float(combustor_air_frac)))
 
     # Normalize load to [20, 100] — gas turbines don't run under 20% load
     load_pct_eff = max(20.0, min(100.0, float(load_pct)))
@@ -333,26 +361,38 @@ def run(
     stations["T4_K"] = T4_K
 
     # --- Phi from Cantera equilibrium HP at (T3, P3) targeting T4 ---
+    # This phi is the FLAME-ZONE equivalence ratio — the one that, when
+    # mixed with the *combustor* airflow, reaches T4 at equilibrium.
+    # It's what the Flame-Temp / Combustor panels will use if linked.
     ox_pct = _humid_air_mol_pct(T_amb_K, P_amb_bar, RH_pct)
     fuel_x = _normalize_to_gri(fuel_pct)
     ox_x = _normalize_to_gri(ox_pct)
     phi = _phi_for_target_T4(fuel_x, ox_x, stations["T3_K"], P3_bar, T4_K)
 
-    # Physical fuel mass fraction at this phi → FAR = Y_f / (1 − Y_f)
+    # Flame-zone fuel mass fraction at this phi → FAR_flame = Y_f / (1 − Y_f)
     Y_f = fuel_mass_fraction_at_phi(fuel_x, ox_x, phi, GRI_MECH)
-    FAR = Y_f / max(1.0 - Y_f, 1e-20)
-    mdot_fuel = mdot_air * FAR
+    FAR_flame = Y_f / max(1.0 - Y_f, 1e-20)
 
-    # --- Heat rate ---
-    # Compute LHV (mass basis) via a Cantera enthalpy-of-combustion reference
-    # calc: burn the fuel to CO2 + H2O at 298 K, ΔH_combustion per kg_fuel.
+    # --- Fuel flow from combustor air ---
+    # Real aero-derivatives bypass ~25–40 % of inlet air to cool the
+    # turbine hot section; that air never sees the flame. The fuel
+    # actually burned is set by FAR_flame × (combustor airflow), NOT
+    # × inlet airflow. Using inlet airflow here is what broke the
+    # efficiency calc before.
+    mdot_air_combustor = mdot_air * combustor_air_frac
+    mdot_fuel = mdot_air_combustor * FAR_flame
+    # Bulk FAR = total fuel / total INLET air (what the overall engine sees)
+    FAR_bulk = mdot_fuel / max(mdot_air, 1e-20)
+
+    # --- Heat rate & efficiency ---
     LHV_fuel = _estimate_LHV_mass_J_per_kg(fuel_x)     # J/kg
-    # Heat rate kJ/kWh  = (fuel · LHV / MW_net) · 3600 (J/s)/(kJ) · ...
-    if MW_net > 1e-6:
-        heat_rate_kJ_per_kWh = (mdot_fuel * LHV_fuel / (MW_net * 1e6)) * 3600.0
+    Q_fuel_MW = mdot_fuel * LHV_fuel / 1e6
+    if MW_net > 1e-6 and Q_fuel_MW > 1e-6:
+        efficiency = MW_net / Q_fuel_MW
+        heat_rate_kJ_per_kWh = 3600.0 / efficiency
     else:
+        efficiency = 0.0
         heat_rate_kJ_per_kWh = 0.0
-    efficiency = (MW_net * 1e6) / (mdot_fuel * LHV_fuel) if (mdot_fuel * LHV_fuel) > 0 else 0.0
 
     return {
         "engine": engine,
@@ -381,14 +421,20 @@ def run(
         "intercooler_duty_MW": float(stations.get("intercooler_duty_MW", 0.0)),
         # Flows
         "mdot_air_kg_s": float(mdot_air),
+        "mdot_air_combustor_kg_s": float(mdot_air_combustor),
         "mdot_fuel_kg_s": float(mdot_fuel),
-        "FAR": float(FAR),
+        # FAR_bulk = total fuel / total inlet air (what a plant operator measures)
+        "FAR": float(FAR_bulk),
+        # FAR_flame = flame-zone FAR at the equivalence ratio that hits T4
+        "FAR_flame": float(FAR_flame),
         "phi": float(phi),
+        # Combustor air split (user-tunable; 0.70 → 30 % cooling bypass)
+        "combustor_air_frac": float(combustor_air_frac),
         # Performance
         "efficiency_LHV": float(efficiency),
         "heat_rate_kJ_per_kWh": float(heat_rate_kJ_per_kWh),
         "LHV_fuel_MJ_per_kg": float(LHV_fuel / 1e6),
-        # Humid-air composition at inlet (for reference)
+        # Humid-air composition at inlet (for reference / Oxidizer linkage)
         "oxidizer_humid_mol_pct": {k: float(v) for k, v in ox_pct.items()},
     }
 

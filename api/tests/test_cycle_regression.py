@@ -1,16 +1,21 @@
 """Regression tests for the gas-turbine cycle solver (LM6000PF, LMS100PB+).
 
-The pinned design-point anchors are the two hard constraints the user gave:
+The pinned design-point anchors are the hard constraints the user gave:
 
     LMS100PB+ at 44°F / 80% RH / 1.013 bar / 100% load:
-        T3 = 644.26 K,  P3 = 44.0 bar,  T4 = 1825.37 K,  MW_net = 107.5
+        T3 = 644.26 K,  P3 = 44.0 bar,  T4 = 1825.37 K, MW_net = 107.5
+        η_LHV ≈ 44 %  (heat rate ≈ 8180 kJ/kWh)
 
     LM6000PF  at 60°F / 60% RH / 1.013 bar / 100% load:
-        T3 = 810.93 K,  P3 = 30.3  bar, T4 = 1755.37 K,  MW_net = 45.0
+        T3 = 810.93 K,  P3 = 30.3  bar, T4 = 1755.37 K, MW_net = 45.0
+        η_LHV ≈ 42 %  (heat rate ≈ 8500 kJ/kWh)
 
-At design these should be reproduced exactly (engine decks anchor there).
-Off-design values are pinned loosely so that minor-version drift in Cantera
-or tweaks to the correlation don't trigger false regressions.
+Efficiency is a DERIVED output from the user-tunable combustor_air_frac
+(the hot-section cooling-air bypass fraction). The per-engine default
+combustor_air_frac is calibrated so the published design-point η is
+reproduced when the user leaves the knob alone. Tests below pin both
+the thermodynamic stations AND the design efficiency so we catch
+regressions in either direction.
 """
 from __future__ import annotations
 
@@ -30,6 +35,10 @@ def test_lms100_design_anchor_exact():
     assert r["intercooled"] is True
     # Intercooler duty must be positive and in a sensible range
     assert 20.0 < r["intercooler_duty_MW"] < 60.0
+    # Published efficiency must land near 44 % LHV (±0.5 pt)
+    assert r["efficiency_LHV"] == pytest.approx(0.440, abs=0.005), r["efficiency_LHV"]
+    # Heat rate ~8180 kJ/kWh at 44 % eff
+    assert r["heat_rate_kJ_per_kWh"] == pytest.approx(8180.0, abs=100.0)
 
 
 def test_lm6000_design_anchor_exact():
@@ -42,6 +51,32 @@ def test_lm6000_design_anchor_exact():
     # No intercooler path → T2 == T3, no IC duty
     assert r["T2_K"] == pytest.approx(r["T3_K"], abs=0.1)
     assert r["intercooler_duty_MW"] == 0.0
+    # Published efficiency must land near 42 % LHV
+    assert r["efficiency_LHV"] == pytest.approx(0.424, abs=0.010), r["efficiency_LHV"]
+    assert r["heat_rate_kJ_per_kWh"] == pytest.approx(8490.0, abs=150.0)
+
+
+def test_lms100_efficiency_exceeds_lm6000_at_design():
+    """The whole point of the LMS100 intercooler: thermal efficiency must
+    beat the non-intercooled LM6000 at each engine's own design point."""
+    r_lms = cycle.run("LMS100PB+", 1.01325, 279.817, 80.0, 100.0)
+    r_lm = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 100.0)
+    assert r_lms["efficiency_LHV"] > r_lm["efficiency_LHV"] + 0.010, (
+        f"IC engine must beat non-IC engine by >1 pt: {r_lms['efficiency_LHV']} vs {r_lm['efficiency_LHV']}"
+    )
+
+
+def test_combustor_air_frac_drives_efficiency():
+    """Efficiency is a monotonic function of combustor_air_frac: smaller
+    fraction (more cooling bypass) → less fuel burned → higher η."""
+    r_low = cycle.run("LMS100PB+", 1.01325, 279.817, 80.0, 100.0, combustor_air_frac=0.60)
+    r_default = cycle.run("LMS100PB+", 1.01325, 279.817, 80.0, 100.0)
+    r_high = cycle.run("LMS100PB+", 1.01325, 279.817, 80.0, 100.0, combustor_air_frac=0.90)
+    assert r_low["efficiency_LHV"] > r_default["efficiency_LHV"] > r_high["efficiency_LHV"]
+    # Thermodynamic stations must NOT depend on the air split
+    assert r_low["T3_K"] == pytest.approx(r_default["T3_K"])
+    assert r_low["T4_K"] == pytest.approx(r_default["T4_K"])
+    assert r_low["MW_net"] == pytest.approx(r_default["MW_net"])
 
 
 # ------------------------- ambient density trends --------------------------
@@ -95,22 +130,23 @@ def test_part_load_drops_t4():
 # ----------------------- FAR / phi consistency -----------------------------
 
 def test_phi_from_t4_is_lean():
-    """Design-point phi must be clearly lean (<0.6) for both engines."""
+    """Design-point flame-zone phi must be clearly lean (<0.6) for both engines.
+
+    Flame-zone FAR (FAR_flame) must be near phi·FAR_stoich ≈ 0.03 for lean
+    DLE combustion. Bulk FAR (FAR) is smaller because cooling-air bypass
+    dilutes the total stream.
+    """
     r_lms = cycle.run("LMS100PB+", 1.01325, 279.817, 80.0, 100.0)
     r_lm = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 100.0)
+    # Flame-zone phi (the one that drives T_ad on the Flame-Temp panel when linked)
     assert 0.4 < r_lms["phi"] < 0.6
     assert 0.4 < r_lm["phi"] < 0.6
-    # FAR ~ 0.025–0.035 for lean natural gas DLE (phi·FAR_stoich, with FAR_stoich ≈ 0.058)
-    assert 0.020 < r_lms["FAR"] < 0.040
-    assert 0.020 < r_lm["FAR"] < 0.040
-
-
-def test_efficiency_and_heat_rate_sensible():
-    """Efficiency should land in the aero-derivative band (25–50 %) and HR > 6500 kJ/kWh."""
-    for eng, T_amb, RH in [("LMS100PB+", 279.817, 80.0), ("LM6000PF", 288.706, 60.0)]:
-        r = cycle.run(eng, 1.01325, T_amb, RH, 100.0)
-        assert 0.25 < r["efficiency_LHV"] < 0.50, (eng, r["efficiency_LHV"])
-        assert 6500.0 < r["heat_rate_kJ_per_kWh"] < 14000.0, (eng, r["heat_rate_kJ_per_kWh"])
+    # Flame-zone FAR ~ phi · FAR_stoich, where FAR_stoich(CH4/humid-air) ≈ 0.058
+    assert 0.020 < r_lms["FAR_flame"] < 0.040
+    assert 0.020 < r_lm["FAR_flame"] < 0.040
+    # Bulk FAR < flame FAR by exactly the air-split factor
+    for r in (r_lms, r_lm):
+        assert r["FAR"] == pytest.approx(r["FAR_flame"] * r["combustor_air_frac"], rel=1e-6)
 
 
 # ------------------------------ input guards -------------------------------

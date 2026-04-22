@@ -385,6 +385,17 @@ class CycleRequest(BaseModel):
         default=None,
         description="Fuel composition in mol % (defaults to US pipeline natural gas)",
     )
+    combustor_air_frac: Optional[float] = Field(
+        default=None,
+        ge=0.30,
+        le=1.00,
+        description=(
+            "Fraction of inlet airflow that passes through the combustor (primary "
+            "+ dilution). The rest bypasses to cool the turbine hot section. "
+            "This is the knob that sets thermal efficiency. Typical aero-derivative "
+            "values: 0.60–0.75. If None, uses the per-engine deck default."
+        ),
+    )
 
 
 class CycleResponse(BaseModel):
@@ -414,9 +425,12 @@ class CycleResponse(BaseModel):
     intercooler_duty_MW: float = 0.0
     # Flows
     mdot_air_kg_s: float
+    mdot_air_combustor_kg_s: float = 0.0
     mdot_fuel_kg_s: float
-    FAR: float
-    phi: float
+    FAR: float             # bulk FAR = fuel / inlet air
+    FAR_flame: float = 0.0  # flame-zone FAR (at phi that hits T4)
+    phi: float             # flame-zone phi
+    combustor_air_frac: float = 1.0
     # Performance
     efficiency_LHV: float
     heat_rate_kJ_per_kWh: float
