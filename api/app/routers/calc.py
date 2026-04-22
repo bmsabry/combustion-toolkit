@@ -16,6 +16,8 @@ from ..schemas import (
     AutoignitionResponse,
     CombustorRequest,
     CombustorResponse,
+    CycleRequest,
+    CycleResponse,
     ExhaustRequest,
     ExhaustResponse,
     FlameSpeedRequest,
@@ -25,7 +27,7 @@ from ..schemas import (
     PropsRequest,
     PropsResponse,
 )
-from ..science import aft, autoignition, combustor, exhaust, flame_speed, flame_speed_sweep, props
+from ..science import aft, autoignition, combustor, cycle, exhaust, flame_speed, flame_speed_sweep, props
 
 log = logging.getLogger("calc")
 router = APIRouter(prefix="/calc", tags=["calc (accurate Cantera)"])
@@ -174,6 +176,21 @@ def calc_exhaust(body: ExhaustRequest, _: User = Depends(require_full_subscripti
 def calc_props(body: PropsRequest, _: User = Depends(require_full_subscription)) -> PropsResponse:
     result = _run_in_pool(props.run, body.mixture, body.T, body.P)
     return PropsResponse(**result)
+
+
+@router.post("/cycle", response_model=CycleResponse)
+def calc_cycle(body: CycleRequest, _: User = Depends(require_full_subscription)) -> CycleResponse:
+    result = _run_in_pool(
+        cycle.run,
+        body.engine,
+        body.P_amb_bar,
+        body.T_amb_K,
+        body.RH_pct,
+        body.load_pct,
+        body.T_cool_in_K,
+        body.fuel_pct,
+    )
+    return CycleResponse(**result)
 
 
 @router.post("/autoignition", response_model=AutoignitionResponse)

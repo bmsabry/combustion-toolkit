@@ -21,6 +21,7 @@ const BUSY_LABELS = {
   exhaust: "Exhaust composition (Cantera equilibrium)",
   props: "Fluid properties (Cantera)",
   autoignition: "Autoignition delay (Cantera 0D)",
+  cycle: "Gas turbine cycle (Cantera equilibrium + correlations)",
   flame_sweep: "Flame speed sweep curves (Cantera 1D × N points)",
 };
 const UC = {
@@ -371,6 +372,11 @@ const C={bg:"#0D1117",bg2:"#161B22",bg3:"#1C2128",border:"#30363D",accent:"#2DD4
 const hs={box:{fontSize:10.5,lineHeight:1.55,color:C.txtDim,padding:"10px 12px",background:`${C.accent}08`,border:`1px solid ${C.accent}18`,borderRadius:6,marginBottom:10,fontFamily:"'Barlow',sans-serif"},em:{color:C.accent,fontWeight:600},warn:{color:C.accent2,fontWeight:600}};
 
 // ── Help Components ──
+function LinkChip({onBreak,label}){return(<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4,padding:"3px 7px",background:`${C.accent}15`,border:`1px solid ${C.accent}50`,borderRadius:4,fontSize:9.5,fontFamily:"monospace"}}>
+  <span style={{color:C.accent}}>🔗 {label}</span>
+  <button onClick={onBreak} title="Stop pulling this value from the Cycle panel" style={{padding:"1px 6px",fontSize:8.5,fontWeight:700,color:C.accent2,background:"transparent",border:`1px solid ${C.accent2}70`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>BREAK</button>
+</div>);}
+
 function HelpBox({children,title="ℹ️ How It Works"}){const[open,setOpen]=useState(false);return(<div style={{marginBottom:10}}>
   <button onClick={()=>setOpen(!open)} style={{background:"none",border:`1px solid ${C.accent}20`,borderRadius:5,padding:"5px 10px",cursor:"pointer",color:C.accent,fontSize:10,fontWeight:600,fontFamily:"monospace",letterSpacing:".5px",display:"flex",alignItems:"center",gap:5}}>
     <span style={{fontSize:12}}>{open?"▾":"▸"}</span>{title}</button>
@@ -506,7 +512,7 @@ function useBackendCalc(kind, args, enabled){
   const key=JSON.stringify(args||{});
   useEffect(()=>{
     if(!enabled){setData(null);setErr(null);setLoading(false);return;}
-    const fn={aft:api.calcAFT,flame:api.calcFlameSpeed,combustor:api.calcCombustor,exhaust:api.calcExhaust,props:api.calcProps,autoignition:api.calcAutoignition}[kind];
+    const fn={aft:api.calcAFT,flame:api.calcFlameSpeed,combustor:api.calcCombustor,exhaust:api.calcExhaust,props:api.calcProps,autoignition:api.calcAutoignition,cycle:api.calcCycle}[kind];
     if(!fn){return;}
     let cancelled=false;setLoading(true);setErr(null);
     const endBusy=begin(BUSY_LABELS[kind]||kind);
@@ -1117,11 +1123,199 @@ function PropsPanel(){
         <thead><tr>{[`Temperature (${uu(units,"T")})`,`Cp (${uu(units,"cp")})`,`Enthalpy (${uu(units,"h_mol")})`,`Entropy (${uu(units,"s_mol")})`,`Gibbs G (${uu(units,"h_mol")})`].map(h=><th key={h} style={{textAlign:"left",padding:"6px 8px",borderBottom:`1px solid ${C.border}`,color:C.txtDim,fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",position:"sticky",top:0,background:C.bg3}}>{h}</th>)}</tr></thead>
         <tbody>{data.map((r,i)=>(<tr key={i} style={{background:i%2?`${C.bg}55`:"transparent"}}><td style={{padding:"4px 8px",color:C.txt}}>{r.T.toFixed(1)}</td><td style={{padding:"4px 8px",color:C.txtDim}}>{r.Cp.toFixed(3)}</td><td style={{padding:"4px 8px",color:C.txtDim}}>{r.H.toFixed(3)}</td><td style={{padding:"4px 8px",color:C.txtDim}}>{r.S.toFixed(3)}</td><td style={{padding:"4px 8px",color:C.txtDim}}>{r.G.toFixed(3)}</td></tr>))}</tbody></table></div></div></div>);}
 
+/* ══════════════════ CYCLE PANEL (Gas Turbine) ══════════════════
+   Takes ambient conditions + load + engine deck; runs the backend /calc/cycle
+   solver (anchored aero-derivative correlation + Cantera equilibrate('HP') phi
+   back-solve). Headline output is MW_net. Three linkage toggles push cycle
+   outputs into the other panels' operating conditions:
+      • linkT3  → sidebar Air Temperature = T3
+      • linkP3  → sidebar Pressure        = P3
+      • linkFAR → sidebar phi (and FAR)   = cycle-computed phi at target T4
+*/
+function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct,setLoadPct,Tcool,setTcool,linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,result,loading,err}){
+  const units=useContext(UnitCtx);
+  const {accurate,available}=useContext(AccurateCtx);
+  const isLMS=engine==="LMS100PB+";
+  const fmtT=K=>uv(units,"T",K).toFixed(1)+" "+uu(units,"T");
+  const fmtP=bar=>{
+    // Internal unit is bar (cycle outputs bar). Display uses the main unit
+    // system, which has atm in SI and psia in ENG — convert accordingly.
+    if(units==="SI")return (bar/1.01325).toFixed(3)+" atm";
+    return (bar*14.5038).toFixed(1)+" psia";
+  };
+  const fmtMdot=k=>{
+    if(units==="SI")return k.toFixed(2)+" kg/s";
+    return (k*2.20462).toFixed(1)+" lb/s";
+  };
+
+  // Design-point anchor hints — help the user see the reference state
+  // the off-design correlation is anchored to.
+  const DESIGN_HINTS={
+    "LM6000PF":"60 °F / 60 % RH / 100 % → MW 45.0, T3 811 K, P3 30.3 bar, T4 1755 K",
+    "LMS100PB+":"44 °F / 80 % RH / 100 % → MW 107.5, T3 644 K, P3 44.0 bar, T4 1825 K (intercooled)",
+  };
+
+  return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <HelpBox title="ℹ️ Gas Turbine Cycle — How It Works">
+      <p style={{margin:"0 0 6px"}}>Computes the thermodynamic cycle of a GE <span style={hs.em}>LM6000PF</span> or <span style={hs.em}>LMS100PB+</span> aero-derivative under the specified ambient and load. Uses published performance correlations <span style={hs.em}>anchored exactly at each engine's published design point</span>; ambient density and load scaling follow typical aero-derivative behavior.</p>
+      <p style={{margin:"0 0 6px"}}>The combustor firing temperature <span style={hs.em}>T4</span> is commanded by the deck. The equivalence ratio φ is back-solved via Cantera <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>equilibrate("HP")</code> at the (T3, P3) combustor inlet state so that product T = T4. FAR falls out from the physical fuel mass fraction.</p>
+      <p style={{margin:0}}><span style={hs.em}>Linkages:</span> turning on the three toggles pipes T3, P3, and φ into the sidebar Air Temperature, Pressure, and φ/FAR fields so every other tab (AFT, flame speed, combustor, exhaust, autoignition) runs at the engine's actual operating state. Each toggle has a <span style={hs.warn}>Break link</span> button to reclaim manual control.</p>
+    </HelpBox>
+
+    {/* Inputs */}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+      <div style={S.card}>
+        <div style={S.cardT}>Engine & Ambient</div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          <div>
+            <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}}>Engine</label>
+            <select style={S.sel} value={engine} onChange={e=>setEngine(e.target.value)}>
+              <option value="LM6000PF">GE LM6000PF (2-spool, non-intercooled)</option>
+              <option value="LMS100PB+">GE LMS100PB+ (3-spool, intercooled)</option>
+            </select>
+            <div style={{fontSize:9.5,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.4}}>{DESIGN_HINTS[engine]}</div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <div>
+              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="Ambient (inlet filter) pressure">Ambient Pressure ({uu(units,"P")})</label>
+              <NumField value={uv(units,"P",Pamb/1.01325)} decimals={3} onCommit={v=>setPamb(uvI(units,"P",v)*1.01325)} style={S.inp}/>
+            </div>
+            <div>
+              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="Ambient dry-bulb temperature at the inlet filter">Ambient T ({uu(units,"T")})</label>
+              <NumField value={uv(units,"T",Tamb)} decimals={1} onCommit={v=>setTamb(uvI(units,"T",v))} style={S.inp}/>
+            </div>
+            <div>
+              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="Relative humidity (%). Humid air has lower density — affects MW lapse on wet days.">Relative Humidity (%)</label>
+              <NumField value={RH} decimals={0} onCommit={v=>setRH(Math.max(0,Math.min(100,+v)))} style={S.inp}/>
+            </div>
+            <div>
+              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="% of max achievable power on this ambient day. Load=100 is the limiter-bounded peak at these ambient conditions (not ISO reference).">Load (%)</label>
+              <NumField value={loadPct} decimals={0} onCommit={v=>setLoadPct(Math.max(20,Math.min(100,+v)))} style={S.inp}/>
+              <input type="range" min="20" max="100" step="1" value={loadPct} onChange={e=>setLoadPct(+e.target.value)} style={{width:"100%",accentColor:C.accent,marginTop:3}}/>
+            </div>
+          </div>
+          {isLMS&&<div>
+            <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="Intercooler cooling-water supply temperature. LMS100 holds T3 ≈ 644 K as long as the IC can drop air to ~311 K (approach ≈10 K). Warmer supply → T3 creeps up.">Cooling Water T ({uu(units,"T")})</label>
+            <NumField value={uv(units,"T",Tcool)} decimals={1} onCommit={v=>setTcool(uvI(units,"T",v))} style={S.inp}/>
+          </div>}
+        </div>
+      </div>
+
+      {/* Linkages */}
+      <div style={S.card}>
+        <div style={S.cardT}>Linkages to Other Panels</div>
+        <div style={{fontSize:10.5,color:C.txtMuted,marginBottom:10,lineHeight:1.45,fontFamily:"'Barlow',sans-serif"}}>
+          When a linkage is ON, the cycle output drives that sidebar field so <strong style={{color:C.accent}}>every other panel (AFT, Flame Speed, Combustor, Exhaust, Autoignition)</strong> runs at the engine's actual state. Break link to regain manual control.
+        </div>
+        {[
+          {on:linkT3,set:setLinkT3,label:"Air Temperature → T3",tip:"Sidebar Air Temperature (K) ← cycle T3 (combustor inlet / HPC exit)"},
+          {on:linkP3,set:setLinkP3,label:"Pressure → P3",tip:"Sidebar Pressure ← cycle P3 (combustor inlet pressure)"},
+          {on:linkFAR,set:setLinkFAR,label:"FAR / φ → cycle φ at T4",tip:"Sidebar φ (and FAR) ← cycle φ back-solved from the commanded T4"},
+        ].map(l=>(
+          <div key={l.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",border:`1px solid ${l.on?C.accent:C.border}`,borderRadius:6,marginBottom:6,background:l.on?`${C.accent}10`:"transparent"}}>
+            <div style={{fontSize:11,color:C.txt,fontFamily:"monospace"}} title={l.tip}>
+              <span style={{marginRight:6,opacity:l.on?1:.3}}>🔗</span>{l.label}
+            </div>
+            <button onClick={()=>l.set(!l.on)} style={{padding:"3px 10px",fontSize:10,fontWeight:700,color:l.on?C.bg:C.accent,background:l.on?C.accent:"transparent",border:`1px solid ${C.accent}`,borderRadius:4,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>
+              {l.on?"LINKED":"BREAK · OFF"}
+            </button>
+          </div>
+        ))}
+        {!available&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.warm}12`,border:`1px solid ${C.warm}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Linkages only push values when <strong style={{color:C.warm}}>Accurate Mode</strong> is active. Subscribe to the FULL tier to enable the Cantera-backed cycle solver.</div>}
+        {available&&!accurate&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.accent2}12`,border:`1px solid ${C.accent2}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Turn on <strong style={{color:C.accent2}}>Accurate Mode</strong> (header toggle) to run the cycle solver and activate linkages.</div>}
+      </div>
+    </div>
+
+    {/* Headline — MW_net */}
+    <div style={{...S.card,padding:"18px 22px",background:`linear-gradient(135deg,${C.accent}10,${C.bg2})`,borderColor:`${C.accent}40`}}>
+      {err&&<div style={{padding:10,color:C.accent2,fontSize:11,fontFamily:"monospace"}}>Error: {err}</div>}
+      {!err&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
+        <div>
+          <div style={{fontSize:10,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:"2px",marginBottom:4}}>Net Shaft Power</div>
+          <div style={{fontSize:48,fontWeight:800,color:C.accent,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"-1px",lineHeight:1}}>
+            {loading?"—":result?result.MW_net.toFixed(1):"—"}
+            <span style={{fontSize:22,fontWeight:500,color:C.txtDim,marginLeft:6}}>MW</span>
+          </div>
+          {result&&<div style={{fontSize:10.5,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>
+            {result.load_pct.toFixed(0)}% load · max-on-day {result.MW_max_ambient.toFixed(1)} MW
+          </div>}
+        </div>
+        {result&&<div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+          <Kpi label="T4 (firing)" value={fmtT(result.T4_K)}/>
+          <Kpi label="T3 (comb. in)" value={fmtT(result.T3_K)}/>
+          <Kpi label="P3" value={fmtP(result.P3_bar)}/>
+          <Kpi label="φ" value={result.phi.toFixed(4)}/>
+        </div>}
+      </div>}
+    </div>
+
+    {/* Stations + flows */}
+    {result&&<div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
+      <div style={S.card}>
+        <div style={S.cardT}>Stations</div>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"monospace",fontSize:11.5}}>
+          <thead>
+            <tr>{["Station","Description","T","P"].map(h=><th key={h} style={{textAlign:"left",padding:"6px 8px",borderBottom:`1px solid ${C.border}`,color:C.txtDim,fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px"}}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            <StationRow n="1"   desc="Inlet (ambient)"                   T={result.T1_K}   P={result.P1_bar}  fmtT={fmtT} fmtP={fmtP}/>
+            {result.intercooled&&<StationRow n="2"   desc="LPC exit"                            T={result.T2_K}   P={result.P2_bar}  fmtT={fmtT} fmtP={fmtP}/>}
+            {result.intercooled&&<StationRow n="2.5" desc="Intercooler exit / HPC inlet"        T={result.T2_5_K} P={result.P2_5_bar} fmtT={fmtT} fmtP={fmtP}/>}
+            {!result.intercooled&&<StationRow n="2"  desc="Compressor exit (= combustor inlet)" T={result.T2_K}   P={result.P2_bar}  fmtT={fmtT} fmtP={fmtP}/>}
+            <StationRow n="3"   desc="Combustor inlet (HPC exit)"        T={result.T3_K}   P={result.P3_bar}  fmtT={fmtT} fmtP={fmtP} hi/>
+            <StationRow n="4"   desc="Turbine inlet (firing temp)"       T={result.T4_K}   P={result.P3_bar}  fmtT={fmtT} fmtP={fmtP} hi/>
+          </tbody>
+        </table>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.cardT}>Flows & Performance</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6,fontFamily:"monospace",fontSize:11.5}}>
+          <KV k="Air flow"  v={fmtMdot(result.mdot_air_kg_s)}/>
+          <KV k="Fuel flow" v={fmtMdot(result.mdot_fuel_kg_s)}/>
+          <KV k="FAR (mass)" v={result.FAR.toFixed(5)}/>
+          <KV k="φ"         v={result.phi.toFixed(4)}/>
+          <KV k="Efficiency (LHV)" v={(result.efficiency_LHV*100).toFixed(2)+" %"}/>
+          <KV k="Heat rate"        v={result.heat_rate_kJ_per_kWh.toFixed(0)+" kJ/kWh"}/>
+          <KV k="LHV (fuel)"       v={result.LHV_fuel_MJ_per_kg.toFixed(2)+" MJ/kg"}/>
+          <KV k="ρ_ambient"        v={result.rho_amb_kg_m3.toFixed(3)+" kg/m³"}/>
+          {result.intercooled&&<KV k="Intercooler duty" v={result.intercooler_duty_MW.toFixed(2)+" MW_th"}/>}
+        </div>
+      </div>
+    </div>}
+
+    {/* Humid-air composition */}
+    {result&&<div style={S.card}>
+      <div style={S.cardT}>Inlet Humid-Air Composition (mol %)</div>
+      <div style={{display:"flex",gap:16,flexWrap:"wrap",fontFamily:"monospace",fontSize:11.5}}>
+        {Object.entries(result.oxidizer_humid_mol_pct).map(([k,v])=>(
+          <div key={k} style={{minWidth:80}}>
+            <span style={{color:C.txtDim}}>{k}:</span> <strong style={{color:C.accent}}>{v.toFixed(3)}</strong>
+          </div>
+        ))}
+      </div>
+    </div>}
+  </div>);
+}
+function Kpi({label,value}){return(<div style={{padding:"6px 12px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:5,minWidth:110}}>
+  <div style={{fontSize:9,color:C.txtDim,fontFamily:"monospace",letterSpacing:".6px",textTransform:"uppercase"}}>{label}</div>
+  <div style={{fontSize:15,fontWeight:700,color:C.txt,fontFamily:"monospace"}}>{value}</div>
+</div>);}
+function StationRow({n,desc,T,P,fmtT,fmtP,hi}){return(<tr style={hi?{background:`${C.accent}10`}:{}}>
+  <td style={{padding:"5px 8px",color:hi?C.accent:C.txt,fontWeight:hi?700:400,borderBottom:`1px solid ${C.border}50`}}>{n}</td>
+  <td style={{padding:"5px 8px",color:C.txtDim,borderBottom:`1px solid ${C.border}50`}}>{desc}</td>
+  <td style={{padding:"5px 8px",color:hi?C.accent:C.txt,fontWeight:hi?700:400,borderBottom:`1px solid ${C.border}50`}}>{fmtT(T)}</td>
+  <td style={{padding:"5px 8px",color:hi?C.accent:C.txt,fontWeight:hi?700:400,borderBottom:`1px solid ${C.border}50`}}>{fmtP(P)}</td>
+</tr>);}
+function KV({k,v}){return(<div style={{display:"flex",justifyContent:"space-between",gap:8,padding:"4px 0",borderBottom:`1px solid ${C.border}50`}}>
+  <span style={{color:C.txtDim}}>{k}</span><span style={{color:C.accent,fontWeight:600}}>{v}</span>
+</div>);}
+
 /* ══════════════════ LOGO ══════════════════ */
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
 
 /* ══════════════════ MAIN APP ══════════════════ */
-const TABS_BASE=[{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"props",label:"Thermo Database",icon:"📊"}];
+const TABS_BASE=[{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"props",label:"Thermo Database",icon:"📊"}];
 const ACCOUNT_TAB={id:"account",label:"Account & Billing",icon:"👤"};
 
 export default function App(){
@@ -1130,7 +1324,21 @@ export default function App(){
   // converting to/from SI via uv()/uvI(). This guarantees that toggling SI↔ENG
   // leaves calculations and chart axes self-consistent.
   const auth=useAuth();
-  const[tab,setTab]=useState("aft");const[phi,setPhi]=useState(0.555);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("ENG");
+  const[tab,setTab]=useState("cycle");const[phi,setPhi]=useState(0.555);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("ENG");
+  // ── Gas-turbine cycle inputs & linkages ─────────────────────────────────
+  // When a linkage toggle is ON, the corresponding sidebar input (Air T, Pressure, or phi/FAR)
+  // is driven from the latest cycle result and displayed with a lock badge. "Break link"
+  // turns the toggle off and returns manual control. Links default ON because the cycle
+  // panel is the first tab and its outputs are the *intent* of most subsequent analyses.
+  const[cycleEngine,setCycleEngine]=useState("LM6000PF");
+  const[cyclePamb,setCyclePamb]=useState(1.01325);     // bar
+  const[cycleTamb,setCycleTamb]=useState(288.706);     // K (60 F)
+  const[cycleRH,setCycleRH]=useState(60.0);            // %
+  const[cycleLoad,setCycleLoad]=useState(100.0);       // %
+  const[cycleTcool,setCycleTcool]=useState(288.15);    // K (15 C) — LMS100 IC supply
+  const[linkT3,setLinkT3]=useState(true);
+  const[linkP3,setLinkP3]=useState(true);
+  const[linkFAR,setLinkFAR]=useState(true);
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
   // Premixer stability inputs. D_fh = flameholder diameter (Zukoski τ_BO).
   // L_premix / V_premix = premixer geometry (autoignition safety: τ_res < τ_ign).
@@ -1176,7 +1384,7 @@ export default function App(){
   // Accurate-Mode auto-disable if subscription ends / user signs out
   useEffect(()=>{if(accurate&&!hasOnline)setAccurate(false);},[hasOnline,accurate]);
   // Kick user out of Account tab if they sign out
-  useEffect(()=>{if(!auth.isAuthenticated&&tab==="account")setTab("aft");},[auth.isAuthenticated,tab]);
+  useEffect(()=>{if(!auth.isAuthenticated&&tab==="account")setTab("cycle");},[auth.isAuthenticated,tab]);
 
   const TABS=auth.isAuthenticated?[...TABS_BASE,ACCOUNT_TAB]:TABS_BASE;
   const initF={};FUEL_SP.forEach(s=>initF[s]=0);Object.assign(initF,FUEL_PRESETS["Pipeline NG (US)"]);
@@ -1186,6 +1394,30 @@ export default function App(){
   const FAR=phi*FAR_stoich;
   const setPhiClamped=v=>{if(Number.isFinite(v))setPhi(Math.max(0.3,Math.min(1.0,v)));};
   const setFAR=v=>{if(Number.isFinite(v))setPhiClamped(v/FAR_stoich);};
+
+  // Gas-turbine cycle backend call. Fires only in Accurate Mode (requires FULL subscription).
+  // Uses the same fuel composition as the rest of the toolkit so linked phi is self-consistent.
+  // Result drives the CyclePanel *and* the sidebar linkage toggles (T_air←T3, P←P3, phi←cycle phi).
+  const bkCycle=useBackendCalc("cycle",{
+    engine:cycleEngine,
+    P_amb_bar:cyclePamb,
+    T_amb_K:cycleTamb,
+    RH_pct:cycleRH,
+    load_pct:cycleLoad,
+    T_cool_in_K:cycleEngine==="LMS100PB+"?cycleTcool:null,
+    fuel_pct:nonzero(fuel),
+  },accurate&&hasOnline);
+  const cycleResult=bkCycle.data;
+
+  // Propagate cycle outputs into main sidebar state when linkages are ON.
+  // Re-runs whenever the cycle result changes or a toggle flips.
+  useEffect(()=>{
+    if(!cycleResult)return;
+    if(linkT3)setT0(cycleResult.T3_K);
+    if(linkP3)setP(cycleResult.P3_bar/1.01325);   // bar → atm (sidebar P is atm in SI)
+    if(linkFAR)setPhiClamped(cycleResult.phi);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[cycleResult,linkT3,linkP3,linkFAR]);
 
   return(
     <UnitCtx.Provider value={units}>
@@ -1264,6 +1496,7 @@ export default function App(){
                 </div>
                 <input type="range" min="0.3" max="1.0" step="0.01" value={phi} onChange={e=>setPhi(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{phi<0.95?"lean":phi>1.05?"rich":"~stoichiometric"}</div>
+                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={()=>setLinkFAR(false)} label="Linked to Cycle φ"/>}
               </div>
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
@@ -1278,6 +1511,7 @@ export default function App(){
                 <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, Cantera mixes this with T_fuel adiabatically (mass-weighted enthalpy balance with T-dependent NASA polynomials) to get the actual PSR inlet T.">Air Temperature ({uu(units,"T")})</label>
                 <NumField value={uv(units,"T",T0)} decimals={2} onCommit={v=>setT0(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.accent3}55`}}/>
                 <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.accent3,marginTop:4}}/>
+                {accurate&&hasOnline&&linkT3&&<LinkChip onBreak={()=>setLinkT3(false)} label="Linked to Cycle T3"/>}
               </div>
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
@@ -1288,7 +1522,9 @@ export default function App(){
                 <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.orange,marginTop:4}}/>
               </div>
               <div><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
-                <NumField value={uv(units,"P",P)} decimals={3} onCommit={v=>setP(uvI(units,"P",v))} style={S.inp}/></div>
+                <NumField value={uv(units,"P",P)} decimals={3} onCommit={v=>setP(uvI(units,"P",v))} style={S.inp}/>
+                {accurate&&hasOnline&&linkP3&&<LinkChip onBreak={()=>setLinkP3(false)} label="Linked to Cycle P3"/>}
+              </div>
               {/* Water / steam injection — applies to AFT, Flame Speed, Combustor, Exhaust, Autoignition in Accurate Mode */}
               <div style={{marginTop:12,paddingTop:10,borderTop:`1px solid ${C.border}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
@@ -1313,6 +1549,18 @@ export default function App(){
 
           {/* CONTENT */}
           <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
+            {tab==="cycle"&&<CyclePanel
+              engine={cycleEngine} setEngine={setCycleEngine}
+              Pamb={cyclePamb} setPamb={setCyclePamb}
+              Tamb={cycleTamb} setTamb={setCycleTamb}
+              RH={cycleRH} setRH={setCycleRH}
+              loadPct={cycleLoad} setLoadPct={setCycleLoad}
+              Tcool={cycleTcool} setTcool={setCycleTcool}
+              linkT3={linkT3} setLinkT3={setLinkT3}
+              linkP3={linkP3} setLinkP3={setLinkP3}
+              linkFAR={linkFAR} setLinkFAR={setLinkFAR}
+              result={cycleResult} loading={bkCycle.loading} err={bkCycle.err}
+            />}
             {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar} Dfh={Dfh} setDfh={setDfh} Lpremix={Lpremix} setLpremix={setLpremix} Vpremix={Vpremix} setVpremix={setVpremix}/>}
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}/>}

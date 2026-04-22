@@ -360,3 +360,66 @@ class HealthResponse(BaseModel):
     cantera_version: str
     env: str
     stripe_configured: bool
+
+
+# ---------- cycle (gas turbine) ----------
+class CycleRequest(BaseModel):
+    """Gas turbine thermodynamic-cycle request.
+
+    Ambient conditions + load drive an anchored performance correlation (LM6000PF
+    or LMS100PB+). The T4/P3/T3 stations and FAR fall out; the linkage toggles in
+    the frontend let the user pipe T3/P3/FAR straight into the other panels.
+    """
+
+    engine: str = Field(pattern="^(LM6000PF|LMS100PB\\+)$", description="Engine deck selector")
+    P_amb_bar: float = Field(gt=0, description="Ambient pressure, bar")
+    T_amb_K: float = Field(gt=0, description="Ambient dry-bulb, K")
+    RH_pct: float = Field(ge=0.0, le=100.0, description="Relative humidity, %")
+    load_pct: float = Field(ge=20.0, le=100.0, description="Commanded load as % of max-on-this-ambient-day")
+    T_cool_in_K: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="(LMS100 only) intercooler cooling-water supply T in K; defaults to 288 K",
+    )
+    fuel_pct: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Fuel composition in mol % (defaults to US pipeline natural gas)",
+    )
+
+
+class CycleResponse(BaseModel):
+    engine: str
+    engine_label: str
+    intercooled: bool
+    # Ambient
+    T_amb_K: float
+    P_amb_bar: float
+    RH_pct: float
+    rho_amb_kg_m3: float
+    rho_ratio: float
+    # Load
+    load_pct: float
+    MW_max_ambient: float
+    MW_net: float
+    # Stations
+    T1_K: float
+    P1_bar: float
+    T2_K: float
+    P2_bar: float
+    T2_5_K: float = 0.0
+    P2_5_bar: float = 0.0
+    T3_K: float
+    P3_bar: float
+    T4_K: float
+    intercooler_duty_MW: float = 0.0
+    # Flows
+    mdot_air_kg_s: float
+    mdot_fuel_kg_s: float
+    FAR: float
+    phi: float
+    # Performance
+    efficiency_LHV: float
+    heat_rate_kJ_per_kWh: float
+    LHV_fuel_MJ_per_kg: float
+    # Humid-air composition (reference)
+    oxidizer_humid_mol_pct: Dict[str, float]

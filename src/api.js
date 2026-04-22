@@ -146,6 +146,9 @@ export async function calcProps(payload) {
 export async function calcAutoignition(payload) {
   return request("/calc/autoignition", { method: "POST", body: payload, auth: true });
 }
+export async function calcCycle(payload) {
+  return request("/calc/cycle", { method: "POST", body: payload, auth: true });
+}
 
 // ---- health ----
 export async function health() {
