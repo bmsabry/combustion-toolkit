@@ -427,9 +427,12 @@ class CycleResponse(BaseModel):
     mdot_air_kg_s: float
     mdot_air_combustor_kg_s: float = 0.0
     mdot_fuel_kg_s: float
-    FAR: float             # bulk FAR = fuel / inlet air
-    FAR_flame: float = 0.0  # flame-zone FAR (at phi that hits T4)
-    phi: float             # flame-zone phi
+    # FAR4 / phi4 are the combustor-EXIT values that physically produce T4.
+    # In DLE premixed combustion these also equal the bulk flame-zone values
+    # and drive Flame Temp / Flame Speed / PSR-PFR / Blowoff / Exhaust.
+    FAR4: float = 0.0
+    phi4: float = 0.0
+    phi: float             # legacy alias for phi4 (kept for link-FAR wiring)
     combustor_air_frac: float = 1.0
     # Performance
     efficiency_LHV: float

@@ -360,29 +360,30 @@ def run(
 
     stations["T4_K"] = T4_K
 
-    # --- Phi from Cantera equilibrium HP at (T3, P3) targeting T4 ---
-    # This phi is the FLAME-ZONE equivalence ratio — the one that, when
-    # mixed with the *combustor* airflow, reaches T4 at equilibrium.
-    # It's what the Flame-Temp / Combustor panels will use if linked.
+    # --- Phi4 from Cantera equilibrium HP at (T3, P3) targeting T4 ---
+    # Phi4 / FAR4 are the COMBUSTOR-EXIT quantities: the equivalence ratio
+    # that, when burned adiabatically with the combustor airflow at (T3, P3),
+    # reaches T4 at equilibrium. These are what physically exit the combustor
+    # and what the Flame Temp / Combustor / Flame Speed / Blowoff / Exhaust
+    # panels use when linked (via the shared sidebar phi). In a DLE premixed
+    # combustor the combustor-exit values equal the bulk flame-zone values.
     ox_pct = _humid_air_mol_pct(T_amb_K, P_amb_bar, RH_pct)
     fuel_x = _normalize_to_gri(fuel_pct)
     ox_x = _normalize_to_gri(ox_pct)
-    phi = _phi_for_target_T4(fuel_x, ox_x, stations["T3_K"], P3_bar, T4_K)
+    phi4 = _phi_for_target_T4(fuel_x, ox_x, stations["T3_K"], P3_bar, T4_K)
 
-    # Flame-zone fuel mass fraction at this phi → FAR_flame = Y_f / (1 − Y_f)
-    Y_f = fuel_mass_fraction_at_phi(fuel_x, ox_x, phi, GRI_MECH)
-    FAR_flame = Y_f / max(1.0 - Y_f, 1e-20)
+    # FAR4 = fuel mass / combustor air mass at the phi that produces T4
+    Y_f = fuel_mass_fraction_at_phi(fuel_x, ox_x, phi4, GRI_MECH)
+    FAR4 = Y_f / max(1.0 - Y_f, 1e-20)
 
     # --- Fuel flow from combustor air ---
     # Real aero-derivatives bypass ~25–40 % of inlet air to cool the
     # turbine hot section; that air never sees the flame. The fuel
-    # actually burned is set by FAR_flame × (combustor airflow), NOT
+    # actually burned is set by FAR4 × (combustor airflow), NOT
     # × inlet airflow. Using inlet airflow here is what broke the
     # efficiency calc before.
     mdot_air_combustor = mdot_air * combustor_air_frac
-    mdot_fuel = mdot_air_combustor * FAR_flame
-    # Bulk FAR = total fuel / total INLET air (what the overall engine sees)
-    FAR_bulk = mdot_fuel / max(mdot_air, 1e-20)
+    mdot_fuel = mdot_air_combustor * FAR4
 
     # --- Heat rate & efficiency ---
     LHV_fuel = _estimate_LHV_mass_J_per_kg(fuel_x)     # J/kg
@@ -423,11 +424,16 @@ def run(
         "mdot_air_kg_s": float(mdot_air),
         "mdot_air_combustor_kg_s": float(mdot_air_combustor),
         "mdot_fuel_kg_s": float(mdot_fuel),
-        # FAR_bulk = total fuel / total inlet air (what a plant operator measures)
-        "FAR": float(FAR_bulk),
-        # FAR_flame = flame-zone FAR at the equivalence ratio that hits T4
-        "FAR_flame": float(FAR_flame),
-        "phi": float(phi),
+        # FAR4 = combustor-exit fuel/air (fuel ÷ combustor airflow). In a DLE
+        # premixed combustor this is also the flame/bulk value, and it's what
+        # adiabatically produces T4 at (T3, P3). Use this for Flame Temp,
+        # Flame Speed, PSR-PFR, Blowoff, Exhaust — all downstream panels.
+        "FAR4": float(FAR4),
+        # phi4 = FAR4 / FAR_stoich — the equivalence ratio at combustor exit.
+        # Sidebar phi (when linked) = phi4.
+        "phi4": float(phi4),
+        # Legacy alias, kept so the linkFAR wiring and older clients still work:
+        "phi": float(phi4),
         # Combustor air split (user-tunable; 0.70 → 30 % cooling bypass)
         "combustor_air_frac": float(combustor_air_frac),
         # Performance

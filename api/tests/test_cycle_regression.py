@@ -129,24 +129,59 @@ def test_part_load_drops_t4():
 
 # ----------------------- FAR / phi consistency -----------------------------
 
-def test_phi_from_t4_is_lean():
-    """Design-point flame-zone phi must be clearly lean (<0.6) for both engines.
+def test_phi4_from_t4_is_lean():
+    """Design-point combustor-exit phi4 must be clearly lean (<0.6) for both engines.
 
-    Flame-zone FAR (FAR_flame) must be near phi·FAR_stoich ≈ 0.03 for lean
-    DLE combustion. Bulk FAR (FAR) is smaller because cooling-air bypass
-    dilutes the total stream.
+    FAR4 must be near phi4·FAR_stoich ≈ 0.03 for lean DLE combustion. FAR4 is
+    the only physically meaningful FAR — it's what produces T4 adiabatically
+    and what feeds Flame Temp / Flame Speed / PSR-PFR / Blowoff / Exhaust.
     """
     r_lms = cycle.run("LMS100PB+", 1.01325, 279.817, 80.0, 100.0)
     r_lm = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 100.0)
-    # Flame-zone phi (the one that drives T_ad on the Flame-Temp panel when linked)
-    assert 0.4 < r_lms["phi"] < 0.6
-    assert 0.4 < r_lm["phi"] < 0.6
-    # Flame-zone FAR ~ phi · FAR_stoich, where FAR_stoich(CH4/humid-air) ≈ 0.058
-    assert 0.020 < r_lms["FAR_flame"] < 0.040
-    assert 0.020 < r_lm["FAR_flame"] < 0.040
-    # Bulk FAR < flame FAR by exactly the air-split factor
+    # Combustor-exit phi4 (also the linked sidebar phi that drives T_ad on Flame Temp)
+    assert 0.4 < r_lms["phi4"] < 0.6
+    assert 0.4 < r_lm["phi4"] < 0.6
+    # FAR4 ~ phi4·FAR_stoich, where FAR_stoich(CH4/humid-air) ≈ 0.058
+    assert 0.020 < r_lms["FAR4"] < 0.040
+    assert 0.020 < r_lm["FAR4"] < 0.040
+    # Legacy `phi` alias must equal phi4 (so the linkFAR wiring still works)
     for r in (r_lms, r_lm):
-        assert r["FAR"] == pytest.approx(r["FAR_flame"] * r["combustor_air_frac"], rel=1e-6)
+        assert r["phi"] == pytest.approx(r["phi4"], rel=1e-9)
+
+
+def test_t_ad_equals_t4_when_no_bypass():
+    """Integration guard: when combustor_air_frac = 1.0 there's no air split,
+    so running the adiabatic-flame-temperature solver (AFT) at (T3, P3, phi4,
+    humid air at ambient) must reproduce T4. This proves the sidebar linkages
+    (T_air←T3, Pressure←P3, phi←phi4, Oxidizer←humid air) carry the user
+    from the Cycle panel to the Flame Temp / Flame Speed / PSR-PFR / Blowoff /
+    Exhaust panels in a self-consistent way — the whole point of the link
+    toggles. If this test ever breaks, the downstream panels will disagree
+    with the cycle panel about what temperature the combustor actually hits.
+    """
+    from app.science import aft
+    r = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 100.0, combustor_air_frac=1.0)
+    # Use the exact default fuel that cycle.run uses internally
+    fuel = {"CH4": 95.0, "C2H6": 3.0, "C3H8": 1.0, "N2": 1.0}
+    ox = r["oxidizer_humid_mol_pct"]  # humid air at ambient (mol %)
+    r_aft = aft.run(
+        fuel_pct=fuel,
+        ox_pct=ox,
+        phi=r["phi4"],
+        T0_K=r["T3_K"],
+        P_bar=r["P3_bar"],
+        heat_loss_fraction=0.0,
+        T_fuel_K=r["T3_K"],   # matched to air so there's no enthalpy-mix offset
+        T_air_K=r["T3_K"],
+        WFR=0.0,
+        water_mode="liquid",
+    )
+    # AFT uses the same mechanism (GRI) and the same equilibrium assumption as
+    # cycle's T4 back-solve; they must agree to within numerical tolerance.
+    assert r_aft["T_ad"] == pytest.approx(r["T4_K"], abs=15.0), (
+        f"T_ad={r_aft['T_ad']:.1f} vs T4={r['T4_K']:.1f} — downstream panels "
+        f"will NOT match the cycle at this operating point."
+    )
 
 
 # ------------------------------ input guards -------------------------------

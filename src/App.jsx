@@ -1218,7 +1218,7 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
         {[
           {on:linkT3,set:setLinkT3,label:"Air Temperature → T3",tip:"Sidebar Air Temperature (K) ← cycle T3 (combustor inlet / HPC exit)"},
           {on:linkP3,set:setLinkP3,label:"Pressure → P3",tip:"Sidebar Pressure ← cycle P3 (combustor inlet pressure)"},
-          {on:linkFAR,set:setLinkFAR,label:"FAR / φ → cycle φ at T4",tip:"Sidebar φ (and FAR) ← cycle φ back-solved from the commanded T4"},
+          {on:linkFAR,set:setLinkFAR,label:"φ → cycle φ₄ (combustor exit)",tip:"Sidebar φ ← cycle's combustor-exit φ₄ (back-solved from the commanded T4). This is the bulk/flame phi in a DLE premixed combustor; drives T_ad on Flame Temp, PSR-PFR, Flame Speed, Blowoff, and Exhaust panels."},
           {on:linkOx,set:setLinkOx,label:"Oxidizer comp → humid air @ ambient",tip:"Sidebar Oxidizer composition ← cycle's computed humid-air mol % at ambient T/RH. Required for T_ad on Flame Temp to match T4 on this panel (they use the same mechanism and same air)."},
         ].map(l=>(
           <div key={l.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",border:`1px solid ${l.on?C.accent:C.border}`,borderRadius:6,marginBottom:6,background:l.on?`${C.accent}10`:"transparent"}}>
@@ -1253,7 +1253,7 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
           <Kpi label="T4 (firing)" value={fmtT(result.T4_K)}/>
           <Kpi label="T3 (comb. in)" value={fmtT(result.T3_K)}/>
           <Kpi label="P3" value={fmtP(result.P3_bar)}/>
-          <Kpi label="φ" value={result.phi.toFixed(4)}/>
+          <Kpi label="φ₄" value={(result.phi4!=null?result.phi4:result.phi).toFixed(4)}/>
         </div>}
       </div>}
     </div>
@@ -1283,9 +1283,8 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
           <KV k="Air flow (inlet)"        v={fmtMdot(result.mdot_air_kg_s)}/>
           <KV k="Air flow (combustor)"    v={fmtMdot(result.mdot_air_combustor_kg_s||result.mdot_air_kg_s*(result.combustor_air_frac||1))}/>
           <KV k="Fuel flow"               v={fmtMdot(result.mdot_fuel_kg_s)}/>
-          <KV k="FAR (bulk, mass)"        v={result.FAR.toFixed(5)}/>
-          <KV k="FAR_flame (at φ)"        v={(result.FAR_flame||result.FAR).toFixed(5)}/>
-          <KV k="φ (flame zone)"          v={result.phi.toFixed(4)}/>
+          <KV k="FAR₄ (combustor exit)"   v={(result.FAR4!=null?result.FAR4:result.FAR_flame||result.FAR).toFixed(5)}/>
+          <KV k="φ₄ (combustor exit)"     v={(result.phi4!=null?result.phi4:result.phi).toFixed(4)}/>
           <KV k="Combustor air fraction"  v={((result.combustor_air_frac||1)*100).toFixed(1)+" %"}/>
           <KV k="Efficiency (LHV)"        v={(result.efficiency_LHV*100).toFixed(2)+" %"}/>
           <KV k="Heat rate"               v={result.heat_rate_kJ_per_kWh.toFixed(0)+" kJ/kWh"}/>
@@ -1543,7 +1542,7 @@ export default function App(){
                 </div>
                 <input type="range" min="0.3" max="1.0" step="0.01" value={phi} onChange={e=>setPhi(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{phi<0.95?"lean":phi>1.05?"rich":"~stoichiometric"}</div>
-                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={()=>setLinkFAR(false)} label="Linked to Cycle φ"/>}
+                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={()=>setLinkFAR(false)} label="Linked to Cycle φ₄"/>}
               </div>
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
