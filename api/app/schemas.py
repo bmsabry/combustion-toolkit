@@ -390,10 +390,10 @@ class CycleRequest(BaseModel):
         ge=0.30,
         le=1.00,
         description=(
-            "Fraction of inlet airflow that passes through the combustor (primary "
-            "+ dilution). The rest bypasses to cool the turbine hot section. "
-            "This is the knob that sets thermal efficiency. Typical aero-derivative "
-            "values: 0.60–0.75. If None, uses the per-engine deck default."
+            "Flame-zone fraction of combustor airflow (m_flame / m_comb_air). "
+            "The rest is dilution. Does NOT affect efficiency — only sets the "
+            "flame-zone state (FAR_Bulk = FAR4/frac, phi_Bulk = phi4/frac, T_Bulk). "
+            "Default 0.88 (typical DLE primary-zone fraction)."
         ),
     )
 
@@ -427,13 +427,19 @@ class CycleResponse(BaseModel):
     mdot_air_kg_s: float
     mdot_air_combustor_kg_s: float = 0.0
     mdot_fuel_kg_s: float
-    # FAR4 / phi4 are the combustor-EXIT values that physically produce T4.
-    # In DLE premixed combustion these also equal the bulk flame-zone values
-    # and drive Flame Temp / Flame Speed / PSR-PFR / Blowoff / Exhaust.
+    # Combustor-EXIT values (after dilution): back-solved so equilibrium
+    # product T at (T3, P3) matches the commanded T4.
     FAR4: float = 0.0
     phi4: float = 0.0
-    phi: float             # legacy alias for phi4 (kept for link-FAR wiring)
-    combustor_air_frac: float = 1.0
+    # Flame-zone (BULK) values: same T3/P3/fuel/ox, air split by
+    # combustor_air_frac. FAR_Bulk = FAR4 / frac, phi_Bulk = phi4 / frac,
+    # T_Bulk = HP-equilibrium product at (T3, P3, phi_Bulk). These drive
+    # Flame Temp / Flame Speed / PSR-PFR / Blowoff / Exhaust (the flame).
+    FAR_Bulk: float = 0.0
+    phi_Bulk: float = 0.0
+    T_Bulk_K: float = 0.0
+    phi: float             # legacy alias for phi_Bulk (sidebar-linked)
+    combustor_air_frac: float = 0.88
     # Performance
     efficiency_LHV: float
     heat_rate_kJ_per_kWh: float

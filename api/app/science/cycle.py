@@ -88,14 +88,14 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         "T4_design_K": 1825.37,      # 2825°F (turbine inlet / firing temp)
         "MW_design": 107.5,
         "airflow_design_kg_s": 208.0,  # LMS100 rated inlet flow (~460 lb/s)
-        # Default combustor air fraction: fraction of inlet airflow that
-        # actually passes through the combustor primary + dilution path.
-        # The remainder (~25 %) bypasses to cool the turbine hot section.
-        # 0.747 is calibrated to reproduce the published design heat rate
-        # (~8180 kJ/kWh → η_LHV ≈ 44 %) at the 44°F / 80 %RH anchor.
-        # Users can override on the panel to match a specific machine's
-        # cooling fraction — this is the knob that sets thermal efficiency.
-        "combustor_air_frac_default": 0.747,
+        # PRIVATE efficiency calibration factor — NOT the combustor_air_frac.
+        # This is an opaque fuel-flow scaler so that at the design anchor the
+        # correlation reproduces the published heat rate (~8180 kJ/kWh →
+        # η_LHV ≈ 44 %). It rolls together turbine-cooling losses, stack
+        # losses, and mechanical losses that a 1-D cycle model doesn't
+        # resolve. Users never see this — they only tune combustor_air_frac,
+        # which is a pure flame/dilution split and does NOT affect η.
+        "thermal_eff_calibration": 0.747,
         # Intercooler partition between LPC and HPC
         "PR_LPC_design": 5.0,
         "T2_5_design_K": 310.93,     # intercooler exit ≈ 100°F; HPC inlet
@@ -123,11 +123,11 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         "T4_design_K": 1755.37,      # 2700°F
         "MW_design": 45.0,
         "airflow_design_kg_s": 125.0,
-        # Default combustor air fraction: fraction of inlet airflow that
-        # actually passes through the combustor primary + dilution path.
-        # Calibrated to reproduce the published design heat rate
-        # (~8560 kJ/kWh → η_LHV ≈ 42 %) at the design anchor.
-        "combustor_air_frac_default": 0.683,
+        # PRIVATE efficiency calibration factor — see LMS100 note above.
+        # Calibrated so the LM6000PF design anchor reproduces the published
+        # heat rate (~8500 kJ/kWh → η_LHV ≈ 42.4 %). Independent of the
+        # user-facing combustor_air_frac (flame/dilution split).
+        "thermal_eff_calibration": 0.683,
         # T3 floats with ambient. Effective exponent calibrated to typical
         # aero-derivative behavior: T3 ≈ T_amb^0.9 at constant load (slightly
         # sublinear because PR drops on hot days). At design, (T_amb/T_amb_des)^α = 1
@@ -185,6 +185,28 @@ def _humid_air_density(T_amb_K: float, P_amb_bar: float, RH_pct: float) -> float
 
 
 # --------------------------- phi back-solve from T4 ------------------------
+def _t_ad_at_phi(
+    fuel_x: Dict[str, float],
+    ox_x: Dict[str, float],
+    T_inlet_K: float,
+    P_bar: float,
+    phi: float,
+) -> float:
+    """HP-adiabatic equilibrium product temperature at (T_inlet, P, phi).
+
+    Shared helper used for both the T4 back-solve (lean, combustor-exit) and
+    the T_Bulk flame-zone calculation (phi_Bulk = phi4 / combustor_air_frac,
+    can be near or slightly above 1 for a primary zone).
+    """
+    fuel_str = ", ".join(f"{k}:{v:.10f}" for k, v in fuel_x.items())
+    ox_str = ", ".join(f"{k}:{v:.10f}" for k, v in ox_x.items())
+    gas = ct.Solution(GRI_MECH)
+    gas.TP = float(T_inlet_K), float(P_bar) * 1e5
+    gas.set_equivalence_ratio(float(phi), fuel=fuel_str, oxidizer=ox_str)
+    gas.equilibrate("HP")
+    return float(gas.T)
+
+
 def _phi_for_target_T4(
     fuel_x: Dict[str, float],
     ox_x: Dict[str, float],
@@ -197,16 +219,8 @@ def _phi_for_target_T4(
     Returns the phi whose equilibrium adiabatic product T matches the target T4
     to within 1 K (or the edge of the bracket if T4 is outside the reachable range).
     """
-    fuel_str = ", ".join(f"{k}:{v:.10f}" for k, v in fuel_x.items())
-    ox_str = ", ".join(f"{k}:{v:.10f}" for k, v in ox_x.items())
-    P3_Pa = float(P3_bar) * 1e5
-
     def T_eq(phi: float) -> float:
-        gas = ct.Solution(GRI_MECH)
-        gas.TP = float(T3_K), P3_Pa
-        gas.set_equivalence_ratio(float(phi), fuel=fuel_str, oxidizer=ox_str)
-        gas.equilibrate("HP")
-        return float(gas.T)
+        return _t_ad_at_phi(fuel_x, ox_x, T3_K, P3_bar, phi)
 
     lo, hi = 0.10, 1.00
     T_lo, T_hi = T_eq(lo), T_eq(hi)
@@ -261,15 +275,26 @@ def run(
     fuel_pct
         Fuel composition in mol %. Defaults to US pipeline natural gas.
     combustor_air_frac
-        Fraction of inlet airflow that actually passes through the
-        combustor (primary + dilution). The rest bypasses to cool the
-        turbine hot section. This is the knob that sets thermal
-        efficiency: at fixed T3 / T4 / MW_net, a smaller combustor
-        fraction means less fuel burned (because flame-zone phi is
-        fixed by T4), and therefore higher efficiency. Typical aero-
-        derivative values are 0.60–0.75 (i.e. 25–40 % cooling bypass).
-        If None, uses the deck default (0.700 for LMS100PB+, 0.683
-        for LM6000PF — calibrated to reproduce published heat rates).
+        FLAME-ZONE fraction of the combustor's airflow: m_flame / m_comb_air,
+        i.e. the share of air that participates in the primary flame vs. the
+        share that enters as dilution / liner cooling downstream. This is a
+        pure intra-combustor split and does NOT affect thermal efficiency:
+        at a fixed commanded T4, the overall fuel flow is fixed by the
+        combustor-exit energy balance regardless of how the air is split
+        between flame and dilution zones.
+
+        What it DOES drive is the flame-zone state:
+            FAR_Bulk = FAR4 / combustor_air_frac
+            phi_Bulk = phi4 / combustor_air_frac
+            T_Bulk   = HP-adiabatic eq. product T at (T3, P3, phi_Bulk)
+
+        These bulk values are the ones the Flame Temp / Flame Speed /
+        PSR-PFR / Blowoff / Exhaust panels consume when linked, because
+        those panels model the FLAME ZONE, not the diluted combustor exit.
+
+        Typical DLE primary-zone fractions: 0.80–0.95. Default = 0.88.
+        Set = 1.0 to collapse the flame zone onto the combustor exit
+        (T_Bulk = T4, phi_Bulk = phi4) — useful for debugging linkage.
 
     Returns a dict with all station properties and diagnostics (see
     docstring and CycleResponse schema for fields).
@@ -279,7 +304,7 @@ def run(
     deck = ENGINE_DECKS[engine]
     fuel_pct = fuel_pct or dict(_DEFAULT_FUEL)
     if combustor_air_frac is None:
-        combustor_air_frac = deck["combustor_air_frac_default"]
+        combustor_air_frac = 0.88     # nominal DLE primary-zone split
     # Safety bounds — a value outside [0.3, 1.0] makes no physical sense.
     combustor_air_frac = max(0.30, min(1.00, float(combustor_air_frac)))
 
@@ -376,13 +401,27 @@ def run(
     Y_f = fuel_mass_fraction_at_phi(fuel_x, ox_x, phi4, GRI_MECH)
     FAR4 = Y_f / max(1.0 - Y_f, 1e-20)
 
-    # --- Fuel flow from combustor air ---
-    # Real aero-derivatives bypass ~25–40 % of inlet air to cool the
-    # turbine hot section; that air never sees the flame. The fuel
-    # actually burned is set by FAR4 × (combustor airflow), NOT
-    # × inlet airflow. Using inlet airflow here is what broke the
-    # efficiency calc before.
-    mdot_air_combustor = mdot_air * combustor_air_frac
+    # --- Flame-zone (bulk) state -------------------------------------------
+    # combustor_air_frac is the fraction of combustor air in the flame zone.
+    # Since the overall combustor energy balance is identical, the flame
+    # zone burns the SAME fuel against LESS air → higher FAR, phi, T.
+    # These bulk values are what Flame Temp / Flame Speed / PSR-PFR /
+    # Blowoff / Exhaust should consume (they model the flame, not the
+    # diluted exit). At combustor_air_frac = 1.0 the bulk reduces to the
+    # combustor-exit values (T_Bulk = T4).
+    f_safe = max(combustor_air_frac, 1e-6)
+    FAR_Bulk = FAR4 / f_safe
+    phi_Bulk = phi4 / f_safe
+    T_Bulk_K = _t_ad_at_phi(fuel_x, ox_x, stations["T3_K"], P3_bar, phi_Bulk)
+
+    # --- Fuel flow & efficiency --------------------------------------------
+    # Fuel flow is fixed by the combustor-exit energy balance and is
+    # therefore INDEPENDENT of combustor_air_frac. The private
+    # thermal_eff_calibration factor folds in cooling / stack / mechanical
+    # losses that a 1-D cycle model doesn't resolve, so the design anchor
+    # matches published heat rates. Users never see this knob.
+    thermal_eff_cal = deck["thermal_eff_calibration"]
+    mdot_air_combustor = mdot_air * thermal_eff_cal
     mdot_fuel = mdot_air_combustor * FAR4
 
     # --- Heat rate & efficiency ---
@@ -424,17 +463,22 @@ def run(
         "mdot_air_kg_s": float(mdot_air),
         "mdot_air_combustor_kg_s": float(mdot_air_combustor),
         "mdot_fuel_kg_s": float(mdot_fuel),
-        # FAR4 = combustor-exit fuel/air (fuel ÷ combustor airflow). In a DLE
-        # premixed combustor this is also the flame/bulk value, and it's what
-        # adiabatically produces T4 at (T3, P3). Use this for Flame Temp,
-        # Flame Speed, PSR-PFR, Blowoff, Exhaust — all downstream panels.
+        # FAR4 / phi4 = COMBUSTOR EXIT (after dilution). Back-solved so the
+        # adiabatic equilibrium product T at (T3, P3) equals T4.
         "FAR4": float(FAR4),
-        # phi4 = FAR4 / FAR_stoich — the equivalence ratio at combustor exit.
-        # Sidebar phi (when linked) = phi4.
         "phi4": float(phi4),
-        # Legacy alias, kept so the linkFAR wiring and older clients still work:
-        "phi": float(phi4),
-        # Combustor air split (user-tunable; 0.70 → 30 % cooling bypass)
+        # FAR_Bulk / phi_Bulk / T_Bulk_K = FLAME ZONE. Same T3, P3, fuel,
+        # humid-air ox; but air is split by combustor_air_frac, so the
+        # flame sees a richer mixture and a higher adiabatic T.
+        # Downstream panels (Flame Temp, Flame Speed, PSR-PFR, Blowoff,
+        # Exhaust) all model the flame, so they should consume these.
+        "FAR_Bulk": float(FAR_Bulk),
+        "phi_Bulk": float(phi_Bulk),
+        "T_Bulk_K": float(T_Bulk_K),
+        # Legacy alias → phi_Bulk (what the sidebar φ linkage now uses).
+        # At combustor_air_frac = 1.0 this collapses back to phi4.
+        "phi": float(phi_Bulk),
+        # User-tunable flame/dilution split (0.88 nominal DLE)
         "combustor_air_frac": float(combustor_air_frac),
         # Performance
         "efficiency_LHV": float(efficiency),

@@ -1158,8 +1158,9 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ Gas Turbine Cycle — How It Works">
       <p style={{margin:"0 0 6px"}}>Computes the thermodynamic cycle of a GE <span style={hs.em}>LM6000PF</span> or <span style={hs.em}>LMS100PB+</span> aero-derivative under the specified ambient and load. Uses published performance correlations <span style={hs.em}>anchored exactly at each engine's published design point</span>; ambient density and load scaling follow typical aero-derivative behavior.</p>
-      <p style={{margin:"0 0 6px"}}>The combustor firing temperature <span style={hs.em}>T4</span> is commanded by the deck. The equivalence ratio φ is back-solved via Cantera <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>equilibrate("HP")</code> at the (T3, P3) combustor inlet state so that product T = T4. FAR falls out from the physical fuel mass fraction.</p>
-      <p style={{margin:0}}><span style={hs.em}>Linkages:</span> turning on the three toggles pipes T3, P3, and φ into the sidebar Air Temperature, Pressure, and φ/FAR fields so every other tab (AFT, flame speed, combustor, exhaust, autoignition) runs at the engine's actual operating state. Each toggle has a <span style={hs.warn}>Break link</span> button to reclaim manual control.</p>
+      <p style={{margin:"0 0 6px"}}>The combustor firing temperature <span style={hs.em}>T4</span> is commanded by the deck. <span style={hs.em}>φ₄</span> (and FAR₄) is back-solved via Cantera <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>equilibrate("HP")</code> at (T3, P3) so equilibrium product T = T4 — these are the <span style={hs.em}>combustor-exit</span> values after dilution mixing.</p>
+      <p style={{margin:"0 0 6px"}}>The primary flame sees only a fraction of the combustor air — set by <span style={hs.em}>Combustor Air Fraction</span>. The flame-zone (bulk) values are <span style={hs.em}>FAR_Bulk = FAR₄ / frac</span>, <span style={hs.em}>φ_Bulk = φ₄ / frac</span>, and <span style={hs.em}>T_Bulk</span> = HP-adiabatic equilibrium T at (T3, P3, φ_Bulk). These drive the Flame Temp / Flame Speed / PSR-PFR / Blowoff / Exhaust panels when linked. The split does <span style={hs.em}>not</span> affect engine efficiency.</p>
+      <p style={{margin:0}}><span style={hs.em}>Linkages:</span> the four toggles pipe T3, P3, φ_Bulk, and humid-air oxidizer into the sidebar so every other tab (AFT, flame speed, combustor, exhaust, autoignition) runs at the engine's actual flame-zone state. Each toggle has a <span style={hs.warn}>Break link</span> button to reclaim manual control.</p>
     </HelpBox>
 
     {/* Inputs */}
@@ -1200,11 +1201,11 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
           </div>}
           <div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}} title="Fraction of inlet airflow that actually passes through the combustor (primary + dilution). The rest bypasses to cool the turbine hot section. This is the knob that sets thermal efficiency: smaller fraction (more cooling bypass) → less fuel burned to reach T4 → higher η_LHV. Aero-derivative defaults ≈0.60–0.75.">Combustor Air Fraction</label>
+              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}} title="Flame-zone share of combustor airflow (m_flame / m_comb_air). The rest is dilution / liner cooling downstream of the primary zone. Does NOT affect thermal efficiency — only sets the flame-zone state: FAR_Bulk = FAR₄/frac, φ_Bulk = φ₄/frac, T_Bulk = adiabatic equilibrium T at (T3, P3, φ_Bulk). Typical DLE primary-zone fraction ≈ 0.80–0.95. Default 0.88.">Combustor Air Fraction (flame/dilution)</label>
               <NumField value={airFrac} decimals={3} onCommit={v=>setAirFrac(Math.max(0.30,Math.min(1.00,+v)))} style={{width:72,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
             </div>
             <input type="range" min="0.30" max="1.00" step="0.005" value={airFrac} onChange={e=>setAirFrac(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
-            <div style={{fontSize:9.5,color:C.txtMuted,marginTop:-2,fontStyle:"italic",lineHeight:1.3}}>{(airFrac*100).toFixed(1)}% through combustor · {((1-airFrac)*100).toFixed(1)}% cooling bypass · sets thermal efficiency</div>
+            <div style={{fontSize:9.5,color:C.txtMuted,marginTop:-2,fontStyle:"italic",lineHeight:1.3}}>{(airFrac*100).toFixed(1)}% in flame zone · {((1-airFrac)*100).toFixed(1)}% dilution · sets T_Bulk / φ_Bulk only (not η)</div>
           </div>
         </div>
       </div>
@@ -1218,7 +1219,7 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
         {[
           {on:linkT3,set:setLinkT3,label:"Air Temperature → T3",tip:"Sidebar Air Temperature (K) ← cycle T3 (combustor inlet / HPC exit)"},
           {on:linkP3,set:setLinkP3,label:"Pressure → P3",tip:"Sidebar Pressure ← cycle P3 (combustor inlet pressure)"},
-          {on:linkFAR,set:setLinkFAR,label:"φ → cycle φ₄ (combustor exit)",tip:"Sidebar φ ← cycle's combustor-exit φ₄ (back-solved from the commanded T4). This is the bulk/flame phi in a DLE premixed combustor; drives T_ad on Flame Temp, PSR-PFR, Flame Speed, Blowoff, and Exhaust panels."},
+          {on:linkFAR,set:setLinkFAR,label:"φ → cycle φ_Bulk (flame zone)",tip:"Sidebar φ ← cycle's flame-zone φ_Bulk = φ₄ / combustor_air_frac. This is the equivalence ratio actually seen by the primary flame (richer than the diluted combustor exit φ₄). Drives T_ad on Flame Temp and the PSR-PFR / Flame Speed / Blowoff / Exhaust panels, which all model the flame — not the diluted exit."},
           {on:linkOx,set:setLinkOx,label:"Oxidizer comp → humid air @ ambient",tip:"Sidebar Oxidizer composition ← cycle's computed humid-air mol % at ambient T/RH. Required for T_ad on Flame Temp to match T4 on this panel (they use the same mechanism and same air)."},
         ].map(l=>(
           <div key={l.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",border:`1px solid ${l.on?C.accent:C.border}`,borderRadius:6,marginBottom:6,background:l.on?`${C.accent}10`:"transparent"}}>
@@ -1251,9 +1252,10 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
         </div>
         {result&&<div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
           <Kpi label="T4 (firing)" value={fmtT(result.T4_K)}/>
+          <Kpi label="T_Bulk (flame)" value={fmtT(result.T_Bulk_K!=null?result.T_Bulk_K:result.T4_K)}/>
           <Kpi label="T3 (comb. in)" value={fmtT(result.T3_K)}/>
           <Kpi label="P3" value={fmtP(result.P3_bar)}/>
-          <Kpi label="φ₄" value={(result.phi4!=null?result.phi4:result.phi).toFixed(4)}/>
+          <Kpi label="φ₄ / φ_Bulk" value={`${(result.phi4!=null?result.phi4:result.phi).toFixed(3)} / ${(result.phi_Bulk!=null?result.phi_Bulk:result.phi).toFixed(3)}`}/>
         </div>}
       </div>}
     </div>
@@ -1281,11 +1283,17 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
         <div style={S.cardT}>Flows & Performance</div>
         <div style={{display:"flex",flexDirection:"column",gap:6,fontFamily:"monospace",fontSize:11.5}}>
           <KV k="Air flow (inlet)"        v={fmtMdot(result.mdot_air_kg_s)}/>
-          <KV k="Air flow (combustor)"    v={fmtMdot(result.mdot_air_combustor_kg_s||result.mdot_air_kg_s*(result.combustor_air_frac||1))}/>
           <KV k="Fuel flow"               v={fmtMdot(result.mdot_fuel_kg_s)}/>
-          <KV k="FAR₄ (combustor exit)"   v={(result.FAR4!=null?result.FAR4:result.FAR_flame||result.FAR).toFixed(5)}/>
-          <KV k="φ₄ (combustor exit)"     v={(result.phi4!=null?result.phi4:result.phi).toFixed(4)}/>
-          <KV k="Combustor air fraction"  v={((result.combustor_air_frac||1)*100).toFixed(1)+" %"}/>
+          <div style={{marginTop:4,fontSize:9.5,color:C.txtMuted,textTransform:"uppercase",letterSpacing:"1px",fontWeight:700}}>Combustor exit (after dilution)</div>
+          <KV k="T₄ (firing)"             v={fmtT(result.T4_K)}/>
+          <KV k="FAR₄"                    v={(result.FAR4!=null?result.FAR4:result.FAR_flame||result.FAR).toFixed(5)}/>
+          <KV k="φ₄"                      v={(result.phi4!=null?result.phi4:result.phi).toFixed(4)}/>
+          <div style={{marginTop:4,fontSize:9.5,color:C.txtMuted,textTransform:"uppercase",letterSpacing:"1px",fontWeight:700}}>Flame zone (bulk)</div>
+          <KV k="T_Bulk (flame)"          v={fmtT(result.T_Bulk_K!=null?result.T_Bulk_K:result.T4_K)}/>
+          <KV k="FAR_Bulk"                v={(result.FAR_Bulk!=null?result.FAR_Bulk:(result.FAR4||0)).toFixed(5)}/>
+          <KV k="φ_Bulk"                  v={(result.phi_Bulk!=null?result.phi_Bulk:(result.phi4||result.phi||0)).toFixed(4)}/>
+          <KV k="Air frac (flame/dil.)"   v={((result.combustor_air_frac||1)*100).toFixed(1)+" %"}/>
+          <div style={{marginTop:4,fontSize:9.5,color:C.txtMuted,textTransform:"uppercase",letterSpacing:"1px",fontWeight:700}}>Performance</div>
           <KV k="Efficiency (LHV)"        v={(result.efficiency_LHV*100).toFixed(2)+" %"}/>
           <KV k="Heat rate"               v={result.heat_rate_kJ_per_kWh.toFixed(0)+" kJ/kWh"}/>
           <KV k="LHV (fuel)"              v={result.LHV_fuel_MJ_per_kg.toFixed(2)+" MJ/kg"}/>
@@ -1347,10 +1355,14 @@ export default function App(){
   const[cycleRH,setCycleRH]=useState(60.0);            // %
   const[cycleLoad,setCycleLoad]=useState(100.0);       // %
   const[cycleTcool,setCycleTcool]=useState(288.15);    // K (15 C) — LMS100 IC supply
-  // Combustor-air fraction is the real physical knob that sets thermal efficiency.
-  // Per-engine defaults are calibrated so the published design-point η matches
-  // (LM6000PF → 42.4 % at 0.683, LMS100PB+ → 44.0 % at 0.747).
-  const CYCLE_AIRFRAC_DEFAULT={"LM6000PF":0.683,"LMS100PB+":0.747};
+  // Combustor-air fraction is the FLAME-ZONE share of combustor airflow
+  // (m_flame / m_comb_air). It is a pure intra-combustor split and does NOT
+  // affect efficiency (η is handled by a private per-engine calibration in
+  // the backend). Its only job is to set the flame-zone state:
+  //    FAR_Bulk = FAR4 / frac,  phi_Bulk = phi4 / frac,  T_Bulk = adiabatic
+  //    equilibrium T at (T3, P3, phi_Bulk).
+  // 0.88 is a nominal DLE primary-zone fraction.
+  const CYCLE_AIRFRAC_DEFAULT={"LM6000PF":0.88,"LMS100PB+":0.88};
   const[cycleAirFrac,setCycleAirFrac]=useState(CYCLE_AIRFRAC_DEFAULT["LM6000PF"]);
   const[linkT3,setLinkT3]=useState(true);
   const[linkP3,setLinkP3]=useState(true);
@@ -1441,7 +1453,9 @@ export default function App(){
     if(!cycleResult)return;
     if(linkT3)setT0(cycleResult.T3_K);
     if(linkP3)setP(cycleResult.P3_bar/1.01325);   // bar → atm (sidebar P is atm in SI)
-    if(linkFAR)setPhiClamped(cycleResult.phi);
+    // Sidebar φ ← cycle φ_Bulk (flame-zone φ, = φ₄/combustor_air_frac). Fall
+    // back to phi4 or legacy phi for older backends that haven't deployed yet.
+    if(linkFAR)setPhiClamped(cycleResult.phi_Bulk??cycleResult.phi4??cycleResult.phi);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[cycleResult,linkT3,linkP3,linkFAR]);
 
@@ -1526,10 +1540,10 @@ export default function App(){
               <strong style={{color:C.accent2,fontSize:11}}>📌 Quick Start:</strong> <span style={{fontSize:10}}>Select a fuel preset below (e.g., "Pipeline NG"), set your equivalence ratio and conditions, then explore each tab. All panels share these settings.</span></div>
             <CompEditor title="Fuel (mol%)" comp={fuel} setComp={setFuel} presets={FUEL_PRESETS} speciesList={FUEL_SP} accent={C.accent2} initialPreset="Pipeline NG (US)"
               helpText="Enter fuel composition in mole percent. Select a preset for common fuels or enter custom values. Total must sum to 100%. CO₂ and N₂ in fuel are treated as diluents."/>
-            <div style={{position:"relative"}}>
-              {accurate&&hasOnline&&linkOx&&<div style={{position:"absolute",top:10,right:12,zIndex:2}}><LinkChip onBreak={()=>setLinkOx(false)} label="Linked to Cycle humid air"/></div>}
+            <div>
               <CompEditor title="Oxidizer (mol%)" comp={ox} setComp={setOx} presets={OX_PRESETS} speciesList={OX_SP} accent={C.accent3} initialPreset="Humid Air (60%RH 25°C)"
                 helpText="Enter oxidizer composition in mole percent. 'Dry Air' is the standard. Use humid air, O₂-enriched, or vitiated air for specialized analyses."/>
+              {accurate&&hasOnline&&linkOx&&<div style={{marginTop:-2,marginBottom:8}}><LinkChip onBreak={()=>setLinkOx(false)} label="Linked to Cycle humid air"/></div>}
             </div>
             <div style={{background:C.bg2,border:`1px solid ${C.accent}25`,borderRadius:8,padding:12}}>
               <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6}}>Operating Conditions</div>
@@ -1542,7 +1556,7 @@ export default function App(){
                 </div>
                 <input type="range" min="0.3" max="1.0" step="0.01" value={phi} onChange={e=>setPhi(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{phi<0.95?"lean":phi>1.05?"rich":"~stoichiometric"}</div>
-                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={()=>setLinkFAR(false)} label="Linked to Cycle φ₄"/>}
+                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={()=>setLinkFAR(false)} label="Linked to Cycle φ_Bulk"/>}
               </div>
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
