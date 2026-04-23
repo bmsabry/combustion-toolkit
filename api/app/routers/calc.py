@@ -194,6 +194,7 @@ def calc_cycle(body: CycleRequest, _: User = Depends(require_full_subscription))
         body.T_fuel_K,
         body.WFR,
         body.water_mode,
+        body.T_water_K,
         body.bleed_air_frac,
     )
     return CycleResponse(**result)

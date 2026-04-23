@@ -422,6 +422,16 @@ class CycleRequest(BaseModel):
         pattern="^(liquid|steam)$",
         description="Water injection phase: 'liquid' (absorbs h_fg) or 'steam'",
     )
+    T_water_K: Optional[float] = Field(
+        default=None,
+        gt=250.0,
+        lt=900.0,
+        description=(
+            "Water inlet temperature (K). Defaults to 288.15 K for liquid "
+            "and T_air for steam. User-overridable for superheated steam or "
+            "chilled water injection cases."
+        ),
+    )
     bleed_air_frac: float = Field(
         default=0.0,
         ge=0.0,
@@ -492,6 +502,12 @@ class CycleResponse(BaseModel):
     mdot_air_kg_s: float
     mdot_air_combustor_kg_s: float = 0.0
     mdot_fuel_kg_s: float
+    # Water injection (mass passing through the turbine when WFR > 0)
+    mdot_water_kg_s: float = 0.0
+    water_fuel_bump_factor: float = 1.0
+    water_MW_delta: float = 0.0
+    T4_dry_deck_K: float = 0.0
+    T_water_K: float = 288.15
     # Bleed (compressor-discharge bleed dumped to ambient)
     bleed_air_frac: float = 0.0
     mdot_bleed_kg_s: float = 0.0

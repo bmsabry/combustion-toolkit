@@ -333,7 +333,7 @@ const _PSR_SEED_LBL={unreacted:"Unreacted (cold)",hot_eq:"Hot equilibrium",cold_
 const _EQ_LBL={HP:"HP (constant enthalpy+pressure)",UV:"UV (constant internal energy+volume)",TP:"TP (constant temperature+pressure)"};
 const _INT_LBL={steady_state:"Steady-state solver",chunked:"Chunked time advance (default)",step:"Step-by-step"};
 const _MECH_LBL={gri30:"GRI-Mech 3.0 (53 species, 325 rxns)",glarborg:"Glarborg 2018 (151 species, 1395 rxns)",usc2:"USC-Mech II (coming soon)",aramco30:"AramcoMech 3.0 (coming soon)"};
-function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult}=ps||{};
+function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult}=ps||{};
   // Adiabatic fuel/air mix T that's used everywhere downstream
   const T_mix_phi=mixT(fuel,ox,phi,T_fuel??T0,T_air??T0);
   const aft=calcAFTx(fuel,ox,phi,T_mix_phi,P,combMode);
@@ -431,7 +431,8 @@ if(cycleResult){
     ["Combustor Air Fraction (flame/total)",fmtN(cycleAirFrac,3),"—"],
     ["Fuel Temperature",fmtN(uv(u,"T",cr.T_fuel_K??cycleTamb),2),uu(u,"T")],
     ["Water/Fuel Mass Ratio (WFR)",fmtN(cr.WFR??WFR,3),"kg_water/kg_fuel"],
-    ["Water Injection Mode",(cr.WFR??WFR)>0?((cr.water_mode||waterMode)==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],
+    ["Water Injection Mode",(cr.WFR??WFR)>0?((cr.water_mode||waterMode)==="steam"?"Steam":"Liquid (absorbs h_fg)"):"off","—"],
+    ["Water Inlet Temperature",(cr.WFR??WFR)>0?fmtN(uv(u,"T",cr.T_water_K??T_water),1):"n/a",uu(u,"T")],
     ["Compressor Bleed Mode",bleedMode==="auto"?"AUTO (vs Load schedule)":"MANUAL","—"],
     ["Compressor Bleed Valve Size",fmtN(bleedValveSizePct,2),"% of compressor air"],
     ["Compressor Bleed Open",fmtN(bleedOpenPct,1),"% (0=closed, 100=full)"],
@@ -1878,6 +1879,10 @@ export default function App(){
   // Both feed the Cantera adiabatic enthalpy balance in the backend.
   const[WFR,setWFR]=useState(0);
   const[waterMode,setWaterMode]=useState("liquid");
+  // Water inlet temperature (K). Independent from fuel temperature. Default
+  // 288.15 K for liquid (cold city water), 450 K for steam (mid-pressure saturated).
+  // Changes when the user flips modes unless they've manually overridden.
+  const[T_water,setTwater]=useState(288.15);
   // Compressor-discharge bleed. The bleed valve dumps a fraction of compressor
   // air to ambient (it never reaches the combustor or turbine). Two knobs:
   //   • bleedMode   = "auto" (programmed schedule vs load) | "manual" (user value)
@@ -1973,6 +1978,7 @@ export default function App(){
     // real-engine penalty.
     WFR,
     water_mode:waterMode,
+    T_water_K:WFR>0?T_water:null,
     // Compressor-discharge bleed dumped to ambient. Reduces air to combustor
     // + turbine; backend iteratively elevates T4 to hold gross power.
     bleed_air_frac:bleedAirFrac,
@@ -1980,7 +1986,7 @@ export default function App(){
   const cycleResult=bkCycle.data;
   // panelState is built AFTER cycleResult to avoid temporal-dead-zone reference.
   // Consumed by exportToExcel button further below; safe to declare here.
-  const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,accurate:accurate&&!!auth.hasOnlineAccess,
+  const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,T_water,accurate:accurate&&!!auth.hasOnlineAccess,
     cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult,
     bleedMode,bleedOpenPct,bleedValveSizePct,bleedAirFrac};
 
@@ -2101,13 +2107,29 @@ export default function App(){
               <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{WFR===0?"dry (no water)":WFR<0.3?"trace":WFR<0.8?"moderate":WFR<1.3?"typical DLE":"heavy"}</div>
               <div style={{display:"flex",gap:6,marginTop:6,fontSize:10,fontFamily:"monospace"}}>
                 <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",flex:1,padding:"4px 6px",border:`1px solid ${waterMode==="liquid"?C.accent3:C.border}`,borderRadius:4,background:waterMode==="liquid"?`${C.accent3}18`:"transparent"}}>
-                  <input type="radio" name="waterMode" value="liquid" checked={waterMode==="liquid"} onChange={()=>setWaterMode("liquid")} style={{accentColor:C.accent3}}/>
-                  <span title="Liquid water at 288 K (15 °C supply). Absorbs latent heat h_fg ≈ 2.45 MJ/kg on vaporization; biggest flame-T drop per unit WFR.">Liquid</span>
+                  <input type="radio" name="waterMode" value="liquid" checked={waterMode==="liquid"} onChange={()=>{setWaterMode("liquid");setTwater(288.15);}} style={{accentColor:C.accent3}}/>
+                  <span title="Liquid water (user-specified inlet T below). Absorbs latent heat h_fg ≈ 2.45 MJ/kg on vaporization; biggest flame-T drop per unit WFR.">Liquid</span>
                 </label>
                 <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",flex:1,padding:"4px 6px",border:`1px solid ${waterMode==="steam"?C.accent3:C.border}`,borderRadius:4,background:waterMode==="steam"?`${C.accent3}18`:"transparent"}}>
-                  <input type="radio" name="waterMode" value="steam" checked={waterMode==="steam"} onChange={()=>setWaterMode("steam")} style={{accentColor:C.accent3}}/>
-                  <span title="Steam at the air plenum temperature. Dilution-only cooling (no latent heat). Smaller T_ad drop per unit WFR but easier to deliver in industrial plants with a boiler.">Steam</span>
+                  <input type="radio" name="waterMode" value="steam" checked={waterMode==="steam"} onChange={()=>{setWaterMode("steam");setTwater(450);}} style={{accentColor:C.accent3}}/>
+                  <span title="Steam at user-specified inlet T (default 450 K ≈ saturated mid-pressure). Dilution-only cooling (no latent heat).">Steam</span>
                 </label>
+              </div>
+              <div style={{marginTop:8,paddingTop:6,borderTop:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Water/steam inlet temperature — independent from fuel T. Liquid defaults to 288 K (15 °C city water). Steam defaults to 450 K (~saturated at 10 bar). Overridable for chilled water, superheated steam, or HRSG tie-ins.">Water Inlet T ({uu(units,"T")}) ⓘ</label>
+                  <NumField value={uv(units,"T",T_water)} decimals={1} onCommit={v=>setTwater(Math.max(250,Math.min(900,uvI(units,"T",+v))))} disabled={WFR===0} style={{width:64,padding:"3px 6px",fontFamily:"monospace",color:WFR===0?C.txtMuted:C.accent3,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${WFR===0?C.border:C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+                </div>
+                <div style={{display:"flex",gap:3,marginTop:2,flexWrap:"wrap"}}>
+                  {(waterMode==="liquid"?[{k:278.15,l:"5°C"},{k:288.15,l:"15°C"},{k:303.15,l:"30°C"}]:[{k:373.15,l:"sat 1bar"},{k:450,l:"sat ~10bar"},{k:550,l:"superhtd"}]).map(o=>(
+                    <button key={o.k} disabled={WFR===0} onClick={()=>setTwater(o.k)}
+                      title={`${o.l} = ${o.k} K`}
+                      style={{padding:"2px 6px",fontSize:9,fontWeight:600,fontFamily:"monospace",
+                        color:Math.abs(T_water-o.k)<1?C.bg:C.txtDim,
+                        background:Math.abs(T_water-o.k)<1?C.accent3:"transparent",
+                        border:`1px solid ${C.border}`,borderRadius:3,cursor:WFR===0?"default":"pointer",opacity:WFR===0?0.4:1}}>{o.l}</button>
+                  ))}
+                </div>
               </div>
             </div>
             <div style={{...hs.box,marginBottom:10,background:`${C.accent2}08`,borderColor:`${C.accent2}18`}}>
