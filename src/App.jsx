@@ -1846,14 +1846,24 @@ function KV({k,v}){return(<div style={{display:"flex",justifyContent:"space-betw
 ═══════════════════════════════════════════════════════════════════════════ */
 function CombustorMappingPanel({
   fuel, Tfuel, WFR=0, waterMode="liquid", T_water,
-  cycleResult, cycleAirFrac, bkCycle,
+  cycleResult, bkCycle,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
 
-  // ── Circuit air fractions (% of flame-zone air) ──────────────────────────
-  // Defaults reflect LMS100 DLE hardware. User can override if testing a
-  // different hardware set; a sum != 100 % triggers a warning.
+  // ── W36 / W3 — combustor primary air split ──────────────────────────────
+  // W3   = compressor-discharge flow (post-bleed)
+  // W36  = air that physically enters the combustor at the dome / premixer
+  //        face. The balance (1 − W36/W3) is late-liner film cooling and
+  //        secondary-dilution air that bypasses the primary zone and
+  //        rejoins downstream of the flame before T4.
+  // Default 0.82 reflects the LMS100 DLE design split. User-editable so
+  // hardware variants or off-design operation can be explored. All four
+  // circuits' air allocations are computed off this W36 value.
+  const[w36w3,setW36w3]=useState(0.82);
+
+  // ── Circuit air fractions (% of W36) ─────────────────────────────────────
+  // Defaults reflect LMS100 DLE hardware. Sum must = 100 % (warning if not).
   const[fracIP,setFracIP]=useState(2.3);
   const[fracOP,setFracOP]=useState(2.2);
   const[fracIM,setFracIM]=useState(41.0);
@@ -1869,24 +1879,19 @@ function CombustorMappingPanel({
   const T3=cycleResult?.T3_K||300;
   const P3_bar=cycleResult?.P3_bar||1;
   const oxHumid=cycleResult?.oxidizer_humid_mol_pct||null;
-  // Combustor inlet air = full post-bleed compressor flow. All air that makes
-  // it past the compressor-discharge bleed enters the combustor (through the
-  // four premixer circuits + film cooling); there is no separate "bypass
-  // duct" on the LMS100 DLE. We deliberately do NOT use cycleResult's
-  // mdot_air_combustor_kg_s because that field has the deck's
-  // combustor_bypass_frac calibration (0.747 for LMS100, 0.683 for LM6000)
-  // baked in — it exists only to keep the Brayton fuel accounting consistent
-  // with the OEM-published η, and does not reflect a physical bypass.
-  const m_air_combustor=cycleResult?.mdot_air_post_bleed_kg_s||cycleResult?.mdot_air_kg_s||0;
+  // Post-bleed compressor discharge — all air downstream of the bleed valve.
+  // The 4 DLE circuits draw from W36 = post-bleed × (W36/W3); the remainder
+  // is film-cooling air that skips the primary zone.
+  const m_air_post_bleed=cycleResult?.mdot_air_post_bleed_kg_s||cycleResult?.mdot_air_kg_s||0;
   const m_fuel_total=cycleResult?.mdot_fuel_kg_s||0;
-  // Flame-zone air = combustor air × flame/dilution split (sidebar value).
-  const m_air_flame=m_air_combustor*(cycleAirFrac||0.89);
+  const m_air_W36=m_air_post_bleed*Math.max(0,Math.min(1,w36w3));
+  const m_air_cooling=m_air_post_bleed-m_air_W36;
 
-  // ── Per-circuit air flows (kg/s) ─────────────────────────────────────────
-  const m_air_IP=m_air_flame*fracIP/100;
-  const m_air_OP=m_air_flame*fracOP/100;
-  const m_air_IM=m_air_flame*fracIM/100;
-  const m_air_OM=m_air_flame*fracOM/100;
+  // ── Per-circuit air flows (kg/s) — partition of W36 ─────────────────────
+  const m_air_IP=m_air_W36*fracIP/100;
+  const m_air_OP=m_air_W36*fracOP/100;
+  const m_air_IM=m_air_W36*fracIM/100;
+  const m_air_OM=m_air_W36*fracOM/100;
 
   // ── Backend AFT per circuit for TFlame and FAR ───────────────────────────
   // WFR is identical for every circuit because water is distributed
@@ -1995,8 +2000,8 @@ function CombustorMappingPanel({
 
     <HelpBox title="ℹ️ Combustor Mapping — How It Works">
       <p style={{margin:"0 0 6px"}}>The LMS100 DLE combustor has <span style={hs.em}>four fuel circuits</span> feeding its premixer: Inner Pilot (IP), Outer Pilot (OP), Inner Main (IM), and Outer Main (OM). This panel lets you pick an equivalence ratio for each circuit and see what fuel flow + flame temperature each delivers.</p>
-      <p style={{margin:"0 0 6px"}}>The <span style={hs.em}>flame-zone air</span> from the Cycle (combustor air × combustor_air_frac) splits across the four circuits by the percentages on each row (defaults are LMS100 hardware). Each circuit's fuel follows <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>m_fuel = FAR_stoich · φ · m_air</code>. The Outer Main is the <span style={hs.em}>float circuit</span> — its fuel is whatever's left from the cycle's total fuel after IP/OP/IM take their share, and its φ is back-solved.</p>
-      <p style={{margin:0}}><span style={hs.em}>T_fuel, air composition (humid), T3, P3</span>, and the <span style={hs.em}>total fuel flow</span> all come straight from the Cycle solution. Water injection (WFR &gt; 0) is distributed proportionally to each circuit's fuel flow, so every circuit sees the same WFR.</p>
+      <p style={{margin:"0 0 6px"}}>The <span style={hs.em}>combustor primary air</span> is <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 = (post-bleed compressor) × (W36/W3)</code> — the fraction of compressor discharge that enters the combustor dome and is split among the four circuits. The balance (1 − W36/W3) is late-liner film-cooling air that rejoins downstream of the flame. Default W36/W3 = 0.82 for LMS100 DLE; tune it on the knob below. Each circuit's fuel follows <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>m_fuel = FAR_stoich · φ · m_air</code>. The Outer Main is the <span style={hs.em}>float circuit</span> — its fuel is whatever's left from the cycle's total fuel after IP/OP/IM take their share, and its φ is back-solved.</p>
+      <p style={{margin:0}}><span style={hs.em}>T_fuel, humid-air composition, T3, P3</span>, and the <span style={hs.em}>total fuel flow</span> all come straight from the Cycle solution. Water injection (WFR &gt; 0) is distributed proportionally to each circuit's fuel flow, so every circuit sees the same WFR.</p>
     </HelpBox>
 
     {!cycleResult?
@@ -2013,13 +2018,38 @@ function CombustorMappingPanel({
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>T₃:</span> <strong style={{color:C.accent}}>{fmtT(T3)} {uu(units,"T")}</strong></div>
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>P₃:</span> <strong style={{color:C.accent}}>{units==="SI"?(P3_bar/1.01325).toFixed(3)+" atm":(P3_bar*14.5038).toFixed(1)+" psia"}</strong></div>
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>T_fuel:</span> <strong style={{color:C.accent2}}>{fmtT(Tfuel)} {uu(units,"T")}</strong></div>
-          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Compressor air:</span> <strong style={{color:C.txt}}>{fmtMdot(cycleResult?.mdot_air_kg_s||0)} {mdotU}</strong></div>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Compressor air (W3):</span> <strong style={{color:C.txt}}>{fmtMdot(cycleResult?.mdot_air_kg_s||0)} {mdotU}</strong></div>
           {(cycleResult?.bleed_air_frac||0)>0?<div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.orange}40`}}><span style={{color:C.txtDim}}>Bleed flow:</span> <strong style={{color:C.orange}}>−{fmtMdot(cycleResult?.mdot_bleed_kg_s||0)} {mdotU}</strong></div>:null}
-          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Combustor inlet (post-bleed):</span> <strong style={{color:C.accent}}>{fmtMdot(m_air_combustor)} {mdotU}</strong></div>
-          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Flame-zone air frac:</span> <strong style={{color:C.txt}}>{(cycleAirFrac*100).toFixed(1)} %</strong></div>
-          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Flame-zone air:</span> <strong style={{color:C.accent3}}>{fmtMdot(m_air_flame)} {mdotU}</strong></div>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Post-bleed:</span> <strong style={{color:C.txt}}>{fmtMdot(m_air_post_bleed)} {mdotU}</strong></div>
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Total fuel:</span> <strong style={{color:C.accent2}}>{fmtMdot(m_fuel_total)} {mdotU}</strong></div>
           {WFR>0?<div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.violet}40`}}><span style={{color:C.txtDim}}>WFR:</span> <strong style={{color:C.violet}}>{WFR.toFixed(3)}</strong> <span style={{color:C.txtMuted,fontSize:10}}>({waterMode}) — distributed ∝ fuel</span></div>:null}
+        </div>
+
+        {/* W36/W3 editable knob — governs the split between primary-zone
+            air (fed to the 4 circuits) and late-liner film cooling. */}
+        <div style={{marginTop:10,padding:"10px 12px",background:`${C.accent}0A`,border:`1px solid ${C.accent}45`,borderRadius:6}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <div style={{minWidth:160}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px"}}>W36 / W3</div>
+              <div style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic",lineHeight:1.3}}>combustor primary ÷ compressor (post-bleed)</div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:4}}>
+              <button onClick={()=>setW36w3(v=>Math.max(0,+(Math.max(0,Math.min(1,w36w3))-0.01).toFixed(4)))}
+                title="Decrease W36/W3 by 0.01"
+                style={{padding:"3px 10px",fontSize:13,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:4,cursor:"pointer",lineHeight:1}}>−</button>
+              <NumField value={w36w3} decimals={3} onCommit={v=>setW36w3(Math.max(0,Math.min(1,+v)))}
+                title="Type any value 0-1, or use ± to step by 0.01"
+                style={{width:70,padding:"4px 6px",fontFamily:"monospace",color:C.accent,fontSize:14,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+              <button onClick={()=>setW36w3(v=>Math.max(0,Math.min(1,+(Math.max(0,Math.min(1,w36w3))+0.01).toFixed(4))))}
+                title="Increase W36/W3 by 0.01"
+                style={{padding:"3px 10px",fontSize:13,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:4,cursor:"pointer",lineHeight:1}}>+</button>
+            </div>
+            <div style={{fontSize:11,color:C.txtDim,fontFamily:"monospace",flex:"1 1 240px",minWidth:240}}>
+              <strong style={{color:C.accent}}>W36 = {fmtMdot(m_air_W36)} {mdotU}</strong> → 4 circuits ·
+              &nbsp;liner cooling = <strong style={{color:C.txtDim}}>{fmtMdot(m_air_cooling)} {mdotU}</strong>
+              &nbsp;({((1-w36w3)*100).toFixed(1)}%)
+            </div>
+          </div>
         </div>
       </div>
 
@@ -3028,7 +3058,7 @@ export default function App(){
             {tab==="mapping"&&<CombustorMappingPanel
               fuel={fuel} Tfuel={T_fuel}
               WFR={WFR} waterMode={waterMode} T_water={T_water}
-              cycleResult={cycleResult} cycleAirFrac={cycleAirFrac} bkCycle={bkCycle}
+              cycleResult={cycleResult} bkCycle={bkCycle}
             />}
             {tab==="summary"&&<OperationsSummaryPanel
               fuel={fuel} ox={ox} Tfuel={T_fuel}
