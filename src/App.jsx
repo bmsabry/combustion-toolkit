@@ -1779,6 +1779,7 @@ function EngineAmbientSidebar({
   Tcool,setTcool,airFrac,setAirFrac,
   bleedMode,setBleedMode,bleedOpenPct,bleedOpenManualPct,setBleedOpenManualPct,
   bleedValveSizePct,setBleedValveSizePct,bleedAirFrac,
+  bleedStepPct,setBleedStepPct,
   accurate,
 }){
   const units=useContext(UnitCtx);
@@ -1804,8 +1805,8 @@ function EngineAmbientSidebar({
       <div>
         <label style={lbl}>Engine</label>
         <select style={S.sel} value={engine} onChange={e=>setEngine(e.target.value)}>
-          <option value="LM6000PF">GE LM6000PF (2-spool, non-IC)</option>
-          <option value="LMS100PB+">GE LMS100PB+ (3-spool, IC)</option>
+          <option value="LM6000PF">LM6000PF DLE</option>
+          <option value="LMS100PB+">LMS100PB+ DLE IC</option>
         </select>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
@@ -1844,24 +1845,14 @@ function EngineAmbientSidebar({
       {/* ── BLEED ───────────────────────────────────────────── */}
       <div style={subSec}>Compressor Bleed</div>
       <div>
-        <label style={lbl} title="Maximum bleed fraction when valve is fully open. Free-type any value; quick steps below.">Bleed Valve Size (%)</label>
+        <label style={lbl} title="Maximum bleed split %: the hard upper bound on how much compressor air the bleed valve can dump at 100% open. A function of valve/line size (bigger valve → more bleed possible). Free-type any value.">Max Bleed split % (valve/line size)</label>
         <NumField value={bleedValveSizePct} decimals={2} onCommit={v=>setBleedValveSizePct(Math.max(0,Math.min(100,+v)))} style={S.inp}/>
-        <div style={{display:"flex",gap:3,marginTop:4,flexWrap:"wrap"}}>
-          {[0,15,30,45,60,75,90].map(v=>(
-            <button key={v} onClick={()=>setBleedValveSizePct(v)}
-              title={`Set Bleed Valve Size = ${v}%`}
-              style={{padding:"2px 6px",fontSize:9.5,fontWeight:600,fontFamily:"monospace",
-                color:Math.abs(bleedValveSizePct-v)<0.01?C.bg:C.txtDim,
-                background:Math.abs(bleedValveSizePct-v)<0.01?C.accent:"transparent",
-                border:`1px solid ${C.border}`,borderRadius:3,cursor:"pointer"}}>{v}</button>
-          ))}
-        </div>
       </div>
       <div>
         <div style={{display:"flex",gap:6,marginBottom:6}}>
           {[
             {k:"auto",lbl:"AUTO (vs Load)",tip:"Bleed open % is a continuous function of load. 100% open ≤75% load, 0% ≥95%, linear between."},
-            {k:"manual",lbl:"MANUAL",tip:"You set the bleed open % directly via the slider below."},
+            {k:"manual",lbl:"MANUAL",tip:"You set the bleed open % directly — type a value, click ± with the selected step, or drag the slider."},
           ].map(o=>(
             <button key={o.k} onClick={()=>{
               if(o.k==="manual"&&bleedMode!=="manual"){
@@ -1878,23 +1869,61 @@ function EngineAmbientSidebar({
             }}>{o.lbl}</button>
           ))}
         </div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3,gap:4}}>
           <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>Bleed Open (%)</label>
-          <NumField
-            value={bleedOpenPct}
-            decimals={0}
-            onCommit={v=>{
-              if(bleedMode==="manual")setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(+v))));
-            }}
-            disabled={bleedMode==="auto"}
-            title={bleedMode==="auto"?"AUTO mode — switch to MANUAL to type a value":"Type any value 0–100"}
-            style={{width:64,padding:"3px 6px",fontFamily:"monospace",
-              color:bleedMode==="auto"?C.txtMuted:C.accent2,
-              fontSize:12,fontWeight:700,background:C.bg,
-              border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}50`,
-              borderRadius:4,textAlign:"center",outline:"none"}}/>
+          <div style={{display:"flex",alignItems:"center",gap:3}}>
+            <button
+              onClick={()=>{if(bleedMode==="manual"){const s=Math.max(1,bleedStepPct);setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(bleedOpenPct-s))));}}}
+              disabled={bleedMode==="auto"}
+              title={bleedMode==="auto"?"AUTO mode — switch to MANUAL":`Decrease by ${Math.max(1,bleedStepPct)}%`}
+              style={{padding:"2px 6px",fontSize:12,fontWeight:700,fontFamily:"monospace",
+                color:bleedMode==="auto"?C.txtMuted:C.accent2,
+                background:"transparent",border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}80`,
+                borderRadius:3,cursor:bleedMode==="auto"?"not-allowed":"pointer",lineHeight:1}}>−</button>
+            <NumField
+              value={bleedOpenPct}
+              decimals={0}
+              onCommit={v=>{
+                if(bleedMode==="manual")setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(+v))));
+              }}
+              disabled={bleedMode==="auto"}
+              title={bleedMode==="auto"?"AUTO mode — switch to MANUAL to type a value":"Type any value 0–100, or use ± to bump by the selected step"}
+              style={{width:56,padding:"3px 6px",fontFamily:"monospace",
+                color:bleedMode==="auto"?C.txtMuted:C.accent2,
+                fontSize:12,fontWeight:700,background:C.bg,
+                border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}50`,
+                borderRadius:4,textAlign:"center",outline:"none"}}/>
+            <button
+              onClick={()=>{if(bleedMode==="manual"){const s=Math.max(1,bleedStepPct);setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(bleedOpenPct+s))));}}}
+              disabled={bleedMode==="auto"}
+              title={bleedMode==="auto"?"AUTO mode — switch to MANUAL":`Increase by ${Math.max(1,bleedStepPct)}%`}
+              style={{padding:"2px 6px",fontSize:12,fontWeight:700,fontFamily:"monospace",
+                color:bleedMode==="auto"?C.txtMuted:C.accent2,
+                background:"transparent",border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}80`,
+                borderRadius:3,cursor:bleedMode==="auto"?"not-allowed":"pointer",lineHeight:1}}>+</button>
+          </div>
         </div>
-        <input type="range" min="0" max="100" step="1"
+        {/* Step chips — only active in MANUAL mode. Value "0" means fine step (1%). */}
+        <div style={{display:"flex",alignItems:"center",gap:4,marginTop:2,marginBottom:4}}>
+          <span style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace"}} title="Step size for ± buttons and the slider. Type any value directly regardless of step.">Step:</span>
+          <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+            {[0,15,30,45,60,75,90].map(v=>{
+              const active=bleedStepPct===v||(v===0&&bleedStepPct<=1);
+              return(
+                <button key={v} onClick={()=>{if(bleedMode==="manual")setBleedStepPct(v===0?1:v);}}
+                  disabled={bleedMode==="auto"}
+                  title={v===0?"Fine step — arrows bump by 1%":`Arrows bump by ${v}%`}
+                  style={{padding:"1px 5px",fontSize:9,fontWeight:600,fontFamily:"monospace",
+                    color:active?C.bg:(bleedMode==="auto"?C.txtMuted:C.txtDim),
+                    background:active?C.accent2:"transparent",
+                    border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}50`,
+                    borderRadius:3,cursor:bleedMode==="auto"?"not-allowed":"pointer",
+                    opacity:bleedMode==="auto"?0.5:1}}>{v===0?"1":v}</button>
+              );
+            })}
+          </div>
+        </div>
+        <input type="range" min="0" max="100" step={Math.max(1,bleedStepPct)}
           value={bleedOpenPct}
           disabled={bleedMode==="auto"}
           onChange={e=>{if(bleedMode==="manual")setBleedOpenManualPct(+e.target.value);}}
@@ -1940,7 +1969,11 @@ export default function App(){
   //    FAR_Bulk = FAR4 / frac,  phi_Bulk = phi4 / frac,  T_Bulk = adiabatic
   //    equilibrium T at (T3, P3, phi_Bulk).
   // 0.88 is a nominal DLE primary-zone fraction.
-  const CYCLE_AIRFRAC_DEFAULT={"LM6000PF":0.88,"LMS100PB+":0.88};
+  // Per-engine calibration defaults. Chosen from OEM / SME-informed values:
+  // combustor_air_frac (flame/total) and L_pfr (burnout length, m) depend on
+  // combustor geometry and primary-zone design.
+  const CYCLE_AIRFRAC_DEFAULT={"LM6000PF":0.85,"LMS100PB+":0.89};
+  const CYCLE_LPFR_DEFAULT_M ={"LM6000PF":0.21336,"LMS100PB+":0.13716};   // 0.70 ft / 0.45 ft
   const[cycleAirFrac,setCycleAirFrac]=useState(CYCLE_AIRFRAC_DEFAULT["LM6000PF"]);
   const[linkT3,setLinkT3]=useState(true);
   const[linkP3,setLinkP3]=useState(true);
@@ -1975,6 +2008,10 @@ export default function App(){
   const[bleedMode,setBleedMode]=useState("auto");
   const[bleedOpenManualPct,setBleedOpenManualPct]=useState(100);
   const[bleedValveSizePct,setBleedValveSizePct]=useState(3.3);
+  // UI step size for Bleed Open % (manual mode). Selectable via the chips
+  // under the Bleed Open NumField. 1 = fine (per-% step); 15/30/45/60/75/90 are
+  // coarse steps for quickly nudging the valve to common operating points.
+  const[bleedStepPct,setBleedStepPct]=useState(15);
   const[measO2,setMeasO2]=useState(14.0);const[measCO2,setMeasCO2]=useState(3.0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
@@ -2018,11 +2055,15 @@ export default function App(){
   // Gas-turbine cycle backend call. Fires only in Accurate Mode (requires FULL subscription).
   // Uses the same fuel composition as the rest of the toolkit so linked phi is self-consistent.
   // Result drives the CyclePanel *and* the sidebar linkage toggles (T_air←T3, P←P3, phi←cycle phi).
-  // Reset the combustor-air fraction to the per-engine default whenever the user
-  // picks a different engine. They can still over-ride it via the Cycle-panel slider.
+  // Reset the combustor-air fraction AND the PFR length to the per-engine
+  // defaults whenever the user picks a different engine. They can still over-
+  // ride either one manually — the Cycle-panel slider for air_frac, the
+  // Combustor-panel L_PFR field for burnout length.
   useEffect(()=>{
     const d=CYCLE_AIRFRAC_DEFAULT[cycleEngine];
     if(d!==undefined)setCycleAirFrac(d);
+    const L=CYCLE_LPFR_DEFAULT_M[cycleEngine];
+    if(L!==undefined)setLpfr(L);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[cycleEngine]);
 
@@ -2174,6 +2215,7 @@ export default function App(){
               bleedOpenPct={bleedOpenPct}
               bleedOpenManualPct={bleedOpenManualPct} setBleedOpenManualPct={setBleedOpenManualPct}
               bleedValveSizePct={bleedValveSizePct} setBleedValveSizePct={setBleedValveSizePct}
+              bleedStepPct={bleedStepPct} setBleedStepPct={setBleedStepPct}
               bleedAirFrac={bleedAirFrac}
               accurate={accurate&&hasOnline}
             />
