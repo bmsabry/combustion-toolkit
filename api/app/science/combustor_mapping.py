@@ -315,6 +315,8 @@ def run(
     mechanism: str = "gri30",
     pilot_NOx_anchor_phi: float = 1.0,
     pilot_NOx_anchor_ppm: float = 180.0,
+    im_nox_adder_ppm: float = 6.0,
+    om_nox_adder_ppm: float = 8.6,
 ) -> dict:
     """Run the 4-circuit combustor mapping. See module docstring for topology."""
     mech_path = mech_yaml(mechanism)
@@ -352,11 +354,15 @@ def run(
     tau_psr_s = max(tau_psr_ms, 0.05) * 1e-3
     tau_pfr_near_s = max(tau_pfr_near_ms, 0.0) * 1e-3
 
+    # Fixed main-circuit NOx adders (ppm, vol-dry) applied on top of the
+    # kinetic PSR+PFR NO. Compensates for sub-grid effects the 0D network
+    # can't see (imperfect premix, local rich zones, unsteady pockets).
+    # Defaults calibrated to LMS100 DLE hardware: IM +6 ppm, OM +8.6 ppm.
     circuits_spec = [
-        ("IP", float(phi_IP), m_air_IP, m_fuel_IP, True),
-        ("OP", float(phi_OP), m_air_OP, m_fuel_OP, True),
-        ("IM", float(phi_IM), m_air_IM, m_fuel_IM, False),
-        ("OM", float(phi_OM_clamped), m_air_OM, m_fuel_OM, False),
+        ("IP", float(phi_IP),         m_air_IP, m_fuel_IP, True,  0.0),
+        ("OP", float(phi_OP),         m_air_OP, m_fuel_OP, True,  0.0),
+        ("IM", float(phi_IM),         m_air_IM, m_fuel_IM, False, float(im_nox_adder_ppm)),
+        ("OM", float(phi_OM_clamped), m_air_OM, m_fuel_OM, False, float(om_nox_adder_ppm)),
     ]
 
     circuits_out: Dict[str, dict] = {}
@@ -365,7 +371,7 @@ def run(
     mix_gases: list = []
     mix_mdots: list = []
 
-    for name, phi_i, m_air_i, m_fuel_i, is_pilot in circuits_spec:
+    for name, phi_i, m_air_i, m_fuel_i, is_pilot, nox_adder_ppm in circuits_spec:
         res = _run_circuit(
             fuel_pct, ox_pct, phi_i,
             T_fuel_K, T3_K, P3_bar,
@@ -373,7 +379,7 @@ def run(
             WFR, water_mode, mechanism,
         )
 
-        # Kinetic NOx from the PFR exit; override for pilots with exp-fit
+        # Kinetic NOx from the PFR exit; pilots use exp-fit, mains get adder.
         if is_pilot:
             NOx_report = _pilot_nox_fit(
                 phi_i,
@@ -381,7 +387,7 @@ def run(
                 anchor_ppm=pilot_NOx_anchor_ppm,
             )
         else:
-            NOx_report = res["NO_ppm_vd"]
+            NOx_report = float(res["NO_ppm_vd"]) + float(nox_adder_ppm)
 
         circuits_out[name] = {
             "phi": phi_i,
@@ -398,10 +404,10 @@ def run(
         gas_for_mix = ct.Solution(mech_path)
         gas_for_mix.TPX = res["T_PFR_K"], P_Pa, res["X_PFR"]
 
-        # For pilots, replace kinetic NO with the fitted value so the mix sees
-        # the same NOx we report. Only meaningful when phi > 0 (otherwise the
-        # pure-air stream has no NO to override).
-        if is_pilot and phi_i > 1e-6:
+        # Override NO in the mix gas so the bulk PFR starts from the reported
+        # NOx (not the raw kinetic value). Pilots: fitted NOx. Mains: kinetic +
+        # adder. Skipped for cold circuits (phi ≈ 0) since there is no NO yet.
+        if phi_i > 1e-6 and (is_pilot or nox_adder_ppm != 0.0):
             _override_NO(gas_for_mix, NOx_report)
 
         # Total mdot through the circuit = air + fuel

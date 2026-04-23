@@ -1854,7 +1854,7 @@ function CombustorMappingPanel({
 
   // ── Controls ─────────────────────────────────────────────────────────────
   // W36/W3: fraction of post-bleed W3 entering the combustor dome.
-  const[w36w3,setW36w3]=useState(0.79);
+  const[w36w3,setW36w3]=useState(0.89);
   // τ_total (ms): total combustor residence time. PSR=0.5ms + PFR_near=1.5ms are fixed;
   // bulk PFR runs for (τ_total − 2 ms). Default 5 ms for LMS100 DLE.
   const[tauTotal,setTauTotal]=useState(5.0);

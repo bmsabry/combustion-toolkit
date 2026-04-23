@@ -197,6 +197,8 @@ def calc_combustor_mapping(
         body.mechanism,
         body.pilot_NOx_anchor_phi,
         body.pilot_NOx_anchor_ppm,
+        body.im_nox_adder_ppm,
+        body.om_nox_adder_ppm,
     )
     return CombustorMappingResponse(**result)
 
