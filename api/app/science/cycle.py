@@ -8,7 +8,8 @@ Given ambient conditions (P, T, RH), load%, and fuel composition, computes:
   • FAR_Bulk/phi_Bulk/T_Bulk at the primary flame zone
   • Turbine work, compressor work, parasitic loss, and gross shaft power —
     all from Cantera enthalpy integrals (Option A energy balance)
-  • Net shaft power MW_net = min(MW_gross, MW_cap) × fuel-flexibility derate
+  • Net shaft power MW_net = MW_cap × fuel-flexibility derate (MW_gross is
+    diagnostic only — see Option-A note below)
   • Intercooler duty (LMS100 only)
   • Modified Wobbe Index (MWI) and fuel-flexibility warnings (Option B)
 
@@ -37,7 +38,13 @@ Energy-balance philosophy (Option A):
     captures real compressor work including composition effects.
   Gross shaft: MW_gross = (W_turb − W_comp − W_parasitic) / 1e6.
   Cap: MW_cap = MW_design × (ρ_amb/ρ_des)^β_MW × load_frac  (OEM nameplate).
-  Net: MW_net = min(MW_gross, MW_cap) × (1 − derate_from_fuel_flex).
+  Net: MW_net = MW_cap × (1 − derate_from_fuel_flex).
+  MW_gross is reported for diagnostics but NOT used as the published power.
+  Reason: the simplified Brayton calc holds T4 constant, scales mdot ≈ ρ^0.9,
+  and doesn't model variable IGVs, bleed scheduling, or speed/PR optimization
+  the OEM controller does, so on warm/cold days it under/over-predicts shaft
+  power by several MW relative to the OEM-published curve. The deck cap is
+  authoritative because OEMs anchor service contracts to that curve.
 
 Fuel-flexibility derate (Option B):
   MWI = LHV_vol / √(SG × T_fuel). Reference fuel = pure CH4 at 60°F.
@@ -747,12 +754,19 @@ def run(
     fuel_flex = _fuel_flexibility(fuel_x, T_fuel_K)
     derate_factor = 1.0 - fuel_flex["mwi_derate_pct"] / 100.0
 
-    # --- Net power: min(physics, nameplate) × fuel-flexibility derate -------
+    # --- Net power: OEM-anchored cap × fuel-flexibility derate --------------
     # MW_max_ambient × load_frac is the OEM nameplate cap (what the engine
-    # is allowed to produce on this ambient day). MW_gross is the physics-
-    # consistent upper bound. The controller takes the smaller of the two.
+    # is documented to produce on this ambient day) and is the authoritative
+    # number — it is the published curve OEMs anchor service contracts to.
+    # MW_gross is a simplified Brayton-cycle calc (W_turb − W_comp − W_par)
+    # that systematically under-predicts off-design power because we hold T4
+    # constant, parameterize mdot ∝ ρ^0.9, and don't model variable IGVs,
+    # bleed scheduling, or the speed/PR optimization the OEM controller does.
+    # On warm days that under-prediction is several MW. We therefore use the
+    # deck-anchored cap as the headline and keep MW_gross exported only for
+    # diagnostic comparison.
     MW_cap = MW_max_ambient * load_frac
-    MW_uncapped = min(max(MW_gross, 0.0), MW_cap)
+    MW_uncapped = max(MW_cap, 0.0)
     MW_net = max(MW_uncapped * derate_factor, 0.0)
 
     # --- Heat rate & efficiency --------------------------------------------
