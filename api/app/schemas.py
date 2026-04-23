@@ -610,7 +610,7 @@ class CombustorMappingRequest(BaseModel):
     mechanism: str = Field(default="gri30", pattern="^(gri30|glarborg)$")
     # Pilot NOx exp-fit anchors (defaults reflect a representative diffusion flame).
     pilot_NOx_anchor_phi: float = Field(default=1.0, gt=0.25, le=2.0)
-    pilot_NOx_anchor_ppm: float = Field(default=180.0, gt=3.0, le=5000.0)
+    pilot_NOx_anchor_ppm: float = Field(default=180.0, gt=6.0, le=5000.0)
     # Fixed NOx adders (ppm, dry) applied on top of the kinetic PSR+PFR NO
     # for the main circuits — calibrated to the LMS100 hardware.
     im_nox_adder_ppm: float = Field(default=12.0, ge=0.0, le=500.0)

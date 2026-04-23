@@ -1950,7 +1950,7 @@ function CombustorMappingPanel({
     <HelpBox title="ℹ️ Combustor Mapping — How It Works">
       <p style={{margin:"0 0 6px"}}>The LMS100 DLE combustor has <span style={hs.em}>four fuel circuits</span>: Inner Pilot (IP), Outer Pilot (OP), Inner Main (IM), Outer Main (OM). Set a φ for each circuit and the tool runs a <span style={hs.em}>reactor network</span>: <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>4 × (PSR 0.5 ms → PFR 1.5 ms) → mix (+ effusion cooling) → bulk PFR</code> out to τ_total (default 5 ms).</p>
       <p style={{margin:"0 0 6px"}}>Air flow: <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 = W3 × (W36/W3)</code> enters the dome. Flame air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × com.Air Frac</code> (split across the 4 circuits). Effusion / cooling air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × (1 − com.Air Frac)</code> — it mixes with the flame products at the mix point (not a true bypass). Outer Main is the <span style={hs.em}>float</span> circuit: fuel = total − IP − OP − IM, φ back-solved.</p>
-      <p style={{margin:0}}>Pilots (IP, OP) are diffusion flames — premixed-PSR kinetics under-predict NOx. Reported pilot NOx uses an exp-fit: <strong>3 ppm floor for φ ≤ 0.25</strong> (also at φ = 0), 180 ppm anchor at φ = 1.0. Mains use the actual PSR + PFR kinetics. <span style={hs.em}>Combustor exit emissions</span> (bulk PFR exit) are the primary output — the per-circuit and air-accounting cards are intermediate detail.</p>
+      <p style={{margin:0}}>Pilots (IP, OP) are diffusion flames — premixed-PSR kinetics under-predict NOx. Reported pilot NOx uses an exp-fit: <strong>6 ppm floor for φ ≤ 0.25</strong> (also at φ = 0), 180 ppm anchor at φ = 1.0. Mains use the actual PSR + PFR kinetics. <span style={hs.em}>Combustor exit emissions</span> (bulk PFR exit) are the primary output — the per-circuit and air-accounting cards are intermediate detail.</p>
     </HelpBox>
 
     {!cycleResult?
@@ -2133,7 +2133,7 @@ function CombustorMappingPanel({
           </table>
         </div>
         <div style={{marginTop:6,fontSize:10,color:C.txtMuted,fontFamily:"monospace"}}>
-          Pilot NOx is <strong>3 ppm</strong> floor for φ ≤ 0.25 (exp-fit above that) — premixed kinetics under-predict diffusion-flame NOx. Mains use real PSR+PFR kinetic NO. T_AFT = complete-combustion reference (no dissociation).
+          Pilot NOx is <strong>6 ppm</strong> floor for φ ≤ 0.25 (exp-fit above that) — premixed kinetics under-predict diffusion-flame NOx. Mains use real PSR+PFR kinetic NO. T_AFT = complete-combustion reference (no dissociation).
         </div>
       </div>
 

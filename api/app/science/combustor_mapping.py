@@ -17,7 +17,7 @@ Air accounting:
 
 Pilot NOx handling — pilots (IP, OP) are diffusion flames, so premixed-PSR
 kinetics under-predict NOx. We replace the reported and mixed pilot NOx with
-a simple exp-fit anchored at (φ=0.25, 3 ppm) and (φ=anchor, anchor_ppm).
+a simple exp-fit anchored at (φ=0.25, 6 ppm) and (φ=anchor, anchor_ppm).
 Default anchor = (1.0, 180 ppm).  For φ ≤ 0.25 NOx is clamped to the floor.
 Mains (IM, OM) use the actual kinetic NOx from the PSR+PFR.
 
@@ -53,7 +53,7 @@ def _pilot_nox_fit(
     phi: float,
     anchor_phi: float = 1.0,
     anchor_ppm: float = 180.0,
-    floor_ppm: float = 3.0,
+    floor_ppm: float = 6.0,
     floor_phi: float = 0.25,
 ) -> float:
     """Pilot NOx (ppm vol-dry) from a simple exponential fit.
@@ -61,6 +61,9 @@ def _pilot_nox_fit(
     NOx = floor_ppm                              for phi <= floor_phi
     NOx = floor_ppm * exp(k * (phi - floor_phi))  otherwise,
     with k chosen so that NOx(anchor_phi) = anchor_ppm.
+
+    Default anchors (6 ppm at phi=0.25, 180 ppm at phi=1.0) give
+    k = ln(30)/0.75 ≈ 4.535.
     """
     if phi <= floor_phi:
         return float(floor_ppm)
