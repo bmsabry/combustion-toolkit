@@ -2,11 +2,11 @@
 
 Reactor topology (per call):
 
-    ┌── PSR_IP (τ=1.0ms) ── PFR_IP (τ=1.5ms) ──┐   pilot path = 2.5 ms
-    ├── PSR_OP (τ=1.0ms) ── PFR_OP (τ=1.5ms) ──┤                            + cooling air
+    ┌── PSR_IP (τ=2.5ms) ── PFR_IP (τ=1.5ms) ──┐   pilot path = 4.0 ms
+    ├── PSR_OP (τ=2.5ms) ── PFR_OP (τ=1.5ms) ──┤                            + cooling air
     │                                          │                               (T3, ox_humid)
-    ├── PSR_IM (τ=0.5ms) ── PFR_IM (τ=1.0ms) ──┼──► MIX ──► BULK PFR ──► COMBUSTOR EXIT
-    └── PSR_OM (τ=0.5ms) ── PFR_OM (τ=1.0ms) ──┘   main path = 1.5 ms     (τ_bulk = τ_total − 2.5 ms)
+    ├── PSR_IM (τ=0.5ms) ── PFR_IM (τ=0.5ms) ──┼──► MIX ──► BULK PFR ──► COMBUSTOR EXIT
+    └── PSR_OM (τ=0.5ms) ── PFR_OM (τ=0.5ms) ──┘   main path = 1.0 ms     (τ_bulk = τ_total − 4.0 ms)
 
 Air accounting:
     W3              = compressor-discharge (post-bleed)
@@ -316,10 +316,10 @@ def run(
     phi_IM: float,
     m_fuel_total_kg_s: float,
     tau_total_ms: float = 5.0,
-    tau_psr_pilot_ms: float = 1.0,
+    tau_psr_pilot_ms: float = 2.5,
     tau_pfr_pilot_ms: float = 1.5,
     tau_psr_main_ms: float = 0.5,
-    tau_pfr_main_ms: float = 1.0,
+    tau_pfr_main_ms: float = 0.5,
     WFR: float = 0.0,
     water_mode: str = "liquid",
     mechanism: str = "gri30",

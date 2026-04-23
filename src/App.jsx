@@ -1901,9 +1901,9 @@ function CombustorMappingPanel({
     frac_IP_pct: fracIP, frac_OP_pct: fracOP, frac_IM_pct: fracIM, frac_OM_pct: fracOM,
     phi_IP: Math.max(0, phiIP), phi_OP: Math.max(0, phiOP), phi_IM: Math.max(0, phiIM),
     m_fuel_total_kg_s: m_fuel_total,
-    tau_total_ms: Math.max(2.6, tauTotal),
-    tau_psr_pilot_ms: 1.0, tau_pfr_pilot_ms: 1.5,
-    tau_psr_main_ms:  0.5, tau_pfr_main_ms:  1.0,
+    tau_total_ms: Math.max(4.1, tauTotal),
+    tau_psr_pilot_ms: 2.5, tau_pfr_pilot_ms: 1.5,
+    tau_psr_main_ms:  0.5, tau_pfr_main_ms:  0.5,
     WFR, water_mode: waterMode,
     mechanism: "gri30",
   };
@@ -1997,14 +1997,14 @@ function CombustorMappingPanel({
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
               <div style={{fontSize:10,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1px"}}>τ_total (ms)</div>
               <div style={{display:"flex",alignItems:"center",gap:3}}>
-                <button onClick={()=>setTauTotal(v=>Math.max(2.6,+(v-0.5).toFixed(2)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.violet,background:"transparent",border:`1px solid ${C.violet}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>−</button>
-                <NumField value={tauTotal} decimals={2} onCommit={v=>setTauTotal(Math.max(2.6,Math.min(100,+v)))}
+                <button onClick={()=>setTauTotal(v=>Math.max(4.1,+(v-0.5).toFixed(2)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.violet,background:"transparent",border:`1px solid ${C.violet}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>−</button>
+                <NumField value={tauTotal} decimals={2} onCommit={v=>setTauTotal(Math.max(4.1,Math.min(100,+v)))}
                   style={{width:66,padding:"3px 6px",fontFamily:"monospace",color:C.violet,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
                 <button onClick={()=>setTauTotal(v=>Math.min(100,+(v+0.5).toFixed(2)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.violet,background:"transparent",border:`1px solid ${C.violet}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>+</button>
               </div>
             </div>
             <div style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic"}}>total combustor residence time</div>
-            <div style={{marginTop:5,fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}}>pilot path 2.5 · main path 1.5 · bulk = {Math.max(0,tauTotal-2.5).toFixed(2)} ms</div>
+            <div style={{marginTop:5,fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}}>pilot path 4.0 · main path 1.0 · bulk = {Math.max(0,tauTotal-4.0).toFixed(2)} ms</div>
           </div>
         </div>
 
