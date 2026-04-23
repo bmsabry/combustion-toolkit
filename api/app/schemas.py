@@ -422,6 +422,16 @@ class CycleRequest(BaseModel):
         pattern="^(liquid|steam)$",
         description="Water injection phase: 'liquid' (absorbs h_fg) or 'steam'",
     )
+    bleed_air_frac: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=0.50,
+        description=(
+            "Compressor-discharge bleed fraction dumped to ambient "
+            "(= bleed_open × bleed_valve_size). Reduces air to combustor + "
+            "turbine; T4 elevates iteratively to hold gross power."
+        ),
+    )
 
 
 class FuelFlexibility(BaseModel):
@@ -482,6 +492,12 @@ class CycleResponse(BaseModel):
     mdot_air_kg_s: float
     mdot_air_combustor_kg_s: float = 0.0
     mdot_fuel_kg_s: float
+    # Bleed (compressor-discharge bleed dumped to ambient)
+    bleed_air_frac: float = 0.0
+    mdot_bleed_kg_s: float = 0.0
+    mdot_air_post_bleed_kg_s: float = 0.0
+    bleed_iters: int = 0
+    bleed_converged: bool = True
     # Combustor-EXIT values (after dilution): back-solved so equilibrium
     # product T at (T3, P3) matches the commanded T4.
     FAR4: float = 0.0

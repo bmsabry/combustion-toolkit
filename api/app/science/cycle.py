@@ -617,6 +617,7 @@ def run(
     T_fuel_K: Optional[float] = None,
     WFR: float = 0.0,
     water_mode: str = "liquid",
+    bleed_air_frac: float = 0.0,
 ) -> Dict[str, Any]:
     """Solve the cycle at the requested operating point.
 
@@ -874,6 +875,83 @@ def run(
     W_compressor_MW = W_compressor_W / 1e6
     MW_gross = W_turbine_MW - W_compressor_MW - W_parasitic_MW
 
+    # --- Bleed correction (compressor-discharge bleed dumped to ambient) ---
+    # Bleed extracts air AFTER the compressor and BEFORE the combustor and
+    # vents it to ambient. So:
+    #   - Compressor work is unchanged (full mdot_air still compressed)
+    #   - Combustor + turbine see (1 − bleed_air_frac) × mdot_air
+    #   - Same fuel + less air → richer flame → higher T4
+    #   - To hold gross power, T4 elevates further (and fuel rises slightly)
+    # This iterates T4 such that the bled-cycle gross power equals the
+    # baseline (no-bleed) gross power, capturing the user's intuition that
+    # bleed compensates for "lost" turbine mass by raising firing T.
+    bleed_air_frac = max(0.0, min(0.50, float(bleed_air_frac or 0.0)))
+    mdot_bleed_kg_s = mdot_air * bleed_air_frac
+    mdot_air_post_bleed = mdot_air * (1.0 - bleed_air_frac)
+    bleed_iters = 0
+    bleed_converged = True
+    if bleed_air_frac > 1e-6:
+        target_W_gross_W = max(1.0e3, MW_gross * 1.0e6)
+        T4_b = T4_K
+        phi4_b = phi4
+        FAR4_b = FAR4
+        mdot_fuel_b = mdot_fuel
+        W_turb_b_W = W_turbine_W
+        T5_b_K = T5_actual_K
+        T5_isen_b_K = T5_isen_K
+        bleed_converged = False
+        for _ in range(20):
+            bleed_iters += 1
+            phi4_b = _phi_for_target_T4_with_water(
+                fuel_x, ox_x, T_fuel_K, stations["T3_K"], P3_bar, T4_b,
+                WFR, water_mode,
+            )
+            Y_f_b = fuel_mass_fraction_at_phi(fuel_x, ox_x, phi4_b, GRI_MECH)
+            FAR4_b = Y_f_b / max(1.0 - Y_f_b, 1e-20)
+            mdot_air_comb_b = mdot_air_post_bleed * combustor_bypass_frac
+            mdot_fuel_b = mdot_air_comb_b * FAR4_b
+            mdot_hot_b = mdot_air_post_bleed + mdot_fuel_b
+            t_out_b = _turbine_work_W(
+                fuel_x, ox_x, phi4_b, stations["T3_K"], P3_bar, P_exhaust_bar,
+                mdot_hot_b, eta_isen_turb,
+            )
+            W_turb_b_W = t_out_b["W_W"]
+            T5_b_K = t_out_b["T5_actual_K"]
+            T5_isen_b_K = t_out_b["T5_isen_K"]
+            W_gross_b_W = W_turb_b_W - W_compressor_W - W_parasitic_MW * 1e6
+            err = W_gross_b_W - target_W_gross_W
+            if abs(err) < target_W_gross_W * 0.001:
+                bleed_converged = True
+                break
+            # dW_turb/dT4 ≈ mdot_hot × cp_eff × (1 - (P_exh/P3)^k_eff)
+            # Use a conservative slope: ~700 J/kg/K (cp_eff × expansion-fraction)
+            dW_dT4 = max(1.0e3, mdot_hot_b * 700.0)
+            T4_b -= err / dW_dT4
+            T4_b = max(900.0, min(2400.0, T4_b))
+
+        # Commit bleed-corrected values
+        T4_K = T4_b
+        phi4 = phi4_b
+        FAR4 = FAR4_b
+        stations["T4_K"] = T4_K
+        mdot_air_combustor = mdot_air_post_bleed * combustor_bypass_frac
+        mdot_fuel = mdot_fuel_b
+        mdot_hot = mdot_air_post_bleed + mdot_fuel
+        W_turbine_W = W_turb_b_W
+        T5_actual_K = T5_b_K
+        T5_isen_K = T5_isen_b_K
+        W_turbine_MW = W_turbine_W / 1e6
+        MW_gross = W_turbine_MW - W_compressor_MW - W_parasitic_MW
+
+        # Recompute flame-zone state at the elevated phi
+        f_safe = max(combustor_air_frac, 1e-6)
+        FAR_Bulk = FAR4 / f_safe
+        phi_Bulk = phi4 / f_safe
+        T_Bulk_K = _t_bulk_with_mix_and_water(
+            fuel_x, ox_x, T_fuel_K, stations["T3_K"], P3_bar, phi_Bulk,
+            WFR, water_mode,
+        )
+
     # --- Option B: fuel-flexibility derate ---------------------------------
     fuel_flex = _fuel_flexibility(fuel_x, T_fuel_K)
     derate_factor = 1.0 - fuel_flex["mwi_derate_pct"] / 100.0
@@ -945,6 +1023,12 @@ def run(
         "mdot_air_kg_s": float(mdot_air),
         "mdot_air_combustor_kg_s": float(mdot_air_combustor),
         "mdot_fuel_kg_s": float(mdot_fuel),
+        # Bleed (compressor-discharge bleed to ambient)
+        "bleed_air_frac": float(bleed_air_frac),
+        "mdot_bleed_kg_s": float(mdot_bleed_kg_s),
+        "mdot_air_post_bleed_kg_s": float(mdot_air_post_bleed),
+        "bleed_iters": int(bleed_iters),
+        "bleed_converged": bool(bleed_converged),
         # FAR4 / phi4 = COMBUSTOR EXIT (after dilution). Back-solved so the
         # adiabatic equilibrium product T at (T3, P3) equals T4.
         "FAR4": float(FAR4),
