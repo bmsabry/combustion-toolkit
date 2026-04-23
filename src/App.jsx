@@ -586,7 +586,7 @@ XLSX.utils.book_append_sheet(wb,wsA,"Assumptions");
 XLSX.writeFile(wb,"ProReadyEngineer_CombustionReport.xlsx");}
 
 /* ══════════════════ SVG CHART ══════════════════ */
-function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}let yn=yn_-(yx_-yn_)*0.05;const yx=yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;const pts=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy(d[yK]).toFixed(1)}`).join(' ');let y2n,y2x,sy2,pts2;if(y2K){const y2s=data.map(d=>d[y2K]);let y2n_=Math.min(...y2s),y2x_=Math.max(...y2s);if(y2n_===y2x_){y2n_-=1;y2x_+=1;}y2n=y2n_-(y2x_-y2n_)*0.05;y2x=y2x_+(y2x_-y2n_)*0.05;if(y2n_>=0&&y2n<0)y2n=0;sy2=v=>p.t+H-(v-y2n)/(y2x-y2n||1)*H;pts2=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy2(d[y2K]).toFixed(1)}`).join(' ');}const nY=5,nX=6;const yTk=Array.from({length:nY+1},(_,i)=>yn+(yx-yn)*i/nY);const xTk=Array.from({length:nX+1},(_,i)=>xn+(xx-xn)*i/nX);const fmt=v=>Math.abs(v)>=1e4?(v/1e3).toFixed(0)+'k':Math.abs(v)>=100?v.toFixed(0):Math.abs(v)>=1?v.toFixed(1):v.toFixed(3);const gid=`g${yK}${color.replace('#','')}${Math.random().toString(36).slice(2,6)}`;return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}><defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".2"/><stop offset="100%" stopColor={color} stopOpacity=".01"/></linearGradient></defs>{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmt(v)}</text></g>)}<path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/><path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="3.5" fill={C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
+function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,markerColor=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}let yn=yn_-(yx_-yn_)*0.05;const yx=yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;const pts=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy(d[yK]).toFixed(1)}`).join(' ');let y2n,y2x,sy2,pts2;if(y2K){const y2s=data.map(d=>d[y2K]);let y2n_=Math.min(...y2s),y2x_=Math.max(...y2s);if(y2n_===y2x_){y2n_-=1;y2x_+=1;}y2n=y2n_-(y2x_-y2n_)*0.05;y2x=y2x_+(y2x_-y2n_)*0.05;if(y2n_>=0&&y2n<0)y2n=0;sy2=v=>p.t+H-(v-y2n)/(y2x-y2n||1)*H;pts2=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy2(d[y2K]).toFixed(1)}`).join(' ');}const nY=5,nX=6;const yTk=Array.from({length:nY+1},(_,i)=>yn+(yx-yn)*i/nY);const xTk=Array.from({length:nX+1},(_,i)=>xn+(xx-xn)*i/nX);const fmt=v=>Math.abs(v)>=1e4?(v/1e3).toFixed(0)+'k':Math.abs(v)>=100?v.toFixed(0):Math.abs(v)>=1?v.toFixed(1):v.toFixed(3);const gid=`g${yK}${color.replace('#','')}${Math.random().toString(36).slice(2,6)}`;return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}><defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".2"/><stop offset="100%" stopColor={color} stopOpacity=".01"/></linearGradient></defs>{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmt(v)}</text></g>)}<path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/><path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={markerColor||C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="4" fill={markerColor||C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={markerColor||C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
 function HBar({data,w=540,h=180}){if(!data)return null;const entries=Object.entries(data).filter(([_,v])=>v>0.05).sort((a,b)=>b[1]-a[1]);if(!entries.length)return null;const pa={t:6,r:78,b:6,l:48};const bH=Math.min(22,(h-pa.t-pa.b)/entries.length-3);const mx=Math.max(...entries.map(e=>e[1]));const W=w-pa.l-pa.r;const clr={CO2:C.warm,H2O:C.accent,N2:C.accent3,O2:"#38BDF8",Ar:"#64748B",CH4:C.accent2,C2H6:C.orange,C3H8:"#F59E0B",H2:C.good,CO:"#FB923C",NO:C.strong,OH:C.violet,H:"#FDE68A",O:"#FCA5A5"};return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}>{entries.map(([sp,val],i)=>{const y=pa.t+i*(bH+3);const bw=val/mx*W;return(<g key={sp}><text x={pa.l-4} y={y+bH/2+4} fill={C.txtDim} fontSize="11" textAnchor="end" fontFamily="monospace">{fmt(sp)}</text><rect x={pa.l} y={y} width={Math.max(1,bw)} height={bH} rx="2" fill={clr[sp]||"#64748B"} opacity=".85"/><text x={pa.l+bw+4} y={y+bH/2+4} fill={C.txt} fontSize="10" fontFamily="monospace">{val.toFixed(2)}%</text></g>);})}</svg>);}
 
 /* ══════════════════ UI COMPONENTS ══════════════════ */
@@ -1843,6 +1843,10 @@ function OperationsSummaryPanel({
   tau_psr, L_pfr, V_pfr, heatLossFrac,
   psrSeed, eqConstraint, integration, mechanism,
   cycleResult, bleedAirFrac, bkCycle,
+  // bleed state — needed so the sweep can vary the correct % open at every
+  // load (auto schedule) and so the current-load marker shows the actual
+  // % open the user has dialled in, not the multiplied "effective" fraction
+  bleedMode, bleedOpenPct, bleedOpenManualPct, bleedValveSizePct,
   // cycle sweep args
   cycleEngine, cyclePamb, cycleTamb, cycleRH, cycleLoad, cycleTcool, cycleAirFrac,
 }){
@@ -1897,6 +1901,16 @@ function OperationsSummaryPanel({
   const[sweepProgress,setSweepProgress]=useState(0);
   const[sweepErr,setSweepErr]=useState(null);
 
+  // Auto-bleed schedule — same formula used in App.jsx (keep in sync). In
+  // AUTO mode the % open is a continuous function of load. In MANUAL mode
+  // the user's bleedOpenManualPct is constant across loads.
+  const autoBleedOpenPct=(L)=>{
+    if(L<=75)return 100;
+    if(L>=95)return 0;
+    return 100*(95-L)/20;
+  };
+  const bleedOpenAtLoad=(L)=>bleedMode==="auto"?autoBleedOpenPct(L):(bleedOpenManualPct??0);
+
   const runSweep=async()=>{
     if(sweeping)return;
     setSweeping(true);setSweepErr(null);setSweepData([]);setSweepProgress(0);
@@ -1914,6 +1928,11 @@ function OperationsSummaryPanel({
         // which load the backend is crunching right now.
         const endPtBusy=beginBusy(`Load sweep point ${i+1}/${points.length} — ${L}% load (cycle + AFT)…`);
         try{
+          // Compute the bleed state that *this* load point would see given
+          // the current bleed mode + valve size. In AUTO mode open % tracks
+          // load; in MANUAL it's the fixed user setting.
+          const openAtL=Math.max(0,Math.min(100,bleedOpenAtLoad(L)));
+          const bleedAirFracAtL=Math.max(0,Math.min(0.50,(openAtL/100)*((bleedValveSizePct||0)/100)));
           const c=await api.calcCycle({
             engine:cycleEngine,
             P_amb_bar:cyclePamb, T_amb_K:cycleTamb, RH_pct:cycleRH,
@@ -1923,7 +1942,7 @@ function OperationsSummaryPanel({
             combustor_air_frac:cycleAirFrac,
             T_fuel_K:Tfuel,
             WFR, water_mode:waterMode, T_water_K:WFR>0?T_water:null,
-            bleed_air_frac:bleedAirFrac,
+            bleed_air_frac:bleedAirFracAtL,
           });
           // AFT at phi4 for T4 complete + O2/CO2
           let T4_cc=c.T4_K, O2dry=0, CO2dry=0;
@@ -1949,7 +1968,11 @@ function OperationsSummaryPanel({
             air:(c.mdot_air_post_bleed_kg_s||c.mdot_air_kg_s||0),
             water:m_water,
             bleed:m_bleed,
-            bleed_pct:(c.bleed_air_frac||0)*100,
+            // Bleed %-open is the physical valve actuation (0 = closed,
+            // 100 = fully open). This is what the control room dial reads.
+            // The effective fraction = %-open × valve_size is a derived
+            // cycle-input, not a physically meaningful operator control.
+            bleed_open:openAtL,
             T4_complete:T4_cc,
             eta:(c.efficiency_LHV||0)*100,
             O2:O2dry, CO2:CO2dry,
@@ -1985,17 +2008,59 @@ function OperationsSummaryPanel({
     </div>);
 
   // Compact mini chart grid cell — single series Load → metric
-  const MiniChart=({title,yKey,color,unit,transformY})=>{
+  // ── Current operating point — values at the user's current Load% ─────────
+  // Displayed as a red marker on every mini-chart so the user sees exactly
+  // where their current setting sits on each curve. Prefer live cycle/AFT
+  // results (highest fidelity); fall back to linear interpolation of the
+  // sweep if needed.
+  const currentLoad=cycleResult?.load_pct||cycleLoad||0;
+  const mOpenNow=bleedOpenPct??0;
+  const mCurrent={
+    MW:cycleResult?.MW_net||null,
+    eta:cycleResult?(cycleResult.efficiency_LHV*100):null,
+    T4_complete:T4_complete||null,
+    fuel:cycleResult?.mdot_fuel_kg_s||null,
+    air:cycleResult?(cycleResult.mdot_air_post_bleed_kg_s||cycleResult.mdot_air_kg_s||0):null,
+    water:cycleResult?.mdot_water_kg_s||null,
+    bleed_open:mOpenNow,
+    O2:O2_pct_T4||null,
+    CO2:CO2_pct_T4||null,
+  };
+
+  // Linear interpolation helper for sweep fallback (when live value missing).
+  const interpAt=(xArr,yArr,x)=>{
+    if(!xArr.length)return null;
+    if(x<=xArr[0])return yArr[0];
+    if(x>=xArr[xArr.length-1])return yArr[yArr.length-1];
+    for(let i=0;i<xArr.length-1;i++){
+      if(x>=xArr[i]&&x<=xArr[i+1]){
+        const t=(x-xArr[i])/(xArr[i+1]-xArr[i]);
+        return yArr[i]+t*(yArr[i+1]-yArr[i]);
+      }
+    }
+    return null;
+  };
+
+  const MiniChart=({title,yKey,color,unit,transformY,currentRaw})=>{
     if(!sweepData.length)return(<div style={{padding:"32px 10px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:6,color:C.txtMuted,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{title}<br/><span style={{fontSize:9.5,fontStyle:"italic"}}>Run sweep to populate</span></div>);
     const plotData=sweepData.map(d=>({load:d.load,y:transformY?transformY(d[yKey]):d[yKey]}));
     const partial=sweepData.length>0&&sweepData[sweepData.length-1].load<100;
+    // Current-load red marker. Use the live cycle value if we have it;
+    // otherwise interpolate within the sweep. Apply the same unit transform.
+    let markerY=(currentRaw!=null&&Number.isFinite(currentRaw))?currentRaw:interpAt(sweepData.map(d=>d.load),sweepData.map(d=>d[yKey]),currentLoad);
+    if(markerY!=null&&transformY)markerY=transformY(markerY);
+    const marker=(markerY!=null&&Number.isFinite(markerY)&&currentLoad>=20&&currentLoad<=100)?{
+      x:currentLoad,
+      y:markerY,
+      label:`${currentLoad.toFixed(0)}% → ${Math.abs(markerY)>=100?markerY.toFixed(0):Math.abs(markerY)>=10?markerY.toFixed(1):markerY.toFixed(2)}`
+    }:null;
     return(<div style={{background:C.bg2,border:`1px solid ${color}30`,borderRadius:6,padding:"8px 10px 4px"}}>
       <div style={{fontSize:10,fontWeight:700,color:color,textTransform:"uppercase",letterSpacing:"0.8px",marginBottom:2,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <span>{title}</span>
         {partial?<span style={{fontSize:8.5,fontWeight:500,color:C.warm,textTransform:"none",letterSpacing:0,fontStyle:"italic"}}>partial — re-run to reach 100%</span>:null}
       </div>
-      {/* xMin/xMax pin the x-axis to the full 20-100% span so every chart covers the whole load envelope even if a sweep stopped early. */}
-      <Chart data={plotData} xK="load" yK="y" xL="Load (%)" yL={unit} color={color} w={400} h={170} xMin={20} xMax={100}/>
+      {/* xMin/xMax pin the x-axis to the full 20-100% span so every chart covers the whole load envelope even if a sweep stopped early. Red marker shows current operating point. */}
+      <Chart data={plotData} xK="load" yK="y" xL="Load (%)" yL={unit} color={color} w={400} h={170} xMin={20} xMax={100} marker={marker} markerColor="#EF4444"/>
     </div>);
   };
 
@@ -2113,15 +2178,15 @@ function OperationsSummaryPanel({
         {sweepErr?<div style={{padding:"6px 10px",background:`${C.strong}14`,border:`1px solid ${C.strong}60`,borderRadius:4,fontSize:10.5,color:C.strong,marginBottom:10}}>Sweep error: {sweepErr}</div>:null}
 
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(360px, 1fr))",gap:10}}>
-          <MiniChart title="Net Power" yKey="MW" color={C.accent} unit={`MW`}/>
-          <MiniChart title="Thermal Efficiency (LHV)" yKey="eta" color={C.good} unit="%"/>
-          <MiniChart title="T₄ (complete combustion)" yKey="T4_complete" color={C.warm} unit={uu(units,"T")} transformY={(K)=>uv(units,"T",K)}/>
-          <MiniChart title="Fuel flow" yKey="fuel" color={C.accent2} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462}/>
-          <MiniChart title="Air flow (post-bleed)" yKey="air" color={C.accent3} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462}/>
-          {WFR>0?<MiniChart title="Water inject flow" yKey="water" color={C.violet} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462}/>:null}
-          <MiniChart title="Bleed (effective %)" yKey="bleed_pct" color={C.orange} unit="%"/>
-          <MiniChart title="O₂ dry (complete-comb.)" yKey="O2" color="#38BDF8" unit="%"/>
-          <MiniChart title="CO₂ dry (complete-comb.)" yKey="CO2" color={C.warm} unit="%"/>
+          <MiniChart title="Net Power" yKey="MW" color={C.accent} unit={`MW`} currentRaw={mCurrent.MW}/>
+          <MiniChart title="Thermal Efficiency (LHV)" yKey="eta" color={C.good} unit="%" currentRaw={mCurrent.eta}/>
+          <MiniChart title="T₄ (complete combustion)" yKey="T4_complete" color={C.warm} unit={uu(units,"T")} transformY={(K)=>uv(units,"T",K)} currentRaw={mCurrent.T4_complete}/>
+          <MiniChart title="Fuel flow" yKey="fuel" color={C.accent2} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.fuel}/>
+          <MiniChart title="Air flow (post-bleed)" yKey="air" color={C.accent3} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.air}/>
+          {WFR>0?<MiniChart title="Water inject flow" yKey="water" color={C.violet} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.water}/>:null}
+          <MiniChart title="Bleed Valve — % Open" yKey="bleed_open" color={C.orange} unit="% open" currentRaw={mCurrent.bleed_open}/>
+          <MiniChart title="O₂ dry (complete-comb.)" yKey="O2" color="#38BDF8" unit="%" currentRaw={mCurrent.O2}/>
+          <MiniChart title="CO₂ dry (complete-comb.)" yKey="CO2" color={C.warm} unit="%" currentRaw={mCurrent.CO2}/>
         </div>
       </div>
       </>}
@@ -2691,6 +2756,8 @@ export default function App(){
               heatLossFrac={heatLossFrac} psrSeed={psrSeed}
               eqConstraint={eqConstraint} integration={integration} mechanism={mechanism}
               cycleResult={cycleResult} bleedAirFrac={bleedAirFrac} bkCycle={bkCycle}
+              bleedMode={bleedMode} bleedOpenPct={bleedOpenPct}
+              bleedOpenManualPct={bleedOpenManualPct} bleedValveSizePct={bleedValveSizePct}
               cycleEngine={cycleEngine} cyclePamb={cyclePamb} cycleTamb={cycleTamb}
               cycleRH={cycleRH} cycleLoad={cycleLoad} cycleTcool={cycleTcool}
               cycleAirFrac={cycleAirFrac}
