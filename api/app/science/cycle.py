@@ -80,6 +80,7 @@ from typing import Any, Dict, Optional
 import cantera as ct
 
 from .mixture import GRI_MECH, _normalize_to_gri, fuel_mass_fraction_at_phi, make_gas_mixed
+from .water_mix import make_gas_mixed_with_water
 
 # ---------------------------- Physical constants ---------------------------
 GAMMA_AIR = 1.40            # cold-air approximation (used only for compressor T-rise)
@@ -275,6 +276,103 @@ def _t_bulk_with_mix(
     )
     gas.equilibrate("HP")
     return float(gas.T)
+
+
+def _t_bulk_with_mix_and_water(
+    fuel_x: Dict[str, float],
+    ox_x: Dict[str, float],
+    T_fuel_K: float,
+    T_air_K: float,
+    P_bar: float,
+    phi: float,
+    WFR: float,
+    water_mode: str,
+) -> float:
+    """T_Bulk variant that includes injected water in the 3-stream enthalpy mix.
+
+    Falls through to _t_bulk_with_mix when WFR == 0 (the existing dry path).
+    With WFR > 0 the mix is fuel(T_fuel) + air(T_air) + water(at T_water_K
+    inferred from water_mode); the resulting (T_mixed, P, mole-fractions) are
+    HP-equilibrated with the injected water present as a diluent on the
+    oxidizer side. Matches the Flame Temp panel's water-aware path exactly.
+    """
+    if not WFR or WFR <= 0:
+        return _t_bulk_with_mix(fuel_x, ox_x, T_fuel_K, T_air_K, P_bar, phi)
+    gas, _, _, _, _ = make_gas_mixed_with_water(
+        fuel_x, ox_x, float(phi),
+        float(T_fuel_K), float(T_air_K), float(P_bar),
+        float(WFR), water_mode,
+    )
+    gas.equilibrate("HP")
+    return float(gas.T)
+
+
+def _t_ad_at_phi_with_water(
+    fuel_x: Dict[str, float],
+    ox_x: Dict[str, float],
+    T_fuel_K: float,
+    T_air_K: float,
+    P_bar: float,
+    phi: float,
+    WFR: float,
+    water_mode: str,
+) -> float:
+    """3-stream HP-adiabatic equilibrium product T at (T_mix, P, phi) with water."""
+    gas, _, _, _, _ = make_gas_mixed_with_water(
+        fuel_x, ox_x, float(phi),
+        float(T_fuel_K), float(T_air_K), float(P_bar),
+        float(WFR), water_mode,
+    )
+    gas.equilibrate("HP")
+    return float(gas.T)
+
+
+def _phi_for_target_T4_with_water(
+    fuel_x: Dict[str, float],
+    ox_x: Dict[str, float],
+    T_fuel_K: float,
+    T_air_K: float,
+    P_bar: float,
+    T4_target_K: float,
+    WFR: float,
+    water_mode: str,
+) -> float:
+    """Water-injection variant of _phi_for_target_T4.
+
+    Real engines hold T4 at the firing-temp setpoint with water injection by
+    raising mdot_fuel (i.e. higher phi) to overcome water cooling. This solver
+    mirrors that controller behavior: with WFR > 0 we search for the phi that
+    makes the 3-stream HP equilibrium product T (cold fuel + hot air + water)
+    equal T4. The resulting phi is higher than the dry case, so mdot_fuel
+    rises a few % and η_LHV drops — matching real water-injection penalty.
+
+    Falls through to _phi_for_target_T4 when WFR == 0 to preserve the deck
+    convention (fuel preheated to T3) and the published-LHV efficiency anchor.
+    """
+    if not WFR or WFR <= 0:
+        return _phi_for_target_T4(fuel_x, ox_x, T_air_K, P_bar, T4_target_K)
+
+    def T_eq(phi: float) -> float:
+        return _t_ad_at_phi_with_water(
+            fuel_x, ox_x, T_fuel_K, T_air_K, P_bar, phi, WFR, water_mode,
+        )
+
+    lo, hi = 0.10, 1.50
+    T_lo, T_hi = T_eq(lo), T_eq(hi)
+    if T4_target_K <= T_lo:
+        return lo
+    if T4_target_K >= T_hi:
+        return hi
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        T_mid = T_eq(mid)
+        if T_mid < T4_target_K:
+            lo, T_lo = mid, T_mid
+        else:
+            hi, T_hi = mid, T_mid
+        if abs(hi - lo) < 1e-4:
+            break
+    return 0.5 * (lo + hi)
 
 
 def _phi_for_target_T4(
@@ -517,6 +615,8 @@ def run(
     fuel_pct: Optional[Dict[str, float]] = None,
     combustor_air_frac: Optional[float] = None,
     T_fuel_K: Optional[float] = None,
+    WFR: float = 0.0,
+    water_mode: str = "liquid",
 ) -> Dict[str, Any]:
     """Solve the cycle at the requested operating point.
 
@@ -567,6 +667,21 @@ def run(
               the cycle's flame-zone T matches the Flame Temp / AFT panel at
               the linked sidebar state (T_air=T3, P=P3, φ=φ_Bulk).
         Defaults to 288.706 K (60 °F) — the reference T for tabulated MWI.
+    WFR
+        Water-to-fuel mass ratio injected at the combustor primary zone.
+        Defaults to 0 (dry cycle, identical to the OEM-deck behavior).
+        With WFR > 0 the code takes the controller-style path: the T4
+        back-solve raises phi to overcome water cooling and hold T4 at the
+        firing-temp setpoint, and T_Bulk is computed from a 3-stream
+        enthalpy mix (cold fuel + hot air + injected water). Net effect:
+        mdot_fuel rises a few %, η_LHV drops, and T_Bulk drops — matching
+        the Flame Temp panel's water-aware path exactly.
+        NOTE: MW_net stays at the dry-deck cap (no water-injection power
+        augmentation modeled here); only the fuel-side / heat-rate effect
+        is captured.
+    water_mode
+        "liquid" or "steam" — sets the injected-water enthalpy reference
+        used by make_gas_mixed_with_water. Ignored when WFR == 0.
 
     Returns a dict with all station properties and diagnostics (see
     docstring and CycleResponse schema for fields).
@@ -669,7 +784,14 @@ def run(
     ox_pct = _humid_air_mol_pct(T_amb_K, P_amb_bar, RH_pct)
     fuel_x = _normalize_to_gri(fuel_pct)
     ox_x = _normalize_to_gri(ox_pct)
-    phi4 = _phi_for_target_T4(fuel_x, ox_x, stations["T3_K"], P3_bar, T4_K)
+    # Sanitize WFR / water_mode and route to the water-aware T4 back-solve
+    # only when WFR > 0 — preserves the OEM-deck efficiency anchor in the
+    # dry case (the helper itself short-circuits to the dry path).
+    WFR = max(0.0, float(WFR or 0.0))
+    water_mode = water_mode if water_mode in ("liquid", "steam") else "liquid"
+    phi4 = _phi_for_target_T4_with_water(
+        fuel_x, ox_x, T_fuel_K, stations["T3_K"], P3_bar, T4_K, WFR, water_mode,
+    )
 
     # FAR4 = fuel mass / combustor air mass at the phi that produces T4
     Y_f = fuel_mass_fraction_at_phi(fuel_x, ox_x, phi4, GRI_MECH)
@@ -688,9 +810,11 @@ def run(
     phi_Bulk = phi4 / f_safe
     # Use enthalpy-balanced fuel↔air mixing so T_Bulk matches what the Flame
     # Temp panel computes at the linked sidebar state (T_fuel, T_air=T3).
-    # See _t_bulk_with_mix for the full motivation.
-    T_Bulk_K = _t_bulk_with_mix(
-        fuel_x, ox_x, T_fuel_K, stations["T3_K"], P3_bar, phi_Bulk,
+    # When WFR > 0 the water-aware variant routes through make_gas_mixed_with_water
+    # so injected water enters the 3-stream enthalpy mix exactly as the Flame
+    # Temp panel does; otherwise it short-circuits to _t_bulk_with_mix.
+    T_Bulk_K = _t_bulk_with_mix_and_water(
+        fuel_x, ox_x, T_fuel_K, stations["T3_K"], P3_bar, phi_Bulk, WFR, water_mode,
     )
 
     # --- Fuel flow ----------------------------------------------------------
@@ -766,8 +890,7 @@ def run(
     # deck-anchored cap as the headline and keep MW_gross exported only for
     # diagnostic comparison.
     MW_cap = MW_max_ambient * load_frac
-    MW_uncapped = max(MW_cap, 0.0)
-    MW_net = max(MW_uncapped * derate_factor, 0.0)
+    MW_net = max(MW_cap * derate_factor, 0.0)
 
     # --- Heat rate & efficiency --------------------------------------------
     LHV_fuel = _estimate_LHV_mass_J_per_kg(fuel_x)     # J/kg
@@ -796,7 +919,7 @@ def run(
         # Option A — energy-balance decomposition (all in MW)
         "MW_gross": float(MW_gross),
         "MW_cap": float(MW_cap),
-        "MW_uncapped_before_derate": float(MW_uncapped),
+        "MW_uncapped_before_derate": float(MW_cap),
         "W_turbine_MW": float(W_turbine_MW),
         "W_compressor_MW": float(W_compressor_MW),
         "W_parasitic_MW": float(W_parasitic_MW),
@@ -854,6 +977,11 @@ def run(
             "warnings": list(fuel_flex["warnings"]),
         },
         "T_fuel_K": float(T_fuel_K),
+        # Water injection (echoed for the frontend / Excel export / tests).
+        # WFR == 0 ⇒ dry deck path is in effect (OEM efficiency anchor preserved).
+        # WFR > 0  ⇒ controller path: phi4 raised to hold T4, η_LHV drops a few %.
+        "WFR": float(WFR),
+        "water_mode": water_mode,
         # Humid-air composition at inlet (for reference / Oxidizer linkage)
         "oxidizer_humid_mol_pct": {k: float(v) for k, v in ox_pct.items()},
     }

@@ -379,6 +379,8 @@ if(cycleResult){
     ["Intercooler Coolant T (LMS100 only)",cycleEngine==="LMS100PB+"?fmtN(uv(u,"T",cycleTcool),2):"n/a",uu(u,"T")],
     ["Combustor Air Fraction (flame/total)",fmtN(cycleAirFrac,3),"—"],
     ["Fuel Temperature",fmtN(uv(u,"T",cr.T_fuel_K??cycleTamb),2),uu(u,"T")],
+    ["Water/Fuel Mass Ratio (WFR)",fmtN(cr.WFR??WFR,3),"kg_water/kg_fuel"],
+    ["Water Injection Mode",(cr.WFR??WFR)>0?((cr.water_mode||waterMode)==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],
     [],
     ["═══ STATION STATES ═══"],[],
     ["Station","Temperature ("+uu(u,"T")+")","Pressure (bar)","Mass Flow (kg/s)"],
@@ -483,7 +485,7 @@ const sA=[
   ["7. Power & Load","Parasitic load","1.5% of rated","Lube pumps, controls, cooling fans."],
   ["","MW_gross","W_turb − W_comp − W_parasitic","Cantera energy balance."],
   ["","MW_cap","rated · ambient · load_pct/100","Density-lapse & IC-benefit scaling."],
-  ["","MW_net","min(gross, cap) · (1 − derate%)","Cap limit + fuel-flex derate."],
+  ["","MW_net","MW_cap · (1 − derate%)","OEM-anchored cap × fuel-flex derate (MW_gross is diagnostic only)."],
 
   ["8. Fuel Properties (Option B)","Reference condition","60 °F / 1 atm","US gas-industry reference."],
   ["","Mixing rule","Linear in mole fractions","LHV_vol_mix = Σ xᵢ · LHV_vol,i."],
@@ -1364,7 +1366,7 @@ function AssumptionsPanel(){
       <Assumption label="Parasitic load" value="1.5% of rated MW" note="Lube pumps, controls, cooling fans. Subtracted from W_turbine − W_compressor."/>
       <Assumption label="MW_gross formula" value="W_turbine − W_compressor − W_parasitic" note="Pure energy balance from Cantera enthalpies, mdot_air set by T4 back-solve."/>
       <Assumption label="MW_cap" value="rated_MW · ambient_factor · load_factor" note="Density-lapse & intercooler-benefit ambient factor, times load_pct/100."/>
-      <Assumption label="MW_net" value="min(MW_gross, MW_cap) · (1 − derate_pct/100)" note="Engine will not exceed its published-cap limit line regardless of available thermodynamic power."/>
+      <Assumption label="MW_net" value="MW_cap · (1 − derate_pct/100)" note="Uses the OEM-anchored deck cap (rated_MW · ambient_factor · load_factor) as the published power. MW_gross is reported separately for diagnostic comparison only — the simplified Brayton calc holds T4 constant and doesn't model variable IGVs / bleed scheduling, so it under-predicts off-design power by a few MW."/>
     </AssumptionsGroup>
 
     <AssumptionsGroup title="8. Fuel Properties (Option B)" subtitle="Per-component LHV on a volume basis (BTU/scf at 60 °F, 1 atm) and specific gravity relative to air. Used to compute LHV_mix and SG_mix linearly.">
@@ -1381,7 +1383,7 @@ function AssumptionsPanel(){
       <Assumption label="Out-of-spec" value="MWI &lt; 35 or &gt; 60" note="Derate 20%. Typical of very dilute or very heavy fuels."/>
       <Assumption label="H2 warning" value="x_H2 &gt; 30%" note="Flashback risk in DLE premixer — emitted as a warning regardless of MWI."/>
       <Assumption label="Low LHV warning" value="LHV_vol &lt; 800 BTU/scf" note="Dilute fuel; fuel flow roughly doubles. Emitted as a warning."/>
-      <Assumption label="Derate application" value="MW_net = MW_uncapped · (1 − derate_pct/100)" note="Applied AFTER the MW_cap min(). Derate stacks with part-load but not with ambient droop."/>
+      <Assumption label="Derate application" value="MW_net = MW_cap · (1 − derate_pct/100)" note="Applied directly to the deck-anchored cap. Derate stacks with part-load and ambient droop (which both already live inside MW_cap)."/>
     </AssumptionsGroup>
 
     <AssumptionsGroup title="10. Engine Deck Anchors" subtitle="Design-point numbers each off-design scaling law is anchored at. These must match the published deck exactly.">
@@ -1393,7 +1395,7 @@ function AssumptionsPanel(){
     <AssumptionsGroup title="11. Off-design Scaling" subtitle="How the deck behaves away from its anchor. Not all of this is modeled — the list below states what IS.">
       <Assumption label="Density lapse" value="mdot_air ∝ ρ_amb · VGV(T_amb)" note="VGV is a simple function of ambient — folded into an engine-specific lapse curve."/>
       <Assumption label="LMS100 intercooler benefit" value="Architectural" note="LMS100 loses less on hot days than LM6000 because HPC inlet is fixed at T_cool_in. Verified in regression tests."/>
-      <Assumption label="Load line" value="Linear in rated" note="Cap is load_pct · MW_rated_ambient. Part-load T4 droops so MW_gross is super-linear at low load."/>
+      <Assumption label="Load line" value="Linear in rated" note="MW_net = load_pct · MW_rated_ambient · derate. Part-load T4 droops so MW_gross is super-linear at low load (diagnostic only — does not affect MW_net)."/>
       <Assumption label="Humidity" value="Via humid-air R only" note="Higher RH → lower molecular weight → more volumetric mdot at fixed corrected flow."/>
       <Assumption label="Altitude" value="Not modeled" note="Use P_amb input if needed; scales density directly."/>
       <Assumption label="Inlet cooling" value="Not modeled" note="No evap / chiller hook. Simulate manually by dropping T_amb."/>
@@ -1734,6 +1736,13 @@ export default function App(){
     // fuel/air mix as the Flame Temp panel (otherwise T_Bulk overshoots when
     // T_fuel ≪ T3, because cycle would treat fuel as if preheated to T3).
     T_fuel_K:T_fuel,
+    // Forward the sidebar water-injection state so Cycle's flame-zone T_Bulk
+    // matches the Flame Temp panel exactly when WFR>0, AND the T4 back-solve
+    // uses controller-style logic (raise phi to overcome water cooling so T4
+    // stays at the firing-temp setpoint). Drops η_LHV a few % — matches the
+    // real-engine penalty.
+    WFR,
+    water_mode:waterMode,
   },accurate&&hasOnline);
   const cycleResult=bkCycle.data;
   // panelState is built AFTER cycleResult to avoid temporal-dead-zone reference.

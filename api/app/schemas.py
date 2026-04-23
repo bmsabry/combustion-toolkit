@@ -404,6 +404,16 @@ class CycleRequest(BaseModel):
             "Wobbe Index MWI = LHV_vol/√(SG·T_fuel_absolute). Default 288.706 K (60°F)."
         ),
     )
+    # Water injection (mirrors AFT/Flame-Speed/Exhaust). When > 0 the cycle
+    # switches to the controller path: phi4 rises to hold T4 at the firing-temp
+    # setpoint despite water cooling, and T_Bulk uses the 3-stream enthalpy mix.
+    # Default 0 ⇒ dry deck path is preserved exactly (OEM efficiency anchor).
+    WFR: float = Field(default=0.0, ge=0.0, le=2.0, description="Water-to-fuel mass ratio")
+    water_mode: str = Field(
+        default="liquid",
+        pattern="^(liquid|steam)$",
+        description="Water injection phase: 'liquid' (absorbs h_fg) or 'steam'",
+    )
 
 
 class FuelFlexibility(BaseModel):
@@ -483,5 +493,8 @@ class CycleResponse(BaseModel):
     LHV_fuel_MJ_per_kg: float
     # Option B — fuel-flexibility analysis
     fuel_flexibility: FuelFlexibility = Field(default_factory=FuelFlexibility)
+    # Water injection echo (0 ⇒ dry deck path preserved)
+    WFR: float = 0.0
+    water_mode: str = "liquid"
     # Humid-air composition (reference)
     oxidizer_humid_mol_pct: Dict[str, float]

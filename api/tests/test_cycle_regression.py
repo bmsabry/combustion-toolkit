@@ -418,3 +418,110 @@ def test_load_clamped_to_min_20():
     r_20 = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 20.0)
     assert r_low["load_pct"] == pytest.approx(20.0)
     assert r_low["MW_net"] == pytest.approx(r_20["MW_net"], abs=0.01)
+
+
+# ----------------------------- water injection -----------------------------
+
+def test_wfr_zero_is_byte_identical_to_legacy_dry_call():
+    """WFR=0 must short-circuit straight to the legacy dry path so the OEM
+    efficiency anchor and every published-deck test above is preserved bit-for-bit.
+    """
+    legacy = cycle.run("LMS100PB+", 1.01325, 279.817, 80.0, 100.0)
+    explicit_dry = cycle.run(
+        "LMS100PB+", 1.01325, 279.817, 80.0, 100.0,
+        WFR=0.0, water_mode="liquid",
+    )
+    for key in (
+        "T3_K", "P3_bar", "T4_K", "MW_net", "phi4", "FAR4",
+        "phi_Bulk", "T_Bulk_K", "efficiency_LHV", "mdot_fuel_kg_s",
+    ):
+        assert explicit_dry[key] == pytest.approx(legacy[key], rel=1e-12), key
+
+
+def test_wfr_holds_t4_raises_phi_and_drops_eta():
+    """Water injection at the firing-temp setpoint: real-engine controller
+    raises mdot_fuel a few % to overcome water cooling so T4 stays put.
+    Effects we verify:
+      • T4 unchanged (controller setpoint).
+      • phi4 rises (controller adds fuel to compensate water cooling).
+      • mdot_fuel rises (more fuel mass at fixed combustor airflow).
+      • η_LHV drops (more fuel for the same MW).
+
+    NOTE: We deliberately do NOT assert on the direction of T_Bulk. Holding
+    T4 with water makes phi4 (and thus phi_Bulk = phi4 / combustor_air_frac)
+    richer; in the lean DLE band that increase in flame-zone phi can outweigh
+    the water cooling, producing T_Bulk ABOVE the dry value. That's a known
+    artifact of an exit-T controller paired with a finite flame/dilution
+    split, not a bug — and the wet T_Bulk is verified against the AFT panel
+    in test_aft_at_phi_bulk_equals_t_bulk_with_water_injection.
+    """
+    dry = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 100.0, T_fuel_K=294.261)
+    wet = cycle.run(
+        "LM6000PF", 1.01325, 288.706, 60.0, 100.0, T_fuel_K=294.261,
+        WFR=0.5, water_mode="liquid",
+    )
+    # T4 setpoint preserved
+    assert wet["T4_K"] == pytest.approx(dry["T4_K"], abs=1e-6)
+    # Controller compensates → more fuel, higher phi
+    assert wet["phi4"] > dry["phi4"], (wet["phi4"], dry["phi4"])
+    assert wet["mdot_fuel_kg_s"] > dry["mdot_fuel_kg_s"]
+    # More fuel for same MW → η drops
+    assert wet["efficiency_LHV"] < dry["efficiency_LHV"], (
+        wet["efficiency_LHV"], dry["efficiency_LHV"],
+    )
+    # Echoed inputs
+    assert wet["WFR"] == pytest.approx(0.5)
+    assert wet["water_mode"] == "liquid"
+
+
+def test_aft_at_phi_bulk_equals_t_bulk_with_water_injection():
+    """End-to-end interface guard: with WFR > 0, the cycle's T_Bulk must
+    match what the AFT panel computes when fed the same water-injection
+    inputs and the linked sidebar state. This is the wet-cycle analog of
+    test_aft_at_phi_bulk_equals_t_bulk_with_cold_fuel — without it the
+    Cycle and Flame Temp panels visibly disagree on tab switch.
+    """
+    from app.science import aft
+    fuel = {"CH4": 95.0, "C2H6": 3.0, "C3H8": 1.0, "N2": 1.0}
+    T_fuel = 294.261
+    WFR = 0.4
+    r = cycle.run(
+        "LM6000PF", 1.01325, 288.706, 60.0, 100.0,
+        combustor_air_frac=0.88, T_fuel_K=T_fuel,
+        fuel_pct=fuel, WFR=WFR, water_mode="liquid",
+    )
+    r_aft = aft.run(
+        fuel_pct=fuel, ox_pct=r["oxidizer_humid_mol_pct"],
+        phi=r["phi_Bulk"], T0_K=r["T3_K"], P_bar=r["P3_bar"],
+        heat_loss_fraction=0.0,
+        T_fuel_K=T_fuel, T_air_K=r["T3_K"],
+        WFR=WFR, water_mode="liquid",
+    )
+    assert r_aft["T_ad"] == pytest.approx(r["T_Bulk_K"], abs=5.0), (
+        f"AFT T_ad={r_aft['T_ad']:.1f} vs cycle T_Bulk={r['T_Bulk_K']:.1f} — "
+        f"the cycle's water-aware T_Bulk does not match the Flame Temp panel."
+    )
+
+
+def test_water_mode_liquid_needs_more_fuel_than_steam():
+    """Liquid water absorbs h_fg before mixing, so it cools the flame more
+    aggressively than steam at the same WFR. The controller compensates by
+    bumping mdot_fuel further → higher phi4 for liquid than steam, while T4
+    still sits at the firing-temp setpoint in both.
+
+    We deliberately don't assert on T_Bulk direction here — same competing
+    effects as the WFR=0.5 test: a richer phi_Bulk can outweigh the extra
+    water cooling. The fuel-side asymmetry is the unambiguous signature.
+    """
+    base = dict(engine="LM6000PF", P_amb_bar=1.01325, T_amb_K=288.706,
+                RH_pct=60.0, load_pct=100.0, T_fuel_K=294.261, WFR=0.5)
+    r_liq = cycle.run(**base, water_mode="liquid")
+    r_steam = cycle.run(**base, water_mode="steam")
+    # Both must still hold T4 at the firing-temp setpoint
+    assert r_liq["T4_K"] == pytest.approx(r_steam["T4_K"], abs=1e-6)
+    # Liquid needs more fuel than steam (h_fg penalty)
+    assert r_liq["phi4"] > r_steam["phi4"], (r_liq["phi4"], r_steam["phi4"])
+    assert r_liq["mdot_fuel_kg_s"] > r_steam["mdot_fuel_kg_s"]
+    # Echoed inputs
+    assert r_liq["water_mode"] == "liquid"
+    assert r_steam["water_mode"] == "steam"
