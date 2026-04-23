@@ -613,8 +613,8 @@ class CombustorMappingRequest(BaseModel):
     pilot_NOx_anchor_ppm: float = Field(default=180.0, gt=3.0, le=5000.0)
     # Fixed NOx adders (ppm, dry) applied on top of the kinetic PSR+PFR NO
     # for the main circuits — calibrated to the LMS100 hardware.
-    im_nox_adder_ppm: float = Field(default=6.0, ge=0.0, le=500.0)
-    om_nox_adder_ppm: float = Field(default=8.6, ge=0.0, le=500.0)
+    im_nox_adder_ppm: float = Field(default=12.0, ge=0.0, le=500.0)
+    om_nox_adder_ppm: float = Field(default=17.2, ge=0.0, le=500.0)
 
 
 class CombustorMapCircuit(BaseModel):

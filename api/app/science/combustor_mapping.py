@@ -315,8 +315,8 @@ def run(
     mechanism: str = "gri30",
     pilot_NOx_anchor_phi: float = 1.0,
     pilot_NOx_anchor_ppm: float = 180.0,
-    im_nox_adder_ppm: float = 6.0,
-    om_nox_adder_ppm: float = 8.6,
+    im_nox_adder_ppm: float = 12.0,
+    om_nox_adder_ppm: float = 17.2,
 ) -> dict:
     """Run the 4-circuit combustor mapping. See module docstring for topology."""
     mech_path = mech_yaml(mechanism)
@@ -357,7 +357,7 @@ def run(
     # Fixed main-circuit NOx adders (ppm, vol-dry) applied on top of the
     # kinetic PSR+PFR NO. Compensates for sub-grid effects the 0D network
     # can't see (imperfect premix, local rich zones, unsteady pockets).
-    # Defaults calibrated to LMS100 DLE hardware: IM +6 ppm, OM +8.6 ppm.
+    # Defaults calibrated to LMS100 DLE hardware: IM +12 ppm, OM +17.2 ppm.
     circuits_spec = [
         ("IP", float(phi_IP),         m_air_IP, m_fuel_IP, True,  0.0),
         ("OP", float(phi_OP),         m_air_OP, m_fuel_OP, True,  0.0),
