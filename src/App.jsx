@@ -15,14 +15,15 @@ const AccurateCtx = createContext({ accurate:false, setAccurate:()=>{}, availabl
 // can show a large "calculations in progress" banner that disappears when all tasks complete.
 const BusyCtx = createContext({ begin:()=>()=>{}, tasks:[] });
 const BUSY_LABELS = {
-  aft: "Flame temperature (Cantera equilibrium)",
-  flame: "Laminar flame speed (Cantera 1D)",
-  combustor: "Combustor network (Cantera PSR+PFR)",
-  exhaust: "Exhaust composition (Cantera equilibrium)",
-  props: "Fluid properties (Cantera)",
-  autoignition: "Autoignition delay (Cantera 0D)",
-  cycle: "Gas turbine cycle (Cantera equilibrium + correlations)",
-  flame_sweep: "Flame speed sweep curves (Cantera 1D × N points)",
+  aft: "Computing adiabatic flame temperature (Cantera HP equilibrium + complete-combustion companion)…",
+  flame: "Solving 1D premixed flame — laminar flame speed S_L (Cantera FreeFlame, mixture-averaged transport)…",
+  combustor: "Running PSR → PFR combustor network (Cantera reactor net, NOx + CO kinetics)…",
+  exhaust: "Inverting exhaust O₂ / CO₂ to equivalence ratio (Cantera equilibrium + complete-combustion)…",
+  props: "Computing mixture fluid properties (Cantera thermodynamics + transport)…",
+  autoignition: "Integrating 0D ignition-delay (Cantera constant-HP reactor)…",
+  cycle: "Solving gas-turbine cycle (compressor / combustor / turbine + bleed + water injection)…",
+  flame_sweep: "Sweeping laminar flame speed across φ (Cantera FreeFlame × N points)…",
+  load_sweep: "Running load sweep — cycle + AFT at each load point (20 → 100 %)…",
 };
 const UC = {
   SI: { T:{u:"K",from:v=>v,to:v=>v}, P:{u:"atm",from:v=>v,to:v=>v}, vel:{u:"m/s",from:v=>v,to:v=>v}, len:{u:"m",from:v=>v,to:v=>v}, lenSmall:{u:"cm",from:v=>v,to:v=>v}, SL:{u:"cm/s",from:v=>v,to:v=>v}, mass:{u:"kg",from:v=>v,to:v=>v}, energy_mass:{u:"MJ/kg",from:v=>v,to:v=>v}, energy_vol:{u:"MJ/m³",from:v=>v,to:v=>v}, cp:{u:"J/(mol·K)",from:v=>v,to:v=>v}, h_mol:{u:"kJ/mol",from:v=>v,to:v=>v}, s_mol:{u:"J/(mol·K)",from:v=>v,to:v=>v}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"kg/kg",from:v=>v,to:v=>v} },
@@ -585,7 +586,7 @@ XLSX.utils.book_append_sheet(wb,wsA,"Assumptions");
 XLSX.writeFile(wb,"ProReadyEngineer_CombustionReport.xlsx");}
 
 /* ══════════════════ SVG CHART ══════════════════ */
-function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,y2K=null,c2="#FBBF24",y2L="",vline=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=Math.min(...xs),xx=Math.max(...xs);let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}let yn=yn_-(yx_-yn_)*0.05;const yx=yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;const pts=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy(d[yK]).toFixed(1)}`).join(' ');let y2n,y2x,sy2,pts2;if(y2K){const y2s=data.map(d=>d[y2K]);let y2n_=Math.min(...y2s),y2x_=Math.max(...y2s);if(y2n_===y2x_){y2n_-=1;y2x_+=1;}y2n=y2n_-(y2x_-y2n_)*0.05;y2x=y2x_+(y2x_-y2n_)*0.05;if(y2n_>=0&&y2n<0)y2n=0;sy2=v=>p.t+H-(v-y2n)/(y2x-y2n||1)*H;pts2=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy2(d[y2K]).toFixed(1)}`).join(' ');}const nY=5,nX=6;const yTk=Array.from({length:nY+1},(_,i)=>yn+(yx-yn)*i/nY);const xTk=Array.from({length:nX+1},(_,i)=>xn+(xx-xn)*i/nX);const fmt=v=>Math.abs(v)>=1e4?(v/1e3).toFixed(0)+'k':Math.abs(v)>=100?v.toFixed(0):Math.abs(v)>=1?v.toFixed(1):v.toFixed(3);const gid=`g${yK}${color.replace('#','')}${Math.random().toString(36).slice(2,6)}`;return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}><defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".2"/><stop offset="100%" stopColor={color} stopOpacity=".01"/></linearGradient></defs>{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmt(v)}</text></g>)}<path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/><path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="3.5" fill={C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
+function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}let yn=yn_-(yx_-yn_)*0.05;const yx=yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;const pts=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy(d[yK]).toFixed(1)}`).join(' ');let y2n,y2x,sy2,pts2;if(y2K){const y2s=data.map(d=>d[y2K]);let y2n_=Math.min(...y2s),y2x_=Math.max(...y2s);if(y2n_===y2x_){y2n_-=1;y2x_+=1;}y2n=y2n_-(y2x_-y2n_)*0.05;y2x=y2x_+(y2x_-y2n_)*0.05;if(y2n_>=0&&y2n<0)y2n=0;sy2=v=>p.t+H-(v-y2n)/(y2x-y2n||1)*H;pts2=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy2(d[y2K]).toFixed(1)}`).join(' ');}const nY=5,nX=6;const yTk=Array.from({length:nY+1},(_,i)=>yn+(yx-yn)*i/nY);const xTk=Array.from({length:nX+1},(_,i)=>xn+(xx-xn)*i/nX);const fmt=v=>Math.abs(v)>=1e4?(v/1e3).toFixed(0)+'k':Math.abs(v)>=100?v.toFixed(0):Math.abs(v)>=1?v.toFixed(1):v.toFixed(3);const gid=`g${yK}${color.replace('#','')}${Math.random().toString(36).slice(2,6)}`;return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}><defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".2"/><stop offset="100%" stopColor={color} stopOpacity=".01"/></linearGradient></defs>{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmt(v)}</text></g>)}<path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/><path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="3.5" fill={C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
 function HBar({data,w=540,h=180}){if(!data)return null;const entries=Object.entries(data).filter(([_,v])=>v>0.05).sort((a,b)=>b[1]-a[1]);if(!entries.length)return null;const pa={t:6,r:78,b:6,l:48};const bH=Math.min(22,(h-pa.t-pa.b)/entries.length-3);const mx=Math.max(...entries.map(e=>e[1]));const W=w-pa.l-pa.r;const clr={CO2:C.warm,H2O:C.accent,N2:C.accent3,O2:"#38BDF8",Ar:"#64748B",CH4:C.accent2,C2H6:C.orange,C3H8:"#F59E0B",H2:C.good,CO:"#FB923C",NO:C.strong,OH:C.violet,H:"#FDE68A",O:"#FCA5A5"};return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}>{entries.map(([sp,val],i)=>{const y=pa.t+i*(bH+3);const bw=val/mx*W;return(<g key={sp}><text x={pa.l-4} y={y+bH/2+4} fill={C.txtDim} fontSize="11" textAnchor="end" fontFamily="monospace">{fmt(sp)}</text><rect x={pa.l} y={y} width={Math.max(1,bw)} height={bH} rx="2" fill={clr[sp]||"#64748B"} opacity=".85"/><text x={pa.l+bw+4} y={y+bH/2+4} fill={C.txt} fontSize="10" fontFamily="monospace">{val.toFixed(2)}%</text></g>);})}</svg>);}
 
 /* ══════════════════ UI COMPONENTS ══════════════════ */
@@ -1847,6 +1848,11 @@ function OperationsSummaryPanel({
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
+  // Register the load sweep with the global BusyCtx so the prominent top-
+  // center "CALCULATIONS IN PROGRESS" overlay appears (exactly like it does
+  // for auto-fired useBackendCalc panels). Without this the overlay would
+  // stay silent because we call api.calcCycle/api.calcAFT directly.
+  const {begin:beginBusy}=useContext(BusyCtx);
 
   // ── Complete-combustion at COMBUSTOR EXIT state (phi4, T3, P3) ──────────
   // We call /calc/aft at the cycle's phi4 — NOT phi_Bulk — so T_ad_complete
@@ -1894,55 +1900,68 @@ function OperationsSummaryPanel({
   const runSweep=async()=>{
     if(sweeping)return;
     setSweeping(true);setSweepErr(null);setSweepData([]);setSweepProgress(0);
-    const points=[20,30,40,50,60,70,80,90,100];
+    // Sweep every 5 % for a smoother curve all the way to full load.
+    // 17 points × ~1 s per cycle+AFT pair ≈ 17-25 s of wall-clock time.
+    const points=[20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100];
     const results=[];
+    // Top-level task covers the whole sweep so the global overlay shows a
+    // stable banner even between per-point subtasks.
+    const endSweepBusy=beginBusy(BUSY_LABELS.load_sweep);
     try{
       for(let i=0;i<points.length;i++){
         const L=points[i];
-        const c=await api.calcCycle({
-          engine:cycleEngine,
-          P_amb_bar:cyclePamb, T_amb_K:cycleTamb, RH_pct:cycleRH,
-          load_pct:L,
-          T_cool_in_K:cycleEngine==="LMS100PB+"?cycleTcool:null,
-          fuel_pct:nonzero(fuel),
-          combustor_air_frac:cycleAirFrac,
-          T_fuel_K:Tfuel,
-          WFR, water_mode:waterMode, T_water_K:WFR>0?T_water:null,
-          bleed_air_frac:bleedAirFrac,
-        });
-        // AFT at phi4 for T4 complete + O2/CO2
-        let T4_cc=c.T4_K, O2dry=0, CO2dry=0;
+        // Per-point task with specific wording so the user sees exactly
+        // which load the backend is crunching right now.
+        const endPtBusy=beginBusy(`Load sweep point ${i+1}/${points.length} — ${L}% load (cycle + AFT)…`);
         try{
-          const aft=await api.calcAFT({
-            fuel:nonzero(fuel),oxidizer:nonzero(ox),
-            phi:c.phi4, T0:c.T3_K, P:c.P3_bar,
-            mode:"adiabatic", heat_loss_fraction:0,
-            T_fuel_K:Tfuel, T_air_K:c.T3_K,
-            WFR, water_mode:waterMode,
+          const c=await api.calcCycle({
+            engine:cycleEngine,
+            P_amb_bar:cyclePamb, T_amb_K:cycleTamb, RH_pct:cycleRH,
+            load_pct:L,
+            T_cool_in_K:cycleEngine==="LMS100PB+"?cycleTcool:null,
+            fuel_pct:nonzero(fuel),
+            combustor_air_frac:cycleAirFrac,
+            T_fuel_K:Tfuel,
+            WFR, water_mode:waterMode, T_water_K:WFR>0?T_water:null,
+            bleed_air_frac:bleedAirFrac,
           });
-          T4_cc=aft.T_ad_complete||c.T4_K;
-          const d=aft.mole_fractions_complete_dry||{};
-          O2dry=(d.O2||0)*100;
-          CO2dry=(d.CO2||0)*100;
-        }catch(e){/* fall back to equilibrium T4 */}
-        const m_bleed=c.mdot_bleed_kg_s||0;
-        const m_water=c.mdot_water_kg_s||0;
-        results.push({
-          load:L,
-          MW:c.MW_net||0,
-          fuel:c.mdot_fuel_kg_s||0,
-          air:(c.mdot_air_post_bleed_kg_s||c.mdot_air_kg_s||0),
-          water:m_water,
-          bleed:m_bleed,
-          bleed_pct:(c.bleed_air_frac||0)*100,
-          T4_complete:T4_cc,
-          eta:(c.efficiency_LHV||0)*100,
-          O2:O2dry, CO2:CO2dry,
-        });
-        setSweepData([...results]);
-        setSweepProgress((i+1)/points.length);
+          // AFT at phi4 for T4 complete + O2/CO2
+          let T4_cc=c.T4_K, O2dry=0, CO2dry=0;
+          try{
+            const aft=await api.calcAFT({
+              fuel:nonzero(fuel),oxidizer:nonzero(ox),
+              phi:c.phi4, T0:c.T3_K, P:c.P3_bar,
+              mode:"adiabatic", heat_loss_fraction:0,
+              T_fuel_K:Tfuel, T_air_K:c.T3_K,
+              WFR, water_mode:waterMode,
+            });
+            T4_cc=aft.T_ad_complete||c.T4_K;
+            const d=aft.mole_fractions_complete_dry||{};
+            O2dry=(d.O2||0)*100;
+            CO2dry=(d.CO2||0)*100;
+          }catch(e){/* fall back to equilibrium T4 */}
+          const m_bleed=c.mdot_bleed_kg_s||0;
+          const m_water=c.mdot_water_kg_s||0;
+          results.push({
+            load:L,
+            MW:c.MW_net||0,
+            fuel:c.mdot_fuel_kg_s||0,
+            air:(c.mdot_air_post_bleed_kg_s||c.mdot_air_kg_s||0),
+            water:m_water,
+            bleed:m_bleed,
+            bleed_pct:(c.bleed_air_frac||0)*100,
+            T4_complete:T4_cc,
+            eta:(c.efficiency_LHV||0)*100,
+            O2:O2dry, CO2:CO2dry,
+          });
+          setSweepData([...results]);
+          setSweepProgress((i+1)/points.length);
+        }finally{
+          endPtBusy();
+        }
       }
     }catch(e){setSweepErr(e?.message||String(e));}
+    endSweepBusy();
     setSweeping(false);
   };
 
@@ -1969,9 +1988,14 @@ function OperationsSummaryPanel({
   const MiniChart=({title,yKey,color,unit,transformY})=>{
     if(!sweepData.length)return(<div style={{padding:"32px 10px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:6,color:C.txtMuted,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{title}<br/><span style={{fontSize:9.5,fontStyle:"italic"}}>Run sweep to populate</span></div>);
     const plotData=sweepData.map(d=>({load:d.load,y:transformY?transformY(d[yKey]):d[yKey]}));
+    const partial=sweepData.length>0&&sweepData[sweepData.length-1].load<100;
     return(<div style={{background:C.bg2,border:`1px solid ${color}30`,borderRadius:6,padding:"8px 10px 4px"}}>
-      <div style={{fontSize:10,fontWeight:700,color:color,textTransform:"uppercase",letterSpacing:"0.8px",marginBottom:2}}>{title}</div>
-      <Chart data={plotData} xK="load" yK="y" xL="Load (%)" yL={unit} color={color} w={400} h={170}/>
+      <div style={{fontSize:10,fontWeight:700,color:color,textTransform:"uppercase",letterSpacing:"0.8px",marginBottom:2,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span>{title}</span>
+        {partial?<span style={{fontSize:8.5,fontWeight:500,color:C.warm,textTransform:"none",letterSpacing:0,fontStyle:"italic"}}>partial — re-run to reach 100%</span>:null}
+      </div>
+      {/* xMin/xMax pin the x-axis to the full 20-100% span so every chart covers the whole load envelope even if a sweep stopped early. */}
+      <Chart data={plotData} xK="load" yK="y" xL="Load (%)" yL={unit} color={color} w={400} h={170} xMin={20} xMax={100}/>
     </div>);
   };
 
@@ -2069,7 +2093,7 @@ function OperationsSummaryPanel({
           <div>
             <div style={{...S.cardT,marginBottom:3}}>Load-% Sweep — Variation at Current Operating Conditions</div>
             <div style={{fontSize:10,color:C.txtMuted,lineHeight:1.4,fontFamily:"'Barlow',sans-serif",maxWidth:620}}>
-              Runs the full cycle + Flame Temp backends at 20/30/40/50/60/70/80/90/100 % load, holding every other parameter fixed (engine, ambient, fuel, bleed, water). Useful for checking how each metric scales as the engine spools up. Emissions (NOx/CO) are NOT included in the sweep — they would add ~90 s per run and are best obtained from the Combustor panel at the specific load of interest.
+              Runs the full cycle + Flame Temp backends at 17 points from 20 % to 100 % load (every 5 %), holding every other parameter fixed (engine, ambient, fuel, bleed, water). Useful for checking how each metric scales as the engine spools up to full power. Emissions (NOx/CO) are NOT included in the sweep — they would add minutes per run and are best obtained from the Combustor panel at the specific load of interest.
             </div>
           </div>
           <button onClick={runSweep} disabled={sweeping||!accurate}
