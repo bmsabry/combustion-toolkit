@@ -151,6 +151,14 @@ class AFTResponse(BaseModel):
     AFR: float
     T_products_K: Optional[float] = None
     mole_fractions_at_T_products: Dict[str, float] = Field(default_factory=dict)
+    # Complete-combustion companion — same inlet, no dissociation (all C→CO2,
+    # all H→H2O; rich cases shift to CO/H2). Shown alongside the equilibrium
+    # T_ad because complete combustion is the correct assumption for diluted
+    # combustor-exit and stack measurements where the gas has cooled below
+    # the dissociation regime.
+    T_ad_complete: float = 0.0
+    mole_fractions_complete: Dict[str, float] = Field(default_factory=dict)
+    mole_fractions_complete_dry: Dict[str, float] = Field(default_factory=dict)
 
 
 class FlameSpeedRequest(BaseCalcRequest):
@@ -283,6 +291,11 @@ class CombustorResponse(BaseModel):
     T_psr: float
     T_exit: float
     T_mixed_inlet_K: float = 0.0  # adiabatic mix T of fuel+air at PSR inlet
+    # Reference adiabatic flame temperatures for the same inlet (shown on the
+    # Combustor panel alongside T_psr to bound the kinetic answer). Equilibrium
+    # uses full-Gibbs Cantera; Complete Combustion assumes no dissociation.
+    T_ad_equilibrium: float = 0.0
+    T_ad_complete: float = 0.0
     NO_ppm_vd_psr: float
     NO_ppm_vd_exit: float
     CO_ppm_vd_psr: float
@@ -326,7 +339,23 @@ class ExhaustRequest(BaseModel):
     )
 
 
+class ExhaustCompleteCombustion(BaseModel):
+    """Parallel inversion under the complete-combustion assumption."""
+    phi: float = 0.0
+    FAR: float = 0.0
+    AFR: float = 0.0
+    T_ad: float = 0.0
+    T_mixed_inlet_K: float = 0.0
+    exhaust_composition_wet: Dict[str, float] = Field(default_factory=dict)
+    exhaust_composition_dry: Dict[str, float] = Field(default_factory=dict)
+    O2_pct_dry: float = 0.0
+    CO2_pct_dry: float = 0.0
+    CO_pct_dry: float = 0.0
+    H2O_pct_wet: float = 0.0
+
+
 class ExhaustResponse(BaseModel):
+    # Equilibrium (Cantera HP) inversion — the primary block
     phi: float
     FAR: float
     AFR: float
@@ -338,6 +367,9 @@ class ExhaustResponse(BaseModel):
     CO2_pct_dry: float
     H2O_pct_wet: float
     method: str  # "O2" or "CO2"
+    # Parallel complete-combustion inversion — the physically correct
+    # assumption for stack or diluted combustor-exit measurements.
+    complete_combustion: ExhaustCompleteCombustion = Field(default_factory=ExhaustCompleteCombustion)
 
 
 class PropsRequest(BaseModel):

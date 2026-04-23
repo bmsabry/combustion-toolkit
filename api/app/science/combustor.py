@@ -46,6 +46,7 @@ from typing import Dict, List, Optional
 import cantera as ct
 import numpy as np
 
+from .complete_combustion import run as complete_combustion_run
 from .mixture import make_gas_mixed, mech_yaml
 from .water_mix import make_gas_mixed_with_water
 
@@ -511,10 +512,38 @@ def run(
     NO_15 = NO_exit * corr
     CO_15 = CO_exit * corr
 
+    # Reference adiabatic flame temperatures for the same inlet — shown on
+    # the panel alongside T_psr so the user can judge where the finite-rate
+    # reactor sits relative to the two idealizations. Equilibrium is the
+    # full-Gibbs Cantera answer (includes dissociation + equilibrium NO).
+    # Complete combustion assumes no dissociation (all C→CO2, all H→H2O).
+    # Real combustor exit T typically sits between the two, depending on
+    # residence time and the degree of kinetic NO / CO burnout.
+    T_ad_equilibrium = None
+    T_ad_complete = None
+    try:
+        eq_gas = ct.Solution(mech_path)
+        eq_gas.TPX = T_mixed, P_Pa, X_in
+        eq_gas.equilibrate("HP")
+        T_ad_equilibrium = float(eq_gas.T)
+    except Exception:
+        pass
+    try:
+        cc_out = complete_combustion_run(
+            fuel_pct, ox_pct, phi,
+            T_fuel_K=T_f, T_air_K=T_a, P_bar=P_bar,
+            WFR=WFR, water_mode=water_mode, mechanism=mechanism,
+        )
+        T_ad_complete = float(cc_out["T_ad"])
+    except Exception:
+        pass
+
     return {
         "T_psr": T_psr,
         "T_exit": T_exit,
         "T_mixed_inlet_K": T_mixed,
+        "T_ad_equilibrium": T_ad_equilibrium if T_ad_equilibrium is not None else T_psr,
+        "T_ad_complete": T_ad_complete if T_ad_complete is not None else T_psr,
         "NO_ppm_vd_psr": NO_psr,
         "NO_ppm_vd_exit": NO_exit,
         "CO_ppm_vd_psr": CO_psr,

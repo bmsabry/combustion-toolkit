@@ -808,7 +808,12 @@ function adaptBackendAFT(r){
   // included T_products_K and the backend successfully re-equilibrated at that T.
   const _at_T={};for(const[k,v]of Object.entries(r.mole_fractions_at_T_products||{})){if(v>1e-5)_at_T[k]=v*100;}
   const productsAtT4=Object.keys(_at_T).length?_at_T:null;
-  return{T_ad:r.T_actual||r.T_ad,products,productsAtT4,T_products_K:r.T_products_K||null,fromBackend:true};
+  // Complete-combustion companion (no-dissociation reference — matches diluted
+  // combustor-exit / stack measurements better than full equilibrium).
+  const productsComplete={};for(const[k,v]of Object.entries(r.mole_fractions_complete||{})){if(v>1e-5)productsComplete[k]=v*100;}
+  return{T_ad:r.T_actual||r.T_ad,products,productsAtT4,T_products_K:r.T_products_K||null,
+    T_ad_complete:r.T_ad_complete||null,productsComplete:Object.keys(productsComplete).length?productsComplete:null,
+    fromBackend:true};
 }
 
 /* ══════════════════ PANELS ══════════════════ */
@@ -884,9 +889,16 @@ function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setC
     <div style={S.card}><div style={S.cardT}>Flame Properties{combMode==="equilibrium"&&!accurate&&<span style={{color:C.accent,fontWeight:400}}> — Equilibrium Mode</span>}{statusBadge}</div>
       <div style={{fontSize:9.5,color:C.txtMuted,marginBottom:8}}>Depend on φ, oxidizer composition, and inlet conditions. T₄ comes from the Cycle panel.</div>
       <div style={{...S.row,gap:8}}>
-        <M l="Adiabatic Flame Temperature (T_Bulk)" v={uv(units,"T",result?.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="Maximum theoretical flame temperature when fuel burns with no heat loss. Same quantity as T_Bulk in cycle analysis (the flame-zone temperature before dilution). Computed via enthalpy balance at constant pressure."/>
+        <M l="T_ad — Chemical Equilibrium" v={uv(units,"T",result?.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="Full-species Cantera HP equilibrium (all 53 GRI-Mech species: CO₂, H₂O, CO, OH, NO, H, O, H₂, …). Accounts for dissociation — CO₂ and H₂O partially break up at high T, absorbing chemical energy and lowering T_ad. Most appropriate for the flame zone itself (combustor_air_frac = 1) where gas is still at peak T."/>
+        {accurate&&adapted&&adapted.T_ad_complete?
+          <M l="T_ad — Complete Combustion" v={uv(units,"T",adapted.T_ad_complete).toFixed(0)} u={uu(units,"T")} c={C.orange} tip="No dissociation: all C → CO₂, all H → H₂O (+ excess O₂ for lean, + CO/H₂ for rich). Always higher than equilibrium because no endothermic dissociation occurs. Most appropriate for combustor-exit or gas-turbine stack measurements where the gas has cooled below the dissociation regime; gets better as combustor_air_frac drops below 1 (more dilution cooling)."/>
+          :null}
         <M l="T₄ (Turbine Inlet)" v={T4_for_backend?uv(units,"T",T4_for_backend).toFixed(0):"—"} u={T4_for_backend?uu(units,"T"):""} c={C.warm} tip={T4_for_backend?"Combustor exit / turbine-inlet temperature from the Cycle solution. T₄ = T_Bulk diluted by combustor secondary air, so T₄ < T_Bulk.":"Run the Cycle panel to compute T₄ — it is the dilution-cooled product temperature the turbine actually sees."}/>
       </div>
+      {accurate&&adapted&&adapted.T_ad_complete?
+        <div style={{marginTop:8,padding:"6px 10px",background:`${C.orange}0C`,border:`1px solid ${C.orange}35`,borderRadius:5,fontSize:10,color:C.txtMuted,lineHeight:1.45,fontFamily:"'Barlow',sans-serif"}}>
+          <strong style={{color:C.orange}}>Which T_ad to use:</strong> Equilibrium is the theoretical in-flame value. Complete combustion is what a combustor-exit or stack thermocouple/calc tracks after dissociation products have recombined. For DLE primary zones use equilibrium; for overall combustor exit T or turbine inlet conditions use complete combustion. At this operating point the gap is {uv(units,"T",adapted.T_ad_complete-result.T_ad).toFixed(0)} {uu(units,"T")} (complete is higher).
+        </div>:null}
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>T_ad vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Yellow marker shows current φ. Peak T_ad typically occurs near φ≈1.05 due to dissociation effects.</div><Chart data={sweep} xK="phi" yK="T_ad" xL="Equivalence Ratio (φ)" yL={`Temperature (${uu(units,"T")})`} color={C.accent} marker={mk}/></div>
@@ -1123,6 +1135,8 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
   const backendNet=bk.data?{
     T_ad:bk.data.T_exit,T_psr:bk.data.T_psr,conv_psr:bk.data.conv_psr,
     T_mixed_inlet_K:bk.data.T_mixed_inlet_K??T0,
+    T_ad_equilibrium:bk.data.T_ad_equilibrium||null,
+    T_ad_complete:bk.data.T_ad_complete||null,
     NO_ppm_exit:bk.data.NO_ppm_vd_exit,NO_ppm_psr:bk.data.NO_ppm_vd_psr,NO_ppm_15O2:bk.data.NO_ppm_15O2,
     CO_ppm_exit:bk.data.CO_ppm_vd_exit,CO_ppm_psr:bk.data.CO_ppm_vd_psr,CO_ppm_15O2:bk.data.CO_ppm_15O2,
     O2_pct:bk.data.O2_pct_dry_exit??0,  // dry-basis exhaust O2 from Cantera
@@ -1269,9 +1283,12 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
         <polygon points="460,26 472,30 460,34" fill={C.border}/><text x="510" y="27" fill={C.accent2} fontSize="9" textAnchor="middle" fontFamily="monospace" fontWeight="700">EXIT</text><text x="510" y="40" fill={C.txtMuted} fontSize="7" textAnchor="middle" fontFamily="monospace">{uv(units,"T",net.pfr[net.pfr.length-1]?.T).toFixed(0)}{uu(units,"T")}</text>
       </svg>
       <div style={{...S.row,gap:8}}>
-        <M l="Adiabatic Flame Temperature" v={uv(units,"T",T_ad_canonical).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="Theoretical equilibrium flame temperature from the fuel + air adiabatic enthalpy balance — same value as in the Flame Temperature panel. Free mode: 4-reaction dissociation equilibrium. Accurate mode: Cantera full-species Gibbs equilibrium."/>
-        <M l="Combustor Exit Temperature" v={uv(units,"T",net.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent2} tip="Gas temperature at the combustor outlet (end of PFR). In Free mode this equals the PSR equilibrium T since the reduced-order PFR holds T constant. In Accurate mode this is the Cantera PFR exit T (includes heat loss if a heat-loss fraction is applied)."/>
-        <M l="PSR Exit Temperature" v={uv(units,"T",net.T_psr).toFixed(0)} u={uu(units,"T")} c={C.accent3} tip="Exit temperature of the perfectly stirred reactor (primary zone). Lower than T_ad if residence time is too short."/>
+        <M l="T_ad — Chemical Equilibrium" v={uv(units,"T",(accurate&&backendNet&&backendNet.T_ad_equilibrium)?backendNet.T_ad_equilibrium:T_ad_canonical).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="Full-species Cantera HP equilibrium (includes CO, OH, NO, H, O, H₂ dissociation products). Appropriate reference for the primary flame zone at combustor_air_frac = 1 (no dilution)."/>
+        {accurate&&backendNet&&backendNet.T_ad_complete?
+          <M l="T_ad — Complete Combustion" v={uv(units,"T",backendNet.T_ad_complete).toFixed(0)} u={uu(units,"T")} c={C.orange} tip="No dissociation (all C → CO₂, all H → H₂O). Higher than equilibrium by ≈10–100 K depending on T. Appropriate reference for the diluted combustor exit — the lower combustor_air_frac drops below 1, the better complete combustion represents the actual exit state."/>
+          :null}
+        <M l="Combustor Exit Temperature" v={uv(units,"T",net.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent2} tip="Kinetic PFR-exit T (Accurate mode). In Free mode this collapses to the PSR equilibrium T. This is the computed value; compare against the two T_ad references to see how far the kinetic solution sits from either idealization."/>
+        <M l="PSR Exit Temperature" v={uv(units,"T",net.T_psr).toFixed(0)} u={uu(units,"T")} c={C.accent3} tip="Exit T of the well-stirred primary zone. At finite residence time, sits between complete combustion (radicals not yet recombined) and full equilibrium (NO formed). Should fall close to T_ad — Complete Combustion for realistic tau values."/>
         <M l="PSR Conversion" v={net.conv_psr.toFixed(1)} u="%" c={C.good} tip="Fuel conversion in the PSR. 100% = complete combustion. Values below ~90% indicate approaching blowout."/>
         <M l="NOx at PSR Exit" v={((accurate&&backendNet?backendNet.NO_ppm_psr:net.NO_ppm_psr)??0).toFixed(1)} u="ppmvd" c={C.orange} tip="NO concentration leaving the PSR (entering the PFR). Growth between this value and 'NOx at Exit' is pure PFR-stage Zeldovich — small PSR/exit gap means most NOx is formed in the primary zone."/>
         <M l="CO at PSR Exit" v={((accurate&&backendNet?backendNet.CO_ppm_psr:net.CO_ppm_psr)??0).toFixed(1)} u="ppmvd" c={C.accent2} tip="CO concentration leaving the PSR (entering the PFR). In lean premixed combustors CO peaks at the PSR exit and is burned out in the PFR — so PSR CO minus exit CO is the burnout margin."/>
@@ -1310,8 +1327,14 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
   const localRCO2=useMemo(()=>solveExhaustLocal(measCO2,"CO2"),[fuel,ox,measCO2,Tfuel,Tair,P,combMode]);
   const bkO2=useBackendCalc("exhaust",{fuel:nonzero(fuel),oxidizer:nonzero(ox),T0,P:atmToBar(P),measured_O2_pct_dry:measO2,combustion_mode:combMode,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate);
   const bkCO2=useBackendCalc("exhaust",{fuel:nonzero(fuel),oxidizer:nonzero(ox),T0,P:atmToBar(P),measured_CO2_pct_dry:measCO2,combustion_mode:combMode,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate);
-  // Adapt backend exhaust response: {phi,FAR,AFR,T_ad,exhaust_composition_wet:{...fractions}} → {phi,T_ad,products:{...percent},FAR_mass,AFR_mass}
-  const adaptEx=(r)=>r?{phi:r.phi,T_ad:r.T_ad,products:Object.fromEntries(Object.entries(r.exhaust_composition_wet||{}).filter(([k,v])=>v>1e-5).map(([k,v])=>[k,v*100])),FAR_mass:r.FAR,AFR_mass:r.AFR}:null;
+  // Adapt backend exhaust response: equilibrium block + optional complete-combustion companion.
+  const adaptEx=(r)=>{
+    if(!r)return null;
+    const eq={phi:r.phi,T_ad:r.T_ad,products:Object.fromEntries(Object.entries(r.exhaust_composition_wet||{}).filter(([k,v])=>v>1e-5).map(([k,v])=>[k,v*100])),FAR_mass:r.FAR,AFR_mass:r.AFR};
+    const ccb=r.complete_combustion;
+    const cc=(ccb&&ccb.phi)?{phi:ccb.phi,T_ad:ccb.T_ad,products:Object.fromEntries(Object.entries(ccb.exhaust_composition_wet||{}).filter(([k,v])=>v>1e-5).map(([k,v])=>[k,v*100])),FAR_mass:ccb.FAR,AFR_mass:ccb.AFR}:null;
+    return{...eq,cc};
+  };
   const rO2=accurate&&bkO2.data?adaptEx(bkO2.data):localRO2;
   const rCO2=accurate&&bkCO2.data?adaptEx(bkCO2.data):localRCO2;
   const o2Sweep=useMemo(()=>{const r=[];for(let o2=0.5;o2<=15;o2+=0.5){const Tm0=mixT(fuel,ox,0.6,Tfuel,Tair);const res0=calcExhaustFromO2(fuel,ox,o2,Tm0,P,combMode);const Tm1=mixT(fuel,ox,res0.phi,Tfuel,Tair);const res=calcExhaustFromO2(fuel,ox,o2,Tm1,P,combMode);r.push({O2:o2,T_ad:uv(units,"T",res.T_ad),phi:res.phi});}return r;},[fuel,ox,Tfuel,Tair,P,combMode,units]);
@@ -1320,42 +1343,89 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
   </div>;
   const status=(kbk)=>accurate?(kbk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:kbk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {kbk.err}</span>:kbk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA</span>:null):null;
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
-    <HelpBox title="ℹ️ Exhaust Analysis — How It Works"><p style={{margin:"0 0 6px"}}>Enter a <span style={hs.em}>measured exhaust O₂ or CO₂ concentration</span> (dry basis, %) from a stack analyzer or CEMS. The tool iteratively solves for the equivalence ratio (φ) that produces that exhaust composition.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Complete Combustion</span> mode works well for lean conditions. <span style={hs.em}>Chemical Equilibrium</span> mode includes dissociation products (CO, OH, NO) and gives more accurate results near stoichiometric and at high temperatures.</p><p style={{margin:0}}><span style={hs.warn}>Note:</span> Both methods use the same fuel/oxidizer from the sidebar. The combustion mode is shared with the Flame Temperature panel.</p></HelpBox>
-    {modeToggle}
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <div style={S.card}><div style={S.cardT}>From Measured O₂ (%) {status(bkO2)}</div>
-        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
-          <Tip text="Enter the measured O₂ concentration in the exhaust on a dry basis. Typical values: 2–6% for gas turbines, 3–8% for boilers."><label style={{fontSize:11,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>Meas. O₂ (% dry) ⓘ:</label></Tip>
-          <NumField value={measO2} decimals={2} onCommit={setMeasO2} style={{...S.inp,width:70}}/></div>
-        <div style={{...S.row,gap:8}}>
-          <M l="Equivalence Ratio (φ)" v={rO2.phi.toFixed(3)} u="—" c={C.accent} tip="Back-calculated equivalence ratio from your measured O₂."/>
-          <M l="Flame Temperature" v={uv(units,"T",rO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.warm} tip="Adiabatic flame temperature corresponding to this φ."/>
-          <M l="Fuel/Air Ratio (mass)" v={rO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent2} tip="Actual fuel-to-air ratio by mass."/>
-          <M l="Air/Fuel Ratio (mass)" v={(1/(rO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.good} tip="Actual air-to-fuel ratio by mass."/>
+    <HelpBox title="ℹ️ Exhaust Analysis — How It Works"><p style={{margin:"0 0 6px"}}>Enter a <span style={hs.em}>measured exhaust O₂ or CO₂ concentration</span> (dry basis, %) from a stack analyzer or CEMS. The tool iteratively solves for the equivalence ratio (φ) that produces that exhaust composition.</p><p style={{margin:"0 0 6px"}}>Two inversions are shown side-by-side: <span style={hs.em}>Complete Combustion</span> (no dissociation — all C → CO₂, all H → H₂O) and <span style={hs.em}>Chemical Equilibrium</span> (Cantera full-Gibbs, includes CO, OH, NO at high T).</p><p style={{margin:0}}><span style={hs.warn}>Which to use:</span> Pick <strong style={{color:C.orange}}>Complete Combustion</strong> for <strong>stack measurements</strong> (gas has cooled, dissociation products recombined). Also pick it for <strong>combustor-exit measurements</strong> unless <em>combustor_air_frac = 1</em> (no dilution). The lower combustor_air_frac drops below 1, the better complete combustion represents reality. Use <strong style={{color:C.accent}}>Equilibrium</strong> only for in-flame readings at the primary zone with no dilution.</p></HelpBox>
+    {accurate?null:modeToggle}
+    {/* ============== FROM MEASURED O2 ============== */}
+    <div style={S.card}>
+      <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured O₂ (% dry) {status(bkO2)}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+          <Tip text="Enter the measured O₂ concentration in the exhaust on a dry basis. Typical values: 2–6% for gas turbines, 3–8% for boilers."><label style={{fontSize:11,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>Meas. O₂ (% dry) ⓘ</label></Tip>
+          <NumField value={measO2} decimals={2} onCommit={setMeasO2} style={{...S.inp,width:70}}/>
         </div>
-        {rO2.products&&<div style={{marginTop:12}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Equilibrium Products — Wet Basis</div>
-          <HBar data={rO2.products} h={Math.max(110,Object.keys(rO2.products).length*22+10)} w={420}/>
-          <div style={{fontSize:10,fontWeight:700,color:C.accent2,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
-          <HBar data={dryBasis(rO2.products)} h={Math.max(100,Math.max(0,Object.keys(rO2.products).length-1)*22+10)} w={420}/>
-        </div>}
       </div>
-      <div style={S.card}><div style={S.cardT}>From Measured CO₂ (%) {status(bkCO2)}</div>
-        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
-          <Tip text="Enter the measured CO₂ concentration in the exhaust on a dry basis. Higher CO₂ indicates richer combustion."><label style={{fontSize:11,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>Meas. CO₂ (% dry) ⓘ:</label></Tip>
-          <NumField value={measCO2} decimals={2} onCommit={setMeasCO2} style={{...S.inp,width:70}}/></div>
-        <div style={{...S.row,gap:8}}>
-          <M l="Equivalence Ratio (φ)" v={rCO2.phi.toFixed(3)} u="—" c={C.accent} tip="Back-calculated equivalence ratio from your measured CO₂."/>
-          <M l="Flame Temperature" v={uv(units,"T",rCO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.warm} tip="Adiabatic flame temperature corresponding to this φ."/>
-          <M l="Fuel/Air Ratio (mass)" v={rCO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent2} tip="Actual fuel-to-air ratio by mass."/>
-          <M l="Air/Fuel Ratio (mass)" v={(1/(rCO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.good} tip="Actual air-to-fuel ratio by mass."/>
+      <div style={{display:"grid",gridTemplateColumns:accurate&&rO2.cc?"1fr 1fr":"1fr",gap:12}}>
+        {accurate&&rO2.cc?<div style={{padding:12,background:`${C.orange}0A`,border:`1px solid ${C.orange}40`,borderRadius:6}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Complete Combustion <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— stack / diluted-exit readings</span></div>
+          <div style={{...S.row,gap:6}}>
+            <M l="Equivalence Ratio (φ)" v={rO2.cc.phi.toFixed(3)} u="—" c={C.orange} tip="Inverted assuming no dissociation."/>
+            <M l="Flame Temperature" v={uv(units,"T",rO2.cc.T_ad).toFixed(0)} u={uu(units,"T")} c={C.orange} tip="T_ad under the complete-combustion assumption."/>
+            <M l="Fuel/Air (mass)" v={rO2.cc.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.orange} tip="Fuel/air mass ratio from complete-combustion inversion."/>
+            <M l="Air/Fuel (mass)" v={(1/(rO2.cc.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.orange} tip="Air/fuel mass ratio."/>
+          </div>
+          {rO2.cc.products&&<div style={{marginTop:10}}>
+            <div style={{fontSize:10,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis</div>
+            <HBar data={rO2.cc.products} h={Math.max(100,Object.keys(rO2.cc.products).length*20+8)} w={380}/>
+            <div style={{fontSize:10,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
+            <HBar data={dryBasis(rO2.cc.products)} h={Math.max(90,Math.max(0,Object.keys(rO2.cc.products).length-1)*20+8)} w={380}/>
+          </div>}
+        </div>:null}
+        <div style={{padding:12,background:`${C.accent}0A`,border:`1px solid ${C.accent}40`,borderRadius:6}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1</span></div>
+          <div style={{...S.row,gap:6}}>
+            <M l="Equivalence Ratio (φ)" v={rO2.phi.toFixed(3)} u="—" c={C.accent} tip="Inverted using full Cantera HP equilibrium (includes CO, OH, NO dissociation)."/>
+            <M l="Flame Temperature" v={uv(units,"T",rO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="T_ad under the full-equilibrium assumption."/>
+            <M l="Fuel/Air (mass)" v={rO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip="Fuel/air mass ratio from equilibrium inversion."/>
+            <M l="Air/Fuel (mass)" v={(1/(rO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip="Air/fuel mass ratio."/>
+          </div>
+          {rO2.products&&<div style={{marginTop:10}}>
+            <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis</div>
+            <HBar data={rO2.products} h={Math.max(100,Object.keys(rO2.products).length*20+8)} w={380}/>
+            <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
+            <HBar data={dryBasis(rO2.products)} h={Math.max(90,Math.max(0,Object.keys(rO2.products).length-1)*20+8)} w={380}/>
+          </div>}
         </div>
-        {rCO2.products&&<div style={{marginTop:12}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Equilibrium Products — Wet Basis</div>
-          <HBar data={rCO2.products} h={Math.max(110,Object.keys(rCO2.products).length*22+10)} w={420}/>
-          <div style={{fontSize:10,fontWeight:700,color:C.accent2,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
-          <HBar data={dryBasis(rCO2.products)} h={Math.max(100,Math.max(0,Object.keys(rCO2.products).length-1)*22+10)} w={420}/>
-        </div>}
+      </div>
+    </div>
+
+    {/* ============== FROM MEASURED CO2 ============== */}
+    <div style={S.card}>
+      <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured CO₂ (% dry) {status(bkCO2)}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+          <Tip text="Enter the measured CO₂ concentration in the exhaust on a dry basis. Higher CO₂ indicates richer combustion."><label style={{fontSize:11,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>Meas. CO₂ (% dry) ⓘ</label></Tip>
+          <NumField value={measCO2} decimals={2} onCommit={setMeasCO2} style={{...S.inp,width:70}}/>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:accurate&&rCO2.cc?"1fr 1fr":"1fr",gap:12}}>
+        {accurate&&rCO2.cc?<div style={{padding:12,background:`${C.orange}0A`,border:`1px solid ${C.orange}40`,borderRadius:6}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Complete Combustion <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— stack / diluted-exit readings</span></div>
+          <div style={{...S.row,gap:6}}>
+            <M l="Equivalence Ratio (φ)" v={rCO2.cc.phi.toFixed(3)} u="—" c={C.orange} tip="Inverted assuming no dissociation."/>
+            <M l="Flame Temperature" v={uv(units,"T",rCO2.cc.T_ad).toFixed(0)} u={uu(units,"T")} c={C.orange} tip="T_ad under the complete-combustion assumption."/>
+            <M l="Fuel/Air (mass)" v={rCO2.cc.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.orange} tip="Fuel/air mass ratio from complete-combustion inversion."/>
+            <M l="Air/Fuel (mass)" v={(1/(rCO2.cc.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.orange} tip="Air/fuel mass ratio."/>
+          </div>
+          {rCO2.cc.products&&<div style={{marginTop:10}}>
+            <div style={{fontSize:10,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis</div>
+            <HBar data={rCO2.cc.products} h={Math.max(100,Object.keys(rCO2.cc.products).length*20+8)} w={380}/>
+            <div style={{fontSize:10,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
+            <HBar data={dryBasis(rCO2.cc.products)} h={Math.max(90,Math.max(0,Object.keys(rCO2.cc.products).length-1)*20+8)} w={380}/>
+          </div>}
+        </div>:null}
+        <div style={{padding:12,background:`${C.accent}0A`,border:`1px solid ${C.accent}40`,borderRadius:6}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1</span></div>
+          <div style={{...S.row,gap:6}}>
+            <M l="Equivalence Ratio (φ)" v={rCO2.phi.toFixed(3)} u="—" c={C.accent} tip="Inverted using full Cantera HP equilibrium."/>
+            <M l="Flame Temperature" v={uv(units,"T",rCO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="T_ad under the full-equilibrium assumption."/>
+            <M l="Fuel/Air (mass)" v={rCO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip="Fuel/air mass ratio from equilibrium inversion."/>
+            <M l="Air/Fuel (mass)" v={(1/(rCO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip="Air/fuel mass ratio."/>
+          </div>
+          {rCO2.products&&<div style={{marginTop:10}}>
+            <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis</div>
+            <HBar data={rCO2.products} h={Math.max(100,Object.keys(rCO2.products).length*20+8)} w={380}/>
+            <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
+            <HBar data={dryBasis(rCO2.products)} h={Math.max(90,Math.max(0,Object.keys(rCO2.products).length-1)*20+8)} w={380}/>
+          </div>}
+        </div>
       </div>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>

@@ -5,6 +5,7 @@ from typing import Dict, Optional
 
 import cantera as ct
 
+from .complete_combustion import run as complete_combustion_run
 from .mixture import compute_ratios, make_gas, make_gas_mixed
 from .water_mix import make_gas_mixed_with_water
 
@@ -106,6 +107,25 @@ def run(
             # Never let the secondary calculation break the primary AFT response.
             mole_fracs_at_T = {}
 
+    # Companion complete-combustion calc — same inlet, no dissociation. Users
+    # compare the two on the Flame Temp panel because complete combustion is
+    # the correct assumption for diluted combustor-exit + stack measurements
+    # (where the gas has cooled and dissociation products have recombined).
+    try:
+        cc_out = complete_combustion_run(
+            fuel_pct, ox_pct, phi,
+            T_fuel_K=T_f, T_air_K=T_a, P_bar=P_bar,
+            WFR=WFR, water_mode=water_mode,
+        )
+        T_ad_complete = cc_out["T_ad"]
+        mole_fractions_complete = cc_out["mole_fractions"]
+        mole_fractions_dry_complete = cc_out["mole_fractions_dry"]
+    except Exception:
+        # Never let the complete-combustion diagnostic break the primary AFT response.
+        T_ad_complete = float(T_ad)
+        mole_fractions_complete = {}
+        mole_fractions_dry_complete = {}
+
     return {
         "T_ad": float(T_ad),
         "T_actual": float(T_actual),
@@ -123,4 +143,8 @@ def run(
         "AFR": AFR,
         "T_products_K": float(T_products_K) if T_products_K is not None else None,
         "mole_fractions_at_T_products": mole_fracs_at_T,
+        # Complete-combustion companion (no dissociation)
+        "T_ad_complete": float(T_ad_complete),
+        "mole_fractions_complete": mole_fractions_complete,
+        "mole_fractions_complete_dry": mole_fractions_dry_complete,
     }

@@ -7,6 +7,7 @@ import cantera as ct
 import numpy as np
 from scipy.optimize import brentq
 
+from .complete_combustion import run as complete_combustion_run
 from .mixture import compute_ratios, make_gas, make_gas_mixed
 from .water_mix import make_gas_mixed_with_water
 
@@ -116,6 +117,64 @@ def run(
     X_dry = X_dry / s if s > 0 else X_dry
     dry = {s: float(x) for s, x in zip(gas.species_names, X_dry) if x > 1e-10}
 
+    # --- Parallel inversion under the complete-combustion assumption -------
+    # Measured exhaust gas — if read at the gas turbine STACK or after
+    # dilution — has cooled well below any dissociation regime, so CO2, H2O,
+    # O2, N2 are stable and the equilibrium dissociation products (CO, OH,
+    # H, O, NO) are at trace level. Complete combustion is therefore the
+    # more physical assumption for those measurement locations, whereas
+    # equilibrium is only appropriate right at the flame with no dilution
+    # (combustor_air_frac = 1). We invert phi against the measurement under
+    # BOTH assumptions and report both to the user so they can pick.
+    def _cc_dry_frac(phi_val: float, species: str) -> float:
+        try:
+            r = complete_combustion_run(
+                fuel_pct, ox_pct, phi_val,
+                T_fuel_K=T_fuel_K if T_fuel_K is not None else T0_K,
+                T_air_K=T_air_K if T_air_K is not None else T0_K,
+                P_bar=P_bar, WFR=WFR, water_mode=water_mode,
+            )
+            return float(r["mole_fractions_dry"].get(species, 0.0))
+        except Exception:
+            return 0.0
+
+    def delta_O2_cc(p: float) -> float:
+        return _cc_dry_frac(p, "O2") * 100.0 - (measured_O2_pct_dry or 0)
+
+    def delta_CO2_cc(p: float) -> float:
+        return _cc_dry_frac(p, "CO2") * 100.0 - (measured_CO2_pct_dry or 0)
+
+    try:
+        if method == "O2":
+            phi_cc = brentq(delta_O2_cc, 0.1, 1.5, xtol=1e-4, maxiter=50)
+        else:
+            phi_cc = brentq(delta_CO2_cc, 0.1, 1.5, xtol=1e-4, maxiter=50)
+    except Exception:
+        phi_cc = float(phi)
+
+    try:
+        r_cc = complete_combustion_run(
+            fuel_pct, ox_pct, phi_cc,
+            T_fuel_K=T_fuel_K if T_fuel_K is not None else T0_K,
+            T_air_K=T_air_K if T_air_K is not None else T0_K,
+            P_bar=P_bar, WFR=WFR, water_mode=water_mode,
+        )
+        cc_block = {
+            "phi": float(phi_cc),
+            "FAR": float(r_cc["FAR"]),
+            "AFR": float(r_cc["AFR"]),
+            "T_ad": float(r_cc["T_ad"]),
+            "T_mixed_inlet_K": float(r_cc["T_mixed_inlet_K"]),
+            "exhaust_composition_wet": {s: float(v) for s, v in r_cc["mole_fractions"].items()},
+            "exhaust_composition_dry": {s: float(v) for s, v in r_cc["mole_fractions_dry"].items()},
+            "O2_pct_dry": float(r_cc["O2_pct_dry"]),
+            "CO2_pct_dry": float(r_cc["CO2_pct_dry"]),
+            "CO_pct_dry": float(r_cc.get("CO_pct_dry", 0.0)),
+            "H2O_pct_wet": float(r_cc["H2O_pct_wet"]),
+        }
+    except Exception:
+        cc_block = {}
+
     return {
         "phi": phi,
         "FAR": FAR,
@@ -128,4 +187,7 @@ def run(
         "CO2_pct_dry": _dry_frac(gas, "CO2") * 100.0,
         "H2O_pct_wet": h2o_x * 100.0,
         "method": method,
+        # Complete-combustion companion (the physically correct assumption
+        # for stack or diluted-exit measurements).
+        "complete_combustion": cc_block,
     }
