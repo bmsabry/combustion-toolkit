@@ -608,9 +608,13 @@ class CombustorMappingRequest(BaseModel):
     WFR: float = Field(default=0.0, ge=0.0, le=2.0)
     water_mode: str = Field(default="liquid", pattern="^(liquid|steam)$")
     mechanism: str = Field(default="gri30", pattern="^(gri30|glarborg)$")
-    # Pilot NOx exp-fit anchors (defaults reflect a representative diffusion flame).
+    # Pilot NOx exp-fit anchors. Lower anchor is the 6 ppm floor at φ=0.25.
+    # Upper anchor phi is user-set; the ppm value is computed at runtime
+    # from a PSR+PFR at that phi with the current T3/P3/fuel/ox (so it
+    # tracks pressure and inlet T). If the request sets a ppm explicitly,
+    # that value overrides the computed one.
     pilot_NOx_anchor_phi: float = Field(default=1.0, gt=0.25, le=2.0)
-    pilot_NOx_anchor_ppm: float = Field(default=180.0, gt=6.0, le=5000.0)
+    pilot_NOx_anchor_ppm: Optional[float] = Field(default=None, gt=6.0, le=5000.0)
     # Fixed NOx adders (ppm, dry) applied on top of the kinetic PSR+PFR NO
     # for the main circuits — calibrated to the LMS100 hardware.
     im_nox_adder_ppm: float = Field(default=12.0, ge=0.0, le=500.0)
@@ -662,3 +666,7 @@ class CombustorMappingResponse(BaseModel):
     FAR_stoich: float
     fuel_residual_kg_s: float
     mechanism: str = "gri30"
+    # Pilot NOx exp-fit anchor actually used for this call
+    pilot_NOx_anchor_phi: float = 1.0
+    pilot_NOx_anchor_ppm_used: float = 0.0
+    pilot_NOx_anchor_source: str = ""  # psr_at_phi_anchor | user_override | fallback_*

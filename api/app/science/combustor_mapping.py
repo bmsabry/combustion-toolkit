@@ -15,11 +15,16 @@ Air accounting:
     cooling/bypass  = W36 × (1 − com_air_frac)         effusion cooling, rejoins
                                                        at the mix point
 
-Pilot NOx handling — pilots (IP, OP) are diffusion flames, so premixed-PSR
-kinetics under-predict NOx. We replace the reported and mixed pilot NOx with
-a simple exp-fit anchored at (φ=0.25, 6 ppm) and (φ=anchor, anchor_ppm).
-Default anchor = (1.0, 180 ppm).  For φ ≤ 0.25 NOx is clamped to the floor.
-Mains (IM, OM) use the actual kinetic NOx from the PSR+PFR.
+Pilot NOx handling — pilots (IP, OP) are diffusion flames, so a premixed-PSR
+at the nominal (lean) pilot φ under-predicts NOx. Instead, we anchor an
+exponential fit at:
+    (φ = 0.25, 6 ppm)   user-specified floor for lean pilots
+    (φ = 1.0,  NOx_phi1)  — the PSR+PFR result at the CURRENT operating
+                            conditions (T3, P3, T_fuel, ox, tau's) run
+                            at φ = 1. This captures how the stoichiometric
+                            thermal-NO answer shifts with pressure / inlet T.
+For φ ≤ 0.25, NOx is clamped to the 6 ppm floor. Mains (IM, OM) use the
+actual kinetic NOx from the PSR+PFR plus their fixed calibration adder.
 
 Everything else (T, CO, major species, H2O) comes from the kinetics.
 """
@@ -317,7 +322,7 @@ def run(
     water_mode: str = "liquid",
     mechanism: str = "gri30",
     pilot_NOx_anchor_phi: float = 1.0,
-    pilot_NOx_anchor_ppm: float = 180.0,
+    pilot_NOx_anchor_ppm: Optional[float] = None,
     im_nox_adder_ppm: float = 12.0,
     om_nox_adder_ppm: float = 17.2,
 ) -> dict:
@@ -357,6 +362,36 @@ def run(
     tau_psr_s = max(tau_psr_ms, 0.05) * 1e-3
     tau_pfr_near_s = max(tau_pfr_near_ms, 0.0) * 1e-3
 
+    # --- pilot NOx upper anchor ---------------------------------------------
+    # Run the same PSR+PFR network at phi=1.0 with the current T3/P3/T_fuel/
+    # fuel/ox to get the stoichiometric-premixed NOx at this operating point.
+    # That value anchors the pilot exp-fit at phi=pilot_NOx_anchor_phi (=1.0
+    # by default). Allows the pilot curve to float correctly with pressure
+    # and inlet T instead of being pinned to a hardcoded 180 ppm.
+    if pilot_NOx_anchor_ppm is None:
+        try:
+            anchor_res = _run_circuit(
+                fuel_pct, ox_pct, float(pilot_NOx_anchor_phi),
+                T_fuel_K, T3_K, P3_bar,
+                tau_psr_s, tau_pfr_near_s,
+                WFR, water_mode, mechanism,
+            )
+            anchor_ppm = float(anchor_res["NO_ppm_vd"])
+            # Guard: anchor MUST exceed the 6 ppm floor for the exp-fit to
+            # be well-defined. If the PSR collapsed to near-zero NO, fall
+            # back to the legacy 180 ppm and log-flag via the response.
+            if anchor_ppm <= 6.5:
+                anchor_ppm = 180.0
+                anchor_source = "fallback_180_psr_failed"
+            else:
+                anchor_source = "psr_at_phi_anchor"
+        except Exception:
+            anchor_ppm = 180.0
+            anchor_source = "fallback_180_psr_exception"
+    else:
+        anchor_ppm = max(6.5, float(pilot_NOx_anchor_ppm))
+        anchor_source = "user_override"
+
     # Fixed main-circuit NOx adders (ppm, vol-dry) applied on top of the
     # kinetic PSR+PFR NO. Compensates for sub-grid effects the 0D network
     # can't see (imperfect premix, local rich zones, unsteady pockets).
@@ -387,7 +422,7 @@ def run(
             NOx_report = _pilot_nox_fit(
                 phi_i,
                 anchor_phi=pilot_NOx_anchor_phi,
-                anchor_ppm=pilot_NOx_anchor_ppm,
+                anchor_ppm=anchor_ppm,
             )
         else:
             NOx_report = float(res["NO_ppm_vd"]) + float(nox_adder_ppm)
@@ -469,4 +504,7 @@ def run(
         "FAR_stoich": float(FAR_stoich),
         "fuel_residual_kg_s": float(fuel_residual),
         "mechanism": mechanism,
+        "pilot_NOx_anchor_phi": float(pilot_NOx_anchor_phi),
+        "pilot_NOx_anchor_ppm_used": float(anchor_ppm),
+        "pilot_NOx_anchor_source": anchor_source,
     }
