@@ -1820,6 +1820,260 @@ function KV({k,v}){return(<div style={{display:"flex",justifyContent:"space-betw
        unchanged) and iteratively raises T4 to hold gross power.
 */
 /* ══════════════════════════════════════════════════════════════════════════
+   COMBUSTOR MAPPING PANEL (LMS100PB+ 4-circuit DLE premixer)
+   --------------------------------------------------------------------------
+   Maps the combustor primary-zone air into the four LMS100 DLE circuits
+   (Inner Pilot, Outer Pilot, Inner Main, Outer Main) and lets the user set
+   each circuit's equivalence ratio to confirm the combustor generates
+   acceptable emissions with acceptable acoustics.
+
+   Physics:
+     • Total flame-zone air = m_air_combustor × combustor_air_frac (from cycle).
+     • Each circuit takes a fixed % of the flame-zone air (editable, defaults
+       IP 2.3, OP 2.2, IM 41.0, OM 54.5 — sum must = 100 %).
+     • User sets phi for IP / OP / IM. Each circuit's fuel flow follows:
+         m_fuel_i = FAR_stoich × phi_i × m_air_i
+     • Outer Main is the "float" circuit — its fuel is whatever's left from
+       the cycle's total fuel, phi_OM back-solved from the balance.
+     • Water injection (WFR > 0): distributed proportionally to fuel, so each
+       circuit sees the same WFR = overall WFR.
+     • T_flame for each circuit is HP equilibrium at (phi_i, T_fuel, T3, P3)
+       via the AFT backend (with water-aware variant when WFR > 0).
+
+   Inputs from cycle: T3, P3, oxidizer humid-air composition, total combustor
+   air flow, total fuel flow, combustor_air_frac. From sidebar: T_fuel, WFR,
+   water_mode, T_water.
+═══════════════════════════════════════════════════════════════════════════ */
+function CombustorMappingPanel({
+  fuel, Tfuel, WFR=0, waterMode="liquid", T_water,
+  cycleResult, cycleAirFrac, bkCycle,
+}){
+  const units=useContext(UnitCtx);
+  const {accurate}=useContext(AccurateCtx);
+
+  // ── Circuit air fractions (% of flame-zone air) ──────────────────────────
+  // Defaults reflect LMS100 DLE hardware. User can override if testing a
+  // different hardware set; a sum != 100 % triggers a warning.
+  const[fracIP,setFracIP]=useState(2.3);
+  const[fracOP,setFracOP]=useState(2.2);
+  const[fracIM,setFracIM]=useState(41.0);
+  const[fracOM,setFracOM]=useState(54.5);
+  const sumFrac=fracIP+fracOP+fracIM+fracOM;
+
+  // ── User-set circuit equivalence ratios ──────────────────────────────────
+  const[phiIP,setPhiIP]=useState(0.25);
+  const[phiOP,setPhiOP]=useState(0.45);
+  const[phiIM,setPhiIM]=useState(0.50);
+
+  // ── Pull combustor-inlet state from the cycle (not the sidebar) ──────────
+  const T3=cycleResult?.T3_K||300;
+  const P3_bar=cycleResult?.P3_bar||1;
+  const oxHumid=cycleResult?.oxidizer_humid_mol_pct||null;
+  const m_air_combustor=cycleResult?.mdot_air_combustor_kg_s||0;
+  const m_fuel_total=cycleResult?.mdot_fuel_kg_s||0;
+  // Flame-zone air = combustor air × flame/dilution split (sidebar value).
+  const m_air_flame=m_air_combustor*(cycleAirFrac||0.89);
+
+  // ── Per-circuit air flows (kg/s) ─────────────────────────────────────────
+  const m_air_IP=m_air_flame*fracIP/100;
+  const m_air_OP=m_air_flame*fracOP/100;
+  const m_air_IM=m_air_flame*fracIM/100;
+  const m_air_OM=m_air_flame*fracOM/100;
+
+  // ── Backend AFT per circuit for TFlame and FAR ───────────────────────────
+  // WFR is identical for every circuit because water is distributed
+  // proportionally to fuel — water_i/fuel_i = water_total/fuel_total = WFR.
+  const commonArgs={
+    fuel:nonzero(fuel), oxidizer:oxHumid?nonzero(oxHumid):null,
+    T0:T3, P:P3_bar, mode:"adiabatic", heat_loss_fraction:0,
+    T_fuel_K:Tfuel, T_air_K:T3,
+    WFR, water_mode:waterMode, T_water_K:WFR>0?T_water:null,
+  };
+  const bkIP=useBackendCalc("aft",{...commonArgs,phi:Math.max(0.01,phiIP)},!!(accurate&&oxHumid&&phiIP>0));
+  const bkOP=useBackendCalc("aft",{...commonArgs,phi:Math.max(0.01,phiOP)},!!(accurate&&oxHumid&&phiOP>0));
+  const bkIM=useBackendCalc("aft",{...commonArgs,phi:Math.max(0.01,phiIM)},!!(accurate&&oxHumid&&phiIM>0));
+
+  // FAR from any of the backend calls (they all share the same fuel/ox).
+  const FAR_IP=bkIP.data?.FAR||0;
+  const FAR_OP=bkOP.data?.FAR||0;
+  const FAR_IM=bkIM.data?.FAR||0;
+  // FAR_stoich is a pure fuel/ox property (not phi-dependent), grab from any response.
+  const FAR_stoich=bkIP.data?.FAR_stoich||bkOP.data?.FAR_stoich||bkIM.data?.FAR_stoich||0;
+
+  // ── Fuel flows per circuit ───────────────────────────────────────────────
+  // Three specified circuits: m_fuel = FAR × m_air.
+  // Outer Main is the FLOAT circuit — gets whatever is left from total fuel.
+  const m_fuel_IP=FAR_IP*m_air_IP;
+  const m_fuel_OP=FAR_OP*m_air_OP;
+  const m_fuel_IM=FAR_IM*m_air_IM;
+  const m_fuel_OM_raw=m_fuel_total-m_fuel_IP-m_fuel_OP-m_fuel_IM;
+  const m_fuel_OM=Math.max(0,m_fuel_OM_raw);   // clamp so negative fuel doesn't feed the backend
+  const FAR_OM=m_air_OM>0?m_fuel_OM/m_air_OM:0;
+  const phi_OM=FAR_stoich>0?FAR_OM/FAR_stoich:0;
+
+  // AFT for Outer Main at the back-solved phi (needed for TFlame).
+  const bkOM=useBackendCalc("aft",{...commonArgs,phi:Math.max(0.01,phi_OM)},!!(accurate&&oxHumid&&phi_OM>0.01&&phi_OM<3.0));
+
+  // ── TFlame per circuit (pick T_actual since heat-loss=0 it equals T_ad) ──
+  const Tf=bk=>bk.data?(bk.data.T_actual||bk.data.T_ad||0):0;
+  const T_IP=Tf(bkIP), T_OP=Tf(bkOP), T_IM=Tf(bkIM), T_OM=Tf(bkOM);
+
+  // ── Unit-aware formatting helpers ────────────────────────────────────────
+  const fmtMdot=k=>units==="SI"?k.toFixed(4):(k*2.20462).toFixed(3);
+  const mdotU=units==="SI"?"kg/s":"lb/s";
+  const fmtT=K=>uv(units,"T",K).toFixed(0);
+
+  // ── Validation banners ───────────────────────────────────────────────────
+  const sumOff=Math.abs(sumFrac-100)>0.05;
+  const OMnegFuel=m_fuel_OM_raw<-1e-6;
+  const OMphiExtreme=phi_OM<0.05||phi_OM>1.5;
+
+  // ── Reusable row renderer — one circuit per row ──────────────────────────
+  const Row=({name, subtitle, color, frac, setFrac, phiVal, setPhi, step, phiEditable, FAR, mFuel, mAir, TFlame, TFlameLoading, TFlameErr})=>(
+    <div style={{display:"grid",gridTemplateColumns:"160px 110px 100px 140px 100px 110px 100px",gap:10,alignItems:"center",padding:"10px 12px",background:`${color}08`,border:`1px solid ${color}30`,borderRadius:7,marginBottom:8}}>
+      {/* Circuit name */}
+      <div>
+        <div style={{fontSize:11.5,fontWeight:700,color:color,letterSpacing:".4px"}}>{name}</div>
+        <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic",lineHeight:1.3}}>{subtitle}</div>
+      </div>
+      {/* Air fraction % (editable) */}
+      <div>
+        <div style={{fontSize:8.5,color:C.txtDim,fontFamily:"monospace",marginBottom:1}}>Air frac (%)</div>
+        <NumField value={frac} decimals={2} onCommit={v=>setFrac(Math.max(0,Math.min(100,+v)))} style={{...S.inp,padding:"3px 6px",fontSize:11,color:color,border:`1px solid ${color}40`}}/>
+      </div>
+      {/* Air flow */}
+      <div>
+        <div style={{fontSize:8.5,color:C.txtDim,fontFamily:"monospace",marginBottom:1}}>Air flow ({mdotU})</div>
+        <div style={{fontSize:12.5,color:C.txt,fontFamily:"monospace",fontWeight:600}}>{fmtMdot(mAir)}</div>
+      </div>
+      {/* Phi (editable for IP/OP/IM, read-only for OM) */}
+      <div>
+        <div style={{fontSize:8.5,color:C.txtDim,fontFamily:"monospace",marginBottom:1}}>φ {phiEditable?"(input)":"(computed, float)"}</div>
+        {phiEditable?<div style={{display:"flex",alignItems:"center",gap:3}}>
+          <button onClick={()=>setPhi(Math.max(0,+(phiVal-step).toFixed(4)))}
+            title={`Decrease φ by ${step}`}
+            style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>−</button>
+          <NumField value={phiVal} decimals={4} onCommit={v=>setPhi(Math.max(0,+v))} style={{width:56,padding:"3px 6px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${color}40`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+          <button onClick={()=>setPhi(+(phiVal+step).toFixed(4))}
+            title={`Increase φ by ${step}`}
+            style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>+</button>
+        </div>
+        :<div style={{width:82,padding:"3px 6px",fontFamily:"monospace",color,fontSize:13,fontWeight:700,background:`${color}18`,border:`1px dashed ${color}80`,borderRadius:4,textAlign:"center"}}>{phiVal.toFixed(4)}</div>}
+      </div>
+      {/* FAR */}
+      <div>
+        <div style={{fontSize:8.5,color:C.txtDim,fontFamily:"monospace",marginBottom:1}}>FAR (mass)</div>
+        <div style={{fontSize:12,color:C.txt,fontFamily:"monospace",fontWeight:600}}>{FAR>0?FAR.toFixed(5):"—"}</div>
+      </div>
+      {/* Fuel flow */}
+      <div>
+        <div style={{fontSize:8.5,color:C.txtDim,fontFamily:"monospace",marginBottom:1}}>Fuel flow ({mdotU})</div>
+        <div style={{fontSize:12.5,color:C.accent2,fontFamily:"monospace",fontWeight:700}}>{mFuel>0?fmtMdot(mFuel):"—"}</div>
+      </div>
+      {/* TFlame */}
+      <div>
+        <div style={{fontSize:8.5,color:C.txtDim,fontFamily:"monospace",marginBottom:1}}>T_flame ({uu(units,"T")})</div>
+        <div style={{fontSize:13,color:C.warm,fontFamily:"monospace",fontWeight:700}}>
+          {TFlameLoading?<span style={{color:C.accent2}}>⟳…</span>
+            :TFlameErr?<span style={{color:C.strong,fontSize:9}}>ERR</span>
+            :TFlame>0?fmtT(TFlame):"—"}
+        </div>
+      </div>
+    </div>
+  );
+
+  return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <InlineBusyBanner loading={accurate&&(bkCycle?.loading||bkIP.loading||bkOP.loading||bkIM.loading||bkOM.loading)}/>
+
+    <HelpBox title="ℹ️ Combustor Mapping — How It Works">
+      <p style={{margin:"0 0 6px"}}>The LMS100 DLE combustor has <span style={hs.em}>four fuel circuits</span> feeding its premixer: Inner Pilot (IP), Outer Pilot (OP), Inner Main (IM), and Outer Main (OM). This panel lets you pick an equivalence ratio for each circuit and see what fuel flow + flame temperature each delivers.</p>
+      <p style={{margin:"0 0 6px"}}>The <span style={hs.em}>flame-zone air</span> from the Cycle (combustor air × combustor_air_frac) splits across the four circuits by the percentages on each row (defaults are LMS100 hardware). Each circuit's fuel follows <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>m_fuel = FAR_stoich · φ · m_air</code>. The Outer Main is the <span style={hs.em}>float circuit</span> — its fuel is whatever's left from the cycle's total fuel after IP/OP/IM take their share, and its φ is back-solved.</p>
+      <p style={{margin:0}}><span style={hs.em}>T_fuel, air composition (humid), T3, P3</span>, and the <span style={hs.em}>total fuel flow</span> all come straight from the Cycle solution. Water injection (WFR &gt; 0) is distributed proportionally to each circuit's fuel flow, so every circuit sees the same WFR.</p>
+    </HelpBox>
+
+    {!cycleResult?
+      <div style={{padding:"32px 24px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.warm}50`,borderRadius:10,color:C.txtDim}}>
+        <div style={{fontSize:13,fontWeight:600,color:C.warm,marginBottom:8}}>Cycle solution required</div>
+        <div style={{fontSize:11}}>Turn on Accurate Mode. The cycle must run before the mapping can populate (needs T3, P3, humid-air composition, and total fuel flow).</div>
+      </div>
+      :<>
+
+      {/* ═══ Combustor inlet state from cycle ═══ */}
+      <div style={S.card}>
+        <div style={S.cardT}>Combustor Inlet State (from Cycle)</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",fontFamily:"monospace",fontSize:11.5}}>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>T₃:</span> <strong style={{color:C.accent}}>{fmtT(T3)} {uu(units,"T")}</strong></div>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>P₃:</span> <strong style={{color:C.accent}}>{units==="SI"?(P3_bar/1.01325).toFixed(3)+" atm":(P3_bar*14.5038).toFixed(1)+" psia"}</strong></div>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>T_fuel:</span> <strong style={{color:C.accent2}}>{fmtT(Tfuel)} {uu(units,"T")}</strong></div>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Combustor air:</span> <strong style={{color:C.txt}}>{fmtMdot(m_air_combustor)} {mdotU}</strong></div>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Flame-zone air frac:</span> <strong style={{color:C.txt}}>{(cycleAirFrac*100).toFixed(1)} %</strong></div>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Flame-zone air:</span> <strong style={{color:C.accent3}}>{fmtMdot(m_air_flame)} {mdotU}</strong></div>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Total fuel:</span> <strong style={{color:C.accent2}}>{fmtMdot(m_fuel_total)} {mdotU}</strong></div>
+          {WFR>0?<div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.violet}40`}}><span style={{color:C.txtDim}}>WFR:</span> <strong style={{color:C.violet}}>{WFR.toFixed(3)}</strong> <span style={{color:C.txtMuted,fontSize:10}}>({waterMode}) — distributed ∝ fuel</span></div>:null}
+        </div>
+      </div>
+
+      {sumOff?
+        <div style={{padding:"8px 12px",background:`${C.warm}14`,border:`1px solid ${C.warm}80`,borderRadius:6,fontSize:11,color:C.warm,fontFamily:"'Barlow',sans-serif"}}>
+          ⚠ Air fractions sum to {sumFrac.toFixed(2)} % — should equal 100 %. Each circuit is being scaled by its own fraction of the flame-zone air; a non-100 sum means flame-zone air is being over/under-allocated.
+        </div>:null}
+      {OMnegFuel?
+        <div style={{padding:"8px 12px",background:`${C.strong}14`,border:`1px solid ${C.strong}80`,borderRadius:6,fontSize:11,color:C.strong,fontFamily:"'Barlow',sans-serif"}}>
+          ⚠ Outer Main fuel would be negative ({fmtMdot(m_fuel_OM_raw)} {mdotU}) — the three user-set circuits are already consuming more fuel than the cycle delivers. Reduce IP / OP / IM φ or check total fuel.
+        </div>:null}
+      {!OMnegFuel&&OMphiExtreme&&m_fuel_OM>0?
+        <div style={{padding:"8px 12px",background:`${C.warm}14`,border:`1px solid ${C.warm}80`,borderRadius:6,fontSize:11,color:C.warm,fontFamily:"'Barlow',sans-serif"}}>
+          ⚠ Outer Main φ ({phi_OM.toFixed(3)}) is outside the [0.05, 1.5] premixer band — check circuit settings.
+        </div>:null}
+
+      {/* ═══ Circuit rows ═══ */}
+      <div style={S.card}>
+        <div style={{...S.cardT,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span>Circuit Map — Inner Pilot / Outer Pilot / Inner Main / Outer Main (float)</span>
+          <span style={{fontSize:9.5,fontWeight:500,color:C.txtMuted,fontFamily:"monospace",letterSpacing:0,textTransform:"none"}}>Air frac sum: <strong style={{color:Math.abs(sumFrac-100)<0.05?C.accent:C.warm}}>{sumFrac.toFixed(2)} %</strong></span>
+        </div>
+        {Row({name:"Inner Pilot (IP)",subtitle:"centerbody pilot — innermost circuit",color:C.strong,
+          frac:fracIP,setFrac:setFracIP,
+          phiVal:phiIP,setPhi:setPhiIP,step:0.05,phiEditable:true,
+          FAR:FAR_IP,mFuel:m_fuel_IP,mAir:m_air_IP,TFlame:T_IP,
+          TFlameLoading:bkIP.loading,TFlameErr:bkIP.err})}
+        {Row({name:"Outer Pilot (OP)",subtitle:"annular pilot — stabilises main flame",color:C.orange,
+          frac:fracOP,setFrac:setFracOP,
+          phiVal:phiOP,setPhi:setPhiOP,step:0.05,phiEditable:true,
+          FAR:FAR_OP,mFuel:m_fuel_OP,mAir:m_air_OP,TFlame:T_OP,
+          TFlameLoading:bkOP.loading,TFlameErr:bkOP.err})}
+        {Row({name:"Inner Main (IM)",subtitle:"inner premixed main — fine-tune knob",color:C.accent,
+          frac:fracIM,setFrac:setFracIM,
+          phiVal:phiIM,setPhi:setPhiIM,step:0.01,phiEditable:true,
+          FAR:FAR_IM,mFuel:m_fuel_IM,mAir:m_air_IM,TFlame:T_IM,
+          TFlameLoading:bkIM.loading,TFlameErr:bkIM.err})}
+        {Row({name:"Outer Main (OM)",subtitle:"float circuit — absorbs fuel balance",color:C.accent2,
+          frac:fracOM,setFrac:setFracOM,
+          phiVal:phi_OM,setPhi:()=>{},step:0,phiEditable:false,
+          FAR:FAR_OM,mFuel:m_fuel_OM,mAir:m_air_OM,TFlame:T_OM,
+          TFlameLoading:bkOM.loading,TFlameErr:bkOM.err})}
+      </div>
+
+      {/* ═══ Fuel-balance footer (sanity-check) ═══ */}
+      <div style={S.card}>
+        <div style={S.cardT}>Fuel Balance Check</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",fontFamily:"monospace",fontSize:11}}>
+          <div style={{padding:"4px 10px",background:C.bg2,borderRadius:4,border:`1px solid ${C.border}`}}>IP fuel: <strong style={{color:C.strong}}>{fmtMdot(m_fuel_IP)}</strong></div>
+          <div style={{padding:"4px 10px",background:C.bg2,borderRadius:4,border:`1px solid ${C.border}`}}>OP fuel: <strong style={{color:C.orange}}>{fmtMdot(m_fuel_OP)}</strong></div>
+          <div style={{padding:"4px 10px",background:C.bg2,borderRadius:4,border:`1px solid ${C.border}`}}>IM fuel: <strong style={{color:C.accent}}>{fmtMdot(m_fuel_IM)}</strong></div>
+          <div style={{padding:"4px 10px",background:C.bg2,borderRadius:4,border:`1px solid ${C.border}`}}>OM fuel (float): <strong style={{color:C.accent2}}>{fmtMdot(m_fuel_OM)}</strong></div>
+          <div style={{padding:"4px 10px",background:`${C.accent}0C`,borderRadius:4,border:`1px solid ${C.accent}40`}}>Sum IP+OP+IM+OM: <strong style={{color:C.accent}}>{fmtMdot(m_fuel_IP+m_fuel_OP+m_fuel_IM+m_fuel_OM)}</strong> {mdotU}</div>
+          <div style={{padding:"4px 10px",background:`${C.accent2}0C`,borderRadius:4,border:`1px solid ${C.accent2}40`}}>Cycle total fuel: <strong style={{color:C.accent2}}>{fmtMdot(m_fuel_total)}</strong> {mdotU}</div>
+        </div>
+        <div style={{marginTop:6,fontSize:10,color:C.txtMuted,fontFamily:"monospace"}}>
+          Residual: {fmtMdot(m_fuel_total-(m_fuel_IP+m_fuel_OP+m_fuel_IM+m_fuel_OM))} {mdotU} (should be 0 by construction — Outer Main absorbs the balance).
+        </div>
+      </div>
+      </>}
+  </div>);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    OPERATIONS SUMMARY PANEL
    --------------------------------------------------------------------------
    First tab. Aggregates the most important operating numbers from the Cycle
@@ -2380,7 +2634,7 @@ function EngineAmbientSidebar({
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
 
 /* ══════════════════ MAIN APP ══════════════════ */
-const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
+const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"mapping",label:"Combustor Mapping",icon:"🎯",engines:["LMS100PB+"]},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
 const ACCOUNT_TAB={id:"account",label:"Account & Billing",icon:"👤"};
 
 export default function App(){
@@ -2482,7 +2736,16 @@ export default function App(){
   // Kick user out of Account tab if they sign out
   useEffect(()=>{if(!auth.isAuthenticated&&tab==="account")setTab("cycle");},[auth.isAuthenticated,tab]);
 
-  const TABS=auth.isAuthenticated?[...TABS_BASE,ACCOUNT_TAB]:TABS_BASE;
+  // Filter tabs by engine — some panels (e.g. Combustor Mapping) are only
+  // meaningful for specific engines because they reflect that engine's
+  // physical combustor hardware (circuit counts, pilot/main split).
+  const _baseTabs=TABS_BASE.filter(t=>!t.engines||t.engines.includes(cycleEngine));
+  const TABS=auth.isAuthenticated?[..._baseTabs,ACCOUNT_TAB]:_baseTabs;
+  // If user is on a tab that's no longer available (engine changed), bounce
+  // them to the Operations Summary so they never land on a blank page.
+  useEffect(()=>{if(!TABS.some(t=>t.id===tab))setTab("summary");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[cycleEngine]);
   const initF={};FUEL_SP.forEach(s=>initF[s]=0);Object.assign(initF,FUEL_PRESETS["Pipeline NG (US)"]);
   const initO={};OX_SP.forEach(s=>initO[s]=0);Object.assign(initO,OX_PRESETS["Humid Air (60%RH 25°C)"]);
   const[fuel,setFuel]=useState(initF);const[ox,setOx]=useState(initO);
@@ -2752,6 +3015,11 @@ export default function App(){
 
           {/* CONTENT */}
           <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
+            {tab==="mapping"&&<CombustorMappingPanel
+              fuel={fuel} Tfuel={T_fuel}
+              WFR={WFR} waterMode={waterMode} T_water={T_water}
+              cycleResult={cycleResult} cycleAirFrac={cycleAirFrac} bkCycle={bkCycle}
+            />}
             {tab==="summary"&&<OperationsSummaryPanel
               fuel={fuel} ox={ox} Tfuel={T_fuel}
               WFR={WFR} waterMode={waterMode} T_water={T_water}
