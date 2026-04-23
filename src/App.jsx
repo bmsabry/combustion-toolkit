@@ -799,7 +799,7 @@ function useBackendCalc(kind, args, enabled){
 // and renders a large fixed-position banner while the list is non-empty — the banner
 // disappears automatically once every task's promise settles. Fresh ids per begin() call
 // allow multiple concurrent tasks of the same kind to coexist safely.
-function BusyProvider({children}){
+export function BusyProvider({children}){
   const[tasks,setTasks]=useState([]);
   const begin=useCallback((label)=>{
     const id=Math.random().toString(36).slice(2)+Date.now().toString(36);
@@ -816,7 +816,7 @@ function BusyOverlay({tasks}){
   const labels=[...new Set(tasks.map(t=>t.label))];
   const oldest=Math.max(...tasks.map(t=>Date.now()-t.t0));
   const secs=(oldest/1000).toFixed(1);
-  return(<div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:9999,minWidth:420,maxWidth:640,padding:"14px 22px",background:C.bg2,border:`2px solid ${C.accent}`,borderRadius:10,boxShadow:"0 8px 32px rgba(0,0,0,.55)",fontFamily:"'Barlow',sans-serif",color:C.txt,pointerEvents:"none"}}
+  return(<div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:99999,minWidth:440,maxWidth:680,padding:"14px 22px",background:C.bg2,border:`2px solid ${C.accent}`,borderRadius:10,boxShadow:`0 8px 32px rgba(0,0,0,.6), 0 0 0 4px ${C.accent}22`,fontFamily:"'Barlow',sans-serif",color:C.txt,pointerEvents:"none"}}
     data-tick={tick}>
     <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
       <span style={{display:"inline-block",width:14,height:14,border:`2.5px solid ${C.accent}`,borderTopColor:"transparent",borderRadius:"50%",animation:"ctkspin 0.85s linear infinite"}}/>
@@ -2581,10 +2581,13 @@ export default function App(){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[cycleResult,linkOx]);
 
+  // NB: BusyProvider is hoisted to main.jsx so it wraps the entire App tree,
+  // including the App-body bkCycle useBackendCalc call above. Wrapping
+  // BusyProvider inside App would leave bkCycle with the default no-op
+  // begin() and the top overlay would silently miss all cycle-only updates.
   return(
     <UnitCtx.Provider value={units}>
     <AccurateCtx.Provider value={{accurate:accurate&&hasOnline,setAccurate,available:hasOnline}}>
-    <BusyProvider>
       <div style={{fontFamily:"'Barlow','Segoe UI',sans-serif",background:C.bg,color:C.txt,minHeight:"100vh",display:"flex",flexDirection:"column"}}>
         <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700;800&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet"/>
         <HelpModal show={showHelp} onClose={()=>setShowHelp(false)}/>
@@ -2792,6 +2795,5 @@ export default function App(){
           </div>
         </div>
       </div>
-    </BusyProvider>
     </AccurateCtx.Provider>
     </UnitCtx.Provider>);}
