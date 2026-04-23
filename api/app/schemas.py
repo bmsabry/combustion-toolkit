@@ -570,3 +570,91 @@ class CycleResponse(BaseModel):
     water_mode: str = "liquid"
     # Humid-air composition (reference)
     oxidizer_humid_mol_pct: Dict[str, float]
+
+
+# ---------- combustor mapping (LMS100 DLE 4-circuit reactor network) ----------
+class CombustorMappingRequest(BaseModel):
+    """Request for the 4-circuit combustor mapping endpoint.
+
+    Reactor topology: 4 × (PSR[τ_psr] → near-field PFR[τ_pfr_near])
+    → mix with cooling air → bulk PFR[τ_total − τ_psr − τ_pfr_near].
+    """
+    fuel: Dict[str, float] = Field(description="Fuel mole%")
+    oxidizer: Dict[str, float] = Field(description="Humid-air mole% (from cycle)")
+    T3_K: float = Field(gt=0, description="Compressor exit T (combustor inlet)")
+    P3_bar: float = Field(gt=0, description="Combustor pressure")
+    T_fuel_K: float = Field(gt=0, description="Fuel inlet T")
+    W3_kg_s: float = Field(gt=0, description="Compressor-discharge (post-bleed) flow")
+    W36_over_W3: float = Field(gt=0, le=1.0, description="Fraction of W3 entering combustor dome")
+    com_air_frac: float = Field(
+        gt=0, le=1.0,
+        description="Fraction of W36 in flame zone. Balance is effusion cooling that rejoins at mix.",
+    )
+    # Circuit air fractions (% of flame air) — IP/OP/IM/OM should sum to 100.
+    frac_IP_pct: float = Field(ge=0, le=100)
+    frac_OP_pct: float = Field(ge=0, le=100)
+    frac_IM_pct: float = Field(ge=0, le=100)
+    frac_OM_pct: float = Field(ge=0, le=100)
+    # User-set phi for IP/OP/IM. OM is back-solved from total-fuel mass balance.
+    phi_IP: float = Field(ge=0, le=5.0)
+    phi_OP: float = Field(ge=0, le=5.0)
+    phi_IM: float = Field(ge=0, le=5.0)
+    m_fuel_total_kg_s: float = Field(gt=0, description="Total combustor fuel (from cycle)")
+    # Residence-time budget (all ms). τ_total must be > τ_psr + τ_pfr_near.
+    tau_total_ms: float = Field(default=5.0, gt=0.5, le=100.0)
+    tau_psr_ms: float = Field(default=0.5, gt=0.0, le=10.0)
+    tau_pfr_near_ms: float = Field(default=1.5, gt=0.0, le=20.0)
+    # Water injection (distributed ∝ fuel)
+    WFR: float = Field(default=0.0, ge=0.0, le=2.0)
+    water_mode: str = Field(default="liquid", pattern="^(liquid|steam)$")
+    mechanism: str = Field(default="gri30", pattern="^(gri30|glarborg)$")
+    # Pilot NOx exp-fit anchors (defaults reflect a representative diffusion flame).
+    pilot_NOx_anchor_phi: float = Field(default=1.0, gt=0.25, le=2.0)
+    pilot_NOx_anchor_ppm: float = Field(default=180.0, gt=3.0, le=5000.0)
+
+
+class CombustorMapCircuit(BaseModel):
+    phi: float
+    m_air_kg_s: float
+    m_fuel_kg_s: float
+    T_AFT_complete_K: float
+    T_PSR_K: float
+    T_PFR_K: float
+    NOx_ppm_vd: float
+    CO_ppm_vd: float
+
+
+class CombustorMapExit(BaseModel):
+    T_K: float
+    NOx_ppm_15O2: float
+    CO_ppm_15O2: float
+    NOx_ppm_vd: float
+    CO_ppm_vd: float
+    O2_pct_dry: float
+    CO2_pct_dry: float
+    H2O_pct_wet: float
+
+
+class CombustorMapAirAccounting(BaseModel):
+    W3_kg_s: float
+    W36_kg_s: float
+    flame_air_kg_s: float
+    cooling_air_kg_s: float
+
+
+class CombustorMapTau(BaseModel):
+    psr: float
+    pfr_near: float
+    pfr_bulk: float
+    total: float
+
+
+class CombustorMappingResponse(BaseModel):
+    exit: CombustorMapExit
+    circuits: Dict[str, CombustorMapCircuit]  # keys: IP, OP, IM, OM
+    air_accounting: CombustorMapAirAccounting
+    tau_ms: CombustorMapTau
+    phi_OM: float
+    FAR_stoich: float
+    fuel_residual_kg_s: float
+    mechanism: str = "gri30"

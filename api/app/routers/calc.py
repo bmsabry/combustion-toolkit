@@ -14,6 +14,8 @@ from ..schemas import (
     AFTResponse,
     AutoignitionRequest,
     AutoignitionResponse,
+    CombustorMappingRequest,
+    CombustorMappingResponse,
     CombustorRequest,
     CombustorResponse,
     CycleRequest,
@@ -27,7 +29,17 @@ from ..schemas import (
     PropsRequest,
     PropsResponse,
 )
-from ..science import aft, autoignition, combustor, cycle, exhaust, flame_speed, flame_speed_sweep, props
+from ..science import (
+    aft,
+    autoignition,
+    combustor,
+    combustor_mapping,
+    cycle,
+    exhaust,
+    flame_speed,
+    flame_speed_sweep,
+    props,
+)
 
 log = logging.getLogger("calc")
 router = APIRouter(prefix="/calc", tags=["calc (accurate Cantera)"])
@@ -152,6 +164,41 @@ def calc_combustor(
     )
     result["mechanism"] = body.mechanism
     return CombustorResponse(**result)
+
+
+@router.post("/combustor_mapping", response_model=CombustorMappingResponse)
+def calc_combustor_mapping(
+    body: CombustorMappingRequest, _: User = Depends(require_full_subscription)
+) -> CombustorMappingResponse:
+    """LMS100 DLE 4-circuit reactor network: 4×(PSR+PFR) → MIX → bulk PFR."""
+    result = _run_in_pool(
+        combustor_mapping.run,
+        body.fuel,
+        body.oxidizer,
+        body.T3_K,
+        body.P3_bar,
+        body.T_fuel_K,
+        body.W3_kg_s,
+        body.W36_over_W3,
+        body.com_air_frac,
+        body.frac_IP_pct,
+        body.frac_OP_pct,
+        body.frac_IM_pct,
+        body.frac_OM_pct,
+        body.phi_IP,
+        body.phi_OP,
+        body.phi_IM,
+        body.m_fuel_total_kg_s,
+        body.tau_total_ms,
+        body.tau_psr_ms,
+        body.tau_pfr_near_ms,
+        body.WFR,
+        body.water_mode,
+        body.mechanism,
+        body.pilot_NOx_anchor_phi,
+        body.pilot_NOx_anchor_ppm,
+    )
+    return CombustorMappingResponse(**result)
 
 
 @router.post("/exhaust", response_model=ExhaustResponse)
