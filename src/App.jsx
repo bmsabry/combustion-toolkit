@@ -1818,6 +1818,292 @@ function KV({k,v}){return(<div style={{display:"flex",justifyContent:"space-betw
        fraction off mdot_air_combustor & mdot_air_turbine (compressor work
        unchanged) and iteratively raises T4 to hold gross power.
 */
+/* ══════════════════════════════════════════════════════════════════════════
+   OPERATIONS SUMMARY PANEL
+   --------------------------------------------------------------------------
+   First tab. Aggregates the most important operating numbers from the Cycle
+   + AFT + Combustor backends into a single glanceable dashboard, then lets
+   the user run a load sweep (20 → 100 %) to visualize how every metric
+   trends from minimum-stable load to full power at the current ambient +
+   fuel + bleed + water settings.
+
+   Headline metrics:
+     • Power (MW_net)                          ← cycleResult
+     • Load %                                  ← cycleLoad input
+     • Bleed % (effective, lost to ambient)    ← bleedAirFrac × 100
+     • Fuel / Air / Water mass flow            ← cycleResult
+     • T4 (complete-combustion assumption)     ← AFT backend at phi4
+     • Thermal efficiency η_LHV                ← cycleResult
+     • NOx @ 15% O₂, CO @ 15% O₂ (PFR exit)    ← Combustor backend
+     • O₂ dry %, CO₂ dry % (complete-comb. @ T4 conditions)  ← AFT backend dry
+═══════════════════════════════════════════════════════════════════════════ */
+function OperationsSummaryPanel({
+  fuel, ox, Tfuel, WFR=0, waterMode="liquid", T_water,
+  tau_psr, L_pfr, V_pfr, heatLossFrac,
+  psrSeed, eqConstraint, integration, mechanism,
+  cycleResult, bleedAirFrac, bkCycle,
+  // cycle sweep args
+  cycleEngine, cyclePamb, cycleTamb, cycleRH, cycleLoad, cycleTcool, cycleAirFrac,
+}){
+  const units=useContext(UnitCtx);
+  const {accurate}=useContext(AccurateCtx);
+
+  // ── Complete-combustion at COMBUSTOR EXIT state (phi4, T3, P3) ──────────
+  // We call /calc/aft at the cycle's phi4 — NOT phi_Bulk — so T_ad_complete
+  // reflects the diluted combustor-exit condition, which is what T4 means.
+  // The same call's mole_fractions_complete_dry gives O₂% and CO₂% at T4.
+  const phi4=cycleResult?.phi4||0;
+  const T3_K=cycleResult?.T3_K||Tfuel||300;
+  const P3_bar=cycleResult?.P3_bar||1;
+  const bkAFT_T4=useBackendCalc("aft",{
+    fuel:nonzero(fuel),oxidizer:nonzero(ox),
+    phi:phi4>0?phi4:0.01, T0:T3_K, P:P3_bar,
+    mode:"adiabatic", heat_loss_fraction:0,
+    T_fuel_K:Tfuel, T_air_K:T3_K,
+    WFR, water_mode:waterMode,
+  }, !!(accurate&&cycleResult&&phi4>0));
+
+  const T4_complete=bkAFT_T4.data?.T_ad_complete||cycleResult?.T4_K||0;
+  const ccDry=bkAFT_T4.data?.mole_fractions_complete_dry||{};
+  const O2_pct_T4=ccDry.O2?ccDry.O2*100:0;
+  const CO2_pct_T4=ccDry.CO2?ccDry.CO2*100:0;
+
+  // ── PFR-exit NOx / CO from the combustor PSR-PFR reactor network ────────
+  // Uses the same sidebar linkage the Combustor panel itself uses (phi_Bulk,
+  // T3, P3, user's tau/L/V/seed selections).
+  const phi_for_combustor=cycleResult?.phi_Bulk||phi4;
+  const bkComb=useBackendCalc("combustor",{
+    fuel:nonzero(fuel),oxidizer:nonzero(ox),
+    phi:phi_for_combustor>0?phi_for_combustor:0.01,
+    T0:T3_K, P:P3_bar,
+    tau_psr_s:tau_psr/1000, L_pfr_m:L_pfr, V_pfr_m_s:V_pfr, profile_points:20,
+    T_fuel_K:Tfuel, T_air_K:T3_K,
+    psr_seed:psrSeed, eq_constraint:eqConstraint, integration,
+    heat_loss_fraction:heatLossFrac, mechanism,
+    WFR, water_mode:waterMode,
+  }, !!(accurate&&cycleResult&&phi_for_combustor>0));
+  const NOx_15=bkComb.data?.NO_ppm_15O2||0;
+  const CO_15=bkComb.data?.CO_ppm_15O2||0;
+
+  // ── Sweep state (client-side load sweep) ─────────────────────────────────
+  const[sweepData,setSweepData]=useState([]);
+  const[sweeping,setSweeping]=useState(false);
+  const[sweepProgress,setSweepProgress]=useState(0);
+  const[sweepErr,setSweepErr]=useState(null);
+
+  const runSweep=async()=>{
+    if(sweeping)return;
+    setSweeping(true);setSweepErr(null);setSweepData([]);setSweepProgress(0);
+    const points=[20,30,40,50,60,70,80,90,100];
+    const results=[];
+    try{
+      for(let i=0;i<points.length;i++){
+        const L=points[i];
+        const c=await api.calcCycle({
+          engine:cycleEngine,
+          P_amb_bar:cyclePamb, T_amb_K:cycleTamb, RH_pct:cycleRH,
+          load_pct:L,
+          T_cool_in_K:cycleEngine==="LMS100PB+"?cycleTcool:null,
+          fuel_pct:nonzero(fuel),
+          combustor_air_frac:cycleAirFrac,
+          T_fuel_K:Tfuel,
+          WFR, water_mode:waterMode, T_water_K:WFR>0?T_water:null,
+          bleed_air_frac:bleedAirFrac,
+        });
+        // AFT at phi4 for T4 complete + O2/CO2
+        let T4_cc=c.T4_K, O2dry=0, CO2dry=0;
+        try{
+          const aft=await api.calcAFT({
+            fuel:nonzero(fuel),oxidizer:nonzero(ox),
+            phi:c.phi4, T0:c.T3_K, P:c.P3_bar,
+            mode:"adiabatic", heat_loss_fraction:0,
+            T_fuel_K:Tfuel, T_air_K:c.T3_K,
+            WFR, water_mode:waterMode,
+          });
+          T4_cc=aft.T_ad_complete||c.T4_K;
+          const d=aft.mole_fractions_complete_dry||{};
+          O2dry=(d.O2||0)*100;
+          CO2dry=(d.CO2||0)*100;
+        }catch(e){/* fall back to equilibrium T4 */}
+        const m_bleed=c.mdot_bleed_kg_s||0;
+        const m_water=c.mdot_water_kg_s||0;
+        results.push({
+          load:L,
+          MW:c.MW_net||0,
+          fuel:c.mdot_fuel_kg_s||0,
+          air:(c.mdot_air_post_bleed_kg_s||c.mdot_air_kg_s||0),
+          water:m_water,
+          bleed:m_bleed,
+          bleed_pct:(c.bleed_air_frac||0)*100,
+          T4_complete:T4_cc,
+          eta:(c.efficiency_LHV||0)*100,
+          O2:O2dry, CO2:CO2dry,
+        });
+        setSweepData([...results]);
+        setSweepProgress((i+1)/points.length);
+      }
+    }catch(e){setSweepErr(e?.message||String(e));}
+    setSweeping(false);
+  };
+
+  // ── Visual helpers ───────────────────────────────────────────────────────
+  const fmtMdot=k=>units==="SI"?k.toFixed(2)+" kg/s":(k*2.20462).toFixed(1)+" lb/s";
+  const fmtT=K=>uv(units,"T",K).toFixed(0)+" "+uu(units,"T");
+
+  // Big hero card with a large centered value. Colors categorise data type.
+  const Hero=({label,value,unit,color,tip,small=false,flex=1})=>(
+    <div title={tip} style={{flex:`${flex} 1 0`,padding:small?"10px 12px":"14px 16px",
+      background:`linear-gradient(135deg,${color}14,${color}03)`,
+      border:`1px solid ${color}40`,borderRadius:8,minWidth:small?120:150,
+      boxShadow:`inset 0 0 0 1px ${color}08`,position:"relative",overflow:"hidden"}}>
+      <div style={{fontSize:9.5,fontWeight:700,color:color,textTransform:"uppercase",
+        letterSpacing:"1.3px",marginBottom:small?3:5,opacity:0.9}}>{label}</div>
+      <div style={{fontSize:small?22:30,fontWeight:800,color:color,
+        fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1,letterSpacing:"-0.5px"}}>
+        {value}<span style={{fontSize:small?10:12,fontWeight:500,color:C.txtDim,
+          marginLeft:4,letterSpacing:0,fontFamily:"'Barlow',sans-serif"}}>{unit}</span>
+      </div>
+    </div>);
+
+  // Compact mini chart grid cell — single series Load → metric
+  const MiniChart=({title,yKey,color,unit,transformY})=>{
+    if(!sweepData.length)return(<div style={{padding:"32px 10px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:6,color:C.txtMuted,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{title}<br/><span style={{fontSize:9.5,fontStyle:"italic"}}>Run sweep to populate</span></div>);
+    const plotData=sweepData.map(d=>({load:d.load,y:transformY?transformY(d[yKey]):d[yKey]}));
+    return(<div style={{background:C.bg2,border:`1px solid ${color}30`,borderRadius:6,padding:"8px 10px 4px"}}>
+      <div style={{fontSize:10,fontWeight:700,color:color,textTransform:"uppercase",letterSpacing:"0.8px",marginBottom:2}}>{title}</div>
+      <Chart data={plotData} xK="load" yK="y" xL="Load (%)" yL={unit} color={color} w={400} h={170}/>
+    </div>);
+  };
+
+  return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <InlineBusyBanner loading={accurate&&(bkCycle?.loading||bkAFT_T4.loading||bkComb.loading)}/>
+
+    <HelpBox title="ℹ️ Operations Summary — What Am I Looking At?">
+      <p style={{margin:"0 0 6px"}}>Single-glance dashboard of the most important gas-turbine operating numbers at the current conditions: <span style={hs.em}>net power, firing temperature, efficiency, all mass flows, and combustor-exit emissions + composition</span>. Everything is computed for the state set in the left sidebar (engine, ambient, fuel, bleed, water).</p>
+      <p style={{margin:"0 0 6px"}}><span style={hs.em}>T_4 uses the complete-combustion assumption</span> (no dissociation, C→CO₂, H→H₂O) — the physically correct reference for diluted combustor-exit temperature measurements. Pulled from the Flame Temp &amp; Properties backend at the cycle's φ₄ (post-dilution equivalence ratio). O₂% and CO₂% come from the same calculation on a dry basis — what a stack analyzer would read.</p>
+      <p style={{margin:0}}><span style={hs.em}>NO<sub>x</sub> @ 15 %O₂</span> and <span style={hs.em}>CO @ 15 %O₂</span> are PFR-exit values from the PSR→PFR combustor network (uses your sidebar tau_PSR, L_PFR, V_PFR, and mechanism settings). The load sweep below reruns the whole cycle solver from 20 % → 100 % load at every other parameter fixed — useful for seeing how each metric responds as the engine spools up.</p>
+    </HelpBox>
+
+    {!cycleResult?
+      <div style={{padding:"32px 24px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.warm}50`,borderRadius:10,color:C.txtDim}}>
+        <div style={{fontSize:13,fontWeight:600,color:C.warm,marginBottom:8}}>Cycle solution not available</div>
+        <div style={{fontSize:11}}>Turn on Accurate Mode in the header. The cycle must run before the summary can populate.</div>
+      </div>
+      :<>
+
+      {/* ═══ HEADLINE ROW — Power + Load as hero ═══ */}
+      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+        <div style={{flex:"2 1 300px",minWidth:250,padding:"18px 22px",
+          background:`linear-gradient(135deg,${C.accent}22,${C.accent}06)`,
+          border:`1.5px solid ${C.accent}70`,borderRadius:10,
+          boxShadow:`inset 0 0 0 1px ${C.accent}12`}}>
+          <div style={{fontSize:10.5,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"2px",marginBottom:6}}>Net Shaft Power</div>
+          <div style={{fontSize:52,fontWeight:800,color:C.accent,fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1,letterSpacing:"-1.5px"}}>
+            {cycleResult.MW_net.toFixed(1)}
+            <span style={{fontSize:20,fontWeight:500,color:C.txtDim,marginLeft:8,letterSpacing:0,fontFamily:"'Barlow',sans-serif"}}>MW</span>
+          </div>
+          <div style={{fontSize:10,color:C.txtMuted,marginTop:4,fontFamily:"monospace"}}>
+            {cycleResult.engine_label||cycleResult.engine} · max on day {cycleResult.MW_max_ambient.toFixed(1)} MW
+          </div>
+        </div>
+        <Hero flex={1.1} label="Load" value={cycleResult.load_pct.toFixed(0)} unit="%" color={C.accent2}
+          tip="Percent of max-on-day power at current ambient conditions. Set in sidebar."/>
+        <Hero flex={1} label="Bleed (lost air)" value={((cycleResult.bleed_air_frac||0)*100).toFixed(2)} unit="%" color={C.orange}
+          tip="Effective compressor-discharge bleed fraction dumped to ambient (= bleed open × valve size). Drives T4 up to hold power."/>
+      </div>
+
+      {/* ═══ FLAME STATE — T4, η ═══ */}
+      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+        <Hero label="T₄ — Complete Combustion" value={fmtT(T4_complete).split(" ")[0]} unit={uu(units,"T")} color={C.warm}
+          tip="Combustor-exit firing temperature computed under the complete-combustion assumption (no dissociation) at the cycle's φ₄. This is the physically meaningful value for diluted-exit conditions. Pulled from the Flame Temp backend."/>
+        <Hero label="Thermal Efficiency (LHV)" value={(cycleResult.efficiency_LHV*100).toFixed(2)} unit="%" color={C.good}
+          tip="Net shaft power divided by fuel LHV thermal input. Equivalent to 1 / HR (with HR in consistent units)."/>
+        <Hero label="Heat Rate" value={cycleResult.heat_rate_kJ_per_kWh.toFixed(0)} unit="kJ/kWh" color={C.accent3}
+          tip="Fuel heat input per unit electrical output. Lower is better — canonical gas-turbine efficiency metric."/>
+      </div>
+
+      {/* ═══ MASS FLOWS ═══ */}
+      <div>
+        <div style={{fontSize:9.5,fontWeight:700,color:C.accent3,textTransform:"uppercase",letterSpacing:"1.2px",margin:"2px 0 6px",paddingBottom:3,borderBottom:`1px solid ${C.accent3}30`}}>Mass Flows</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <Hero small label="Fuel" value={units==="SI"?cycleResult.mdot_fuel_kg_s.toFixed(3):(cycleResult.mdot_fuel_kg_s*2.20462).toFixed(2)} unit={units==="SI"?"kg/s":"lb/s"} color={C.accent2}
+            tip="Fuel mass flow to the combustor after the water-injection fuel bump (if WFR > 0)."/>
+          <Hero small label="Fuel (hourly)" value={units==="SI"?(cycleResult.mdot_fuel_kg_s*3600).toFixed(0):(cycleResult.mdot_fuel_kg_s*2.20462*3600).toFixed(0)} unit={units==="SI"?"kg/hr":"lb/hr"} color={C.accent2}
+            tip="Fuel flow per hour — same value, easier to compare with metered fuel-gas logs."/>
+          <Hero small label="Air (compressor inlet)" value={units==="SI"?cycleResult.mdot_air_kg_s.toFixed(1):(cycleResult.mdot_air_kg_s*2.20462).toFixed(0)} unit={units==="SI"?"kg/s":"lb/s"} color={C.accent}
+            tip="Total humid-air mass flow into the compressor."/>
+          {(cycleResult.bleed_air_frac||0)>0?
+            <Hero small label="Bleed flow" value={units==="SI"?(cycleResult.mdot_bleed_kg_s||0).toFixed(3):((cycleResult.mdot_bleed_kg_s||0)*2.20462).toFixed(2)} unit={units==="SI"?"kg/s":"lb/s"} color={C.orange}
+              tip="Air bled from compressor discharge to ambient — lost from the turbine expansion."/>:null}
+          {WFR>0?
+            <Hero small label="Water inject" value={units==="SI"?(cycleResult.mdot_water_kg_s||0).toFixed(3):((cycleResult.mdot_water_kg_s||0)*2.20462).toFixed(2)} unit={units==="SI"?"kg/s":"lb/s"} color={C.violet}
+              tip={`${waterMode==="steam"?"Steam":"Liquid water"} injected into the combustor primary zone. Threads through the turbine as extra mass.`}/>:null}
+        </div>
+      </div>
+
+      {/* ═══ EMISSIONS (PSR-PFR exit) ═══ */}
+      <div>
+        <div style={{fontSize:9.5,fontWeight:700,color:C.warm,textTransform:"uppercase",letterSpacing:"1.2px",margin:"2px 0 6px",paddingBottom:3,borderBottom:`1px solid ${C.warm}30`}}>Emissions — PSR/PFR Exit {bkComb.loading?<span style={{fontSize:9,color:C.accent2,marginLeft:6,fontWeight:500,textTransform:"none",letterSpacing:0}}>⟳ updating</span>:bkComb.err?<span style={{fontSize:9,color:C.strong,marginLeft:6,fontWeight:500,textTransform:"none",letterSpacing:0}}>⚠ {bkComb.err}</span>:null}</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <Hero small label="NOₓ @ 15 % O₂" value={NOx_15.toFixed(1)} unit="ppmvd" color={C.strong}
+            tip="Thermal NOx from the Zeldovich mechanism at the PFR exit, corrected to 15 % O₂ dry (regulatory basis). From the Combustor PSR-PFR backend at the current sidebar φ_Bulk, T3, P3, tau_PSR, L_PFR."/>
+          <Hero small label="CO @ 15 % O₂" value={CO_15.toFixed(1)} unit="ppmvd" color={C.orange}
+            tip="CO burnout value at the PFR exit, corrected to 15 % O₂ dry."/>
+        </div>
+      </div>
+
+      {/* ═══ T4-STATE COMPOSITION (complete combustion, dry basis) ═══ */}
+      <div>
+        <div style={{fontSize:9.5,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.2px",margin:"2px 0 6px",paddingBottom:3,borderBottom:`1px solid ${C.violet}30`}}>T₄ Composition — Complete Combustion, Dry {bkAFT_T4.loading?<span style={{fontSize:9,color:C.accent2,marginLeft:6,fontWeight:500,textTransform:"none",letterSpacing:0}}>⟳ updating</span>:null}</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <Hero small label="O₂ dry" value={O2_pct_T4.toFixed(2)} unit="%" color="#38BDF8"
+            tip="Oxygen in combustor-exit products on a dry basis, under the complete-combustion assumption at φ₄, T3, P3. This is what a dry stack O₂ analyzer would read if dissociation products have recombined (typical for real stacks)."/>
+          <Hero small label="CO₂ dry" value={CO2_pct_T4.toFixed(2)} unit="%" color={C.warm}
+            tip="Carbon dioxide in combustor-exit products on a dry basis, complete-combustion assumption. Equivalent to a dry-basis CO₂ CEMS reading."/>
+        </div>
+      </div>
+
+      {/* ═══ LOAD SWEEP — plots grid ═══ */}
+      <div style={{...S.card,padding:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div>
+            <div style={{...S.cardT,marginBottom:3}}>Load-% Sweep — Variation at Current Operating Conditions</div>
+            <div style={{fontSize:10,color:C.txtMuted,lineHeight:1.4,fontFamily:"'Barlow',sans-serif",maxWidth:620}}>
+              Runs the full cycle + Flame Temp backends at 20/30/40/50/60/70/80/90/100 % load, holding every other parameter fixed (engine, ambient, fuel, bleed, water). Useful for checking how each metric scales as the engine spools up. Emissions (NOx/CO) are NOT included in the sweep — they would add ~90 s per run and are best obtained from the Combustor panel at the specific load of interest.
+            </div>
+          </div>
+          <button onClick={runSweep} disabled={sweeping||!accurate}
+            title={!accurate?"Requires Accurate Mode":sweeping?"Sweep in progress…":"Run a 9-point load sweep (20-100 %) at the current conditions"}
+            style={{padding:"8px 16px",fontSize:11,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",
+              color:sweeping||!accurate?C.txtMuted:C.bg,
+              background:sweeping||!accurate?"transparent":C.accent,
+              border:`1.5px solid ${sweeping||!accurate?C.border:C.accent}`,
+              borderRadius:6,cursor:sweeping||!accurate?"not-allowed":"pointer",
+              display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
+            {sweeping?<>
+              <span style={{display:"inline-block",width:11,height:11,border:`2px solid ${C.txtMuted}`,borderTopColor:"transparent",borderRadius:"50%",animation:"ctkspin 0.85s linear infinite"}}/>
+              RUNNING… {Math.round(sweepProgress*100)}%
+            </>:sweepData.length?"▶ RE-RUN SWEEP":"▶ RUN LOAD SWEEP"}
+          </button>
+        </div>
+        {sweepErr?<div style={{padding:"6px 10px",background:`${C.strong}14`,border:`1px solid ${C.strong}60`,borderRadius:4,fontSize:10.5,color:C.strong,marginBottom:10}}>Sweep error: {sweepErr}</div>:null}
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(360px, 1fr))",gap:10}}>
+          <MiniChart title="Net Power" yKey="MW" color={C.accent} unit={`MW`}/>
+          <MiniChart title="Thermal Efficiency (LHV)" yKey="eta" color={C.good} unit="%"/>
+          <MiniChart title="T₄ (complete combustion)" yKey="T4_complete" color={C.warm} unit={uu(units,"T")} transformY={(K)=>uv(units,"T",K)}/>
+          <MiniChart title="Fuel flow" yKey="fuel" color={C.accent2} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462}/>
+          <MiniChart title="Air flow (post-bleed)" yKey="air" color={C.accent3} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462}/>
+          {WFR>0?<MiniChart title="Water inject flow" yKey="water" color={C.violet} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462}/>:null}
+          <MiniChart title="Bleed (effective %)" yKey="bleed_pct" color={C.orange} unit="%"/>
+          <MiniChart title="O₂ dry (complete-comb.)" yKey="O2" color="#38BDF8" unit="%"/>
+          <MiniChart title="CO₂ dry (complete-comb.)" yKey="CO2" color={C.warm} unit="%"/>
+        </div>
+      </div>
+      </>}
+  </div>);
+}
+
 function EngineAmbientSidebar({
   engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct,setLoadPct,
   Tcool,setTcool,airFrac,setAirFrac,
@@ -2005,7 +2291,7 @@ function EngineAmbientSidebar({
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
 
 /* ══════════════════ MAIN APP ══════════════════ */
-const TABS_BASE=[{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
+const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
 const ACCOUNT_TAB={id:"account",label:"Account & Billing",icon:"👤"};
 
 export default function App(){
@@ -2014,7 +2300,7 @@ export default function App(){
   // converting to/from SI via uv()/uvI(). This guarantees that toggling SI↔ENG
   // leaves calculations and chart axes self-consistent.
   const auth=useAuth();
-  const[tab,setTab]=useState("cycle");const[phi,setPhi]=useState(0.555);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("ENG");
+  const[tab,setTab]=useState("summary");const[phi,setPhi]=useState(0.555);const[T0,setT0]=useState(810.93);const[P,setP]=useState(27.22);const[units,setUnits]=useState("ENG");
   // ── Gas-turbine cycle inputs & linkages ─────────────────────────────────
   // When a linkage toggle is ON, the corresponding sidebar input (Air T, Pressure, or phi/FAR)
   // is driven from the latest cycle result and displayed with a lock badge. "Break link"
@@ -2374,6 +2660,17 @@ export default function App(){
 
           {/* CONTENT */}
           <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
+            {tab==="summary"&&<OperationsSummaryPanel
+              fuel={fuel} ox={ox} Tfuel={T_fuel}
+              WFR={WFR} waterMode={waterMode} T_water={T_water}
+              tau_psr={tau_psr} L_pfr={L_pfr} V_pfr={V_pfr}
+              heatLossFrac={heatLossFrac} psrSeed={psrSeed}
+              eqConstraint={eqConstraint} integration={integration} mechanism={mechanism}
+              cycleResult={cycleResult} bleedAirFrac={bleedAirFrac} bkCycle={bkCycle}
+              cycleEngine={cycleEngine} cyclePamb={cyclePamb} cycleTamb={cycleTamb}
+              cycleRH={cycleRH} cycleLoad={cycleLoad} cycleTcool={cycleTcool}
+              cycleAirFrac={cycleAirFrac}
+            />}
             {tab==="cycle"&&<CyclePanel
               linkT3={linkT3} setLinkT3={setLinkT3}
               linkP3={linkP3} setLinkP3={setLinkP3}
