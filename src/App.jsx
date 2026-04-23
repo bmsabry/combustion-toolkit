@@ -1282,14 +1282,20 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
         <rect x="238" y="5" width="220" height="50" rx="8" fill="url(#pg2b)" opacity=".12" stroke={C.accent3} strokeWidth="1.5"/><text x="348" y="26" fill={C.accent3} fontSize="11" textAnchor="middle" fontFamily="monospace" fontWeight="700">PFR (Burnout)</text><text x="348" y="40" fill={C.txtMuted} fontSize="8" textAnchor="middle" fontFamily="monospace">L={uv(units,"len",Lpfr).toFixed(2)}{uu(units,"len")} V={uv(units,"vel",Vpfr).toFixed(1)}{uu(units,"vel")}</text>
         <polygon points="460,26 472,30 460,34" fill={C.border}/><text x="510" y="27" fill={C.accent2} fontSize="9" textAnchor="middle" fontFamily="monospace" fontWeight="700">EXIT</text><text x="510" y="40" fill={C.txtMuted} fontSize="7" textAnchor="middle" fontFamily="monospace">{uv(units,"T",net.pfr[net.pfr.length-1]?.T).toFixed(0)}{uu(units,"T")}</text>
       </svg>
-      <div style={{...S.row,gap:8}}>
+      {/* ── Row 1: Flame Temperatures ───────────────────────────────── */}
+      <div style={{fontSize:9.5,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",margin:"4px 0 6px",paddingBottom:3,borderBottom:`1px solid ${C.accent}25`}}>Flame Temperatures</div>
+      <div style={{...S.row,gap:8,marginBottom:12}}>
         <M l="T_ad — Chemical Equilibrium" v={uv(units,"T",(accurate&&backendNet&&backendNet.T_ad_equilibrium)?backendNet.T_ad_equilibrium:T_ad_canonical).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="Full-species Cantera HP equilibrium (includes CO, OH, NO, H, O, H₂ dissociation products). Appropriate reference for the primary flame zone at combustor_air_frac = 1 (no dilution)."/>
         {accurate&&backendNet&&backendNet.T_ad_complete?
           <M l="T_ad — Complete Combustion" v={uv(units,"T",backendNet.T_ad_complete).toFixed(0)} u={uu(units,"T")} c={C.orange} tip="No dissociation (all C → CO₂, all H → H₂O). Higher than equilibrium by ≈10–100 K depending on T. Appropriate reference for the diluted combustor exit — the lower combustor_air_frac drops below 1, the better complete combustion represents the actual exit state."/>
           :null}
         <M l="Combustor Exit Temperature" v={uv(units,"T",net.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent2} tip="Kinetic PFR-exit T (Accurate mode). In Free mode this collapses to the PSR equilibrium T. This is the computed value; compare against the two T_ad references to see how far the kinetic solution sits from either idealization."/>
         <M l="PSR Exit Temperature" v={uv(units,"T",net.T_psr).toFixed(0)} u={uu(units,"T")} c={C.accent3} tip="Exit T of the well-stirred primary zone. At finite residence time, sits between complete combustion (radicals not yet recombined) and full equilibrium (NO formed). Should fall close to T_ad — Complete Combustion for realistic tau values."/>
-        <M l="PSR Conversion" v={net.conv_psr.toFixed(1)} u="%" c={C.good} tip="Fuel conversion in the PSR. 100% = complete combustion. Values below ~90% indicate approaching blowout."/>
+      </div>
+
+      {/* ── Row 2: Emissions ───────────────────────────────────────── */}
+      <div style={{fontSize:9.5,fontWeight:700,color:C.warm,textTransform:"uppercase",letterSpacing:"1.2px",margin:"4px 0 6px",paddingBottom:3,borderBottom:`1px solid ${C.warm}25`}}>Emissions</div>
+      <div style={{...S.row,gap:8,marginBottom:12}}>
         <M l="NOx at PSR Exit" v={((accurate&&backendNet?backendNet.NO_ppm_psr:net.NO_ppm_psr)??0).toFixed(1)} u="ppmvd" c={C.orange} tip="NO concentration leaving the PSR (entering the PFR). Growth between this value and 'NOx at Exit' is pure PFR-stage Zeldovich — small PSR/exit gap means most NOx is formed in the primary zone."/>
         <M l="CO at PSR Exit" v={((accurate&&backendNet?backendNet.CO_ppm_psr:net.CO_ppm_psr)??0).toFixed(1)} u="ppmvd" c={C.accent2} tip="CO concentration leaving the PSR (entering the PFR). In lean premixed combustors CO peaks at the PSR exit and is burned out in the PFR — so PSR CO minus exit CO is the burnout margin."/>
         <M l="NOx at Exit" v={net.NO_ppm_exit.toFixed(1)} u="ppm" c={C.warm} tip="Nitric oxide concentration at combustor exit (wet, actual O₂). Primarily thermal NOx from the Zeldovich mechanism."/>
@@ -1297,8 +1303,14 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
         <M l="CO at Exit" v={net.CO_ppm_exit.toFixed(1)} u="ppm" c={C.accent2} tip="Carbon monoxide at exit (wet, actual O₂). High CO indicates incomplete combustion — reduce φ, increase τ, or lengthen PFR."/>
         <M l="CO @ 15% O₂" v={net.CO_ppm_15O2.toFixed(1)} u="ppmvd" c={C.orange} tip="CO corrected to 15% O₂ dry — the same regulatory reporting basis used for NOx. Formula: CO × (20.95−15)/(20.95−O₂_dry)."/>
         <M l="Exhaust O₂ (dry)" v={net.O2_pct.toFixed(1)} u="%" c={C.accent3} tip="Residual oxygen in exhaust on a dry basis. Used for emissions correction and combustion efficiency."/>
+      </div>
+
+      {/* ── Row 3: Residence Time & Conversion ─────────────────────── */}
+      <div style={{fontSize:9.5,fontWeight:700,color:C.accent2,textTransform:"uppercase",letterSpacing:"1.2px",margin:"4px 0 6px",paddingBottom:3,borderBottom:`1px solid ${C.accent2}25`}}>Residence Time & Conversion</div>
+      <div style={{...S.row,gap:8}}>
         <M l="τ_PFR" v={net.tau_pfr_ms.toFixed(2)} u="ms" c={C.accent} tip="PFR residence time = L_PFR / V_PFR. Sets the time available for CO burnout and post-flame NOx growth."/>
         <M l="τ_total (PSR+PFR)" v={net.tau_total_ms.toFixed(2)} u="ms" c={C.accent2} tip="Total combustor residence time = τ_PSR + τ_PFR. Typical industrial gas turbine: 5–30 ms."/>
+        <M l="PSR Conversion" v={net.conv_psr.toFixed(1)} u="%" c={C.good} tip="Fuel conversion in the PSR. 100% = complete combustion. Values below ~90% indicate approaching blowout."/>
       </div></div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>Temperature Profile (PSR → PFR)</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Well-mixed plateau across the PSR, then constant through the adiabatic PFR (no heat loss in this model). Dashed line marks the PSR/PFR boundary.</div><Chart data={pfrDisp} xK="x" yK="T" xL={`Position along combustor (${uu(units,"lenSmall")})`} yL={`Temperature (${uu(units,"T")})`} color={C.accent2} vline={uv(units,"lenSmall",net.L_psr_cm)}/></div>
