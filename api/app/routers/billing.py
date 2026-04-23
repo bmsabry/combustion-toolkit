@@ -45,8 +45,11 @@ TIER_TO_PRICE = {
 @router.get("/subscription", response_model=SubscriptionOut)
 def get_subscription(user: User = Depends(get_current_user)) -> SubscriptionOut:
     # Admins get a synthetic "admin" tier that unlocks everything regardless of
-    # the underlying Stripe subscription state.
-    if user.is_admin:
+    # the underlying Stripe subscription state. Defense-in-depth: also treat any
+    # email currently listed in ADMIN_EMAILS as admin, even if user.is_admin happens
+    # to be False (the per-request self-heal in deps will already have flipped it
+    # back, but this keeps the symptom from ever reaching the UI).
+    if user.is_admin or (user.email and user.email.lower() in settings.admin_emails_list):
         return SubscriptionOut(
             tier="admin",
             status="active",

@@ -115,10 +115,11 @@ except Exception as e:  # noqa: BLE001
 
 
 def _sync_admin_emails() -> None:
-    """On boot, flip is_admin=True for every pre-existing user whose email is in ADMIN_EMAILS.
+    """On boot, force is_admin=True for every user whose email is in ADMIN_EMAILS.
 
-    This means setting ADMIN_EMAILS in the Render dashboard + restarting is all
-    that's needed to promote an already-registered account.
+    Re-asserts on every restart (no `is_admin.is_(False)` filter), so if the flag
+    somehow gets flipped to False between deploys, the next boot heals it. The
+    per-request self-heal in deps._self_heal_admin is the other half of this defense.
     """
     emails = settings.admin_emails_list
     if not emails:
@@ -126,14 +127,15 @@ def _sync_admin_emails() -> None:
     from sqlalchemy.orm import Session
     from .models import User
     with Session(engine) as session:
-        q = session.query(User).filter(User.email.in_(emails), User.is_admin.is_(False))
+        q = session.query(User).filter(User.email.in_(emails))
         updated = 0
         for u in q.all():
-            u.is_admin = True
-            updated += 1
+            if not u.is_admin:
+                u.is_admin = True
+                updated += 1
         if updated:
             session.commit()
-            log.info("promoted %d existing user(s) via ADMIN_EMAILS", updated)
+            log.info("re-asserted is_admin=True for %d user(s) via ADMIN_EMAILS", updated)
 
 
 try:

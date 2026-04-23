@@ -1,14 +1,18 @@
 """FastAPI dependencies for auth + subscription gating."""
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
+from .config import get_settings
 from .db import get_db
 from .models import SubscriptionTier, User
 from .security import decode_token
+
+log = logging.getLogger("deps")
 
 
 def _bearer(authorization: Optional[str]) -> Optional[str]:
@@ -18,6 +22,27 @@ def _bearer(authorization: Optional[str]) -> Optional[str]:
     if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1]
     return None
+
+
+def _self_heal_admin(user: User, db: Session) -> None:
+    """If the user's email is in ADMIN_EMAILS, ensure is_admin=True on every request.
+
+    Belt-and-suspenders against the recurring bug where bmsabry@gmail.com loses the
+    Accurate Mode toggle because is_admin somehow gets flipped to False between deploys.
+    The boot-time _sync_admin_emails only runs once and only handles False→True for
+    pre-existing rows; this catches drift on every authenticated call.
+    """
+    try:
+        admin_emails = get_settings().admin_emails_list
+        if not admin_emails:
+            return
+        if user.email and user.email.lower() in admin_emails and not user.is_admin:
+            user.is_admin = True
+            db.commit()
+            log.warning("self-healed is_admin=True for %s on authenticated request", user.email)
+    except Exception as exc:  # noqa: BLE001
+        # Never let a self-heal failure break authentication.
+        log.exception("admin self-heal failed for %s: %s", getattr(user, "email", "?"), exc)
 
 
 def get_current_user(
@@ -33,6 +58,7 @@ def get_current_user(
     user = db.get(User, payload.get("sub"))
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="user not found or inactive")
+    _self_heal_admin(user, db)
     return user
 
 
@@ -46,7 +72,10 @@ def get_current_user_optional(
     payload = decode_token(token)
     if not payload or payload.get("type") != "access":
         return None
-    return db.get(User, payload.get("sub"))
+    user = db.get(User, payload.get("sub"))
+    if user:
+        _self_heal_admin(user, db)
+    return user
 
 
 def require_full_subscription(user: User = Depends(get_current_user)) -> User:
