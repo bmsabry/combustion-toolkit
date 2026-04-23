@@ -2,11 +2,11 @@
 
 Reactor topology (per call):
 
-    ┌── PSR_IP (τ=0.5ms) ── PFR_IP (τ=1.5ms) ──┐
-    ├── PSR_OP (τ=0.5ms) ── PFR_OP (τ=1.5ms) ──┤          + cooling air
-    │                                          │             (T3, ox_humid)
-    ├── PSR_IM (τ=0.5ms) ── PFR_IM (τ=1.5ms) ──┼──► MIX ──► BULK PFR ──► COMBUSTOR EXIT
-    └── PSR_OM (τ=0.5ms) ── PFR_OM (τ=1.5ms) ──┘              (τ = τ_total − 2ms)
+    ┌── PSR_IP (τ=1.0ms) ── PFR_IP (τ=1.5ms) ──┐   pilot path = 2.5 ms
+    ├── PSR_OP (τ=1.0ms) ── PFR_OP (τ=1.5ms) ──┤                            + cooling air
+    │                                          │                               (T3, ox_humid)
+    ├── PSR_IM (τ=0.5ms) ── PFR_IM (τ=1.0ms) ──┼──► MIX ──► BULK PFR ──► COMBUSTOR EXIT
+    └── PSR_OM (τ=0.5ms) ── PFR_OM (τ=1.0ms) ──┘   main path = 1.5 ms     (τ_bulk = τ_total − 2.5 ms)
 
 Air accounting:
     W3              = compressor-discharge (post-bleed)
@@ -316,8 +316,10 @@ def run(
     phi_IM: float,
     m_fuel_total_kg_s: float,
     tau_total_ms: float = 5.0,
-    tau_psr_ms: float = 0.5,
-    tau_pfr_near_ms: float = 1.5,
+    tau_psr_pilot_ms: float = 1.0,
+    tau_pfr_pilot_ms: float = 1.5,
+    tau_psr_main_ms: float = 0.5,
+    tau_pfr_main_ms: float = 1.0,
     WFR: float = 0.0,
     water_mode: str = "liquid",
     mechanism: str = "gri30",
@@ -358,28 +360,34 @@ def run(
     phi_OM_clamped = min(max(phi_OM, 0.0), 3.0)
     fuel_residual = float(m_fuel_total_kg_s) - (m_fuel_IP + m_fuel_OP + m_fuel_IM + m_fuel_OM)
 
-    # --- run each circuit ----------------------------------------------------
-    tau_psr_s = max(tau_psr_ms, 0.05) * 1e-3
-    tau_pfr_near_s = max(tau_pfr_near_ms, 0.0) * 1e-3
+    # --- per-class residence times ------------------------------------------
+    # Pilots (diffusion-like) get a longer PSR; mains (fast premixed) get a
+    # shorter near-field PFR. Each class runs its own path, all streams
+    # converge at the mix plane regardless of the time coordinate.
+    tau_psr_pilot_s  = max(tau_psr_pilot_ms,  0.05) * 1e-3
+    tau_pfr_pilot_s  = max(tau_pfr_pilot_ms,  0.0)  * 1e-3
+    tau_psr_main_s   = max(tau_psr_main_ms,   0.05) * 1e-3
+    tau_pfr_main_s   = max(tau_pfr_main_ms,   0.0)  * 1e-3
+    pilot_path_ms    = float(tau_psr_pilot_ms + tau_pfr_pilot_ms)
+    main_path_ms     = float(tau_psr_main_ms  + tau_pfr_main_ms)
+    max_path_ms      = max(pilot_path_ms, main_path_ms)
 
     # --- pilot NOx upper anchor ---------------------------------------------
-    # Run the same PSR+PFR network at phi=1.0 with the current T3/P3/T_fuel/
-    # fuel/ox to get the stoichiometric-premixed NOx at this operating point.
-    # That value anchors the pilot exp-fit at phi=pilot_NOx_anchor_phi (=1.0
-    # by default). Allows the pilot curve to float correctly with pressure
-    # and inlet T instead of being pinned to a hardcoded 180 ppm.
+    # Run the pilot-class PSR+PFR at phi=pilot_NOx_anchor_phi (default 1.0)
+    # with the current T3/P3/T_fuel/fuel/ox to get the stoichiometric-
+    # premixed NOx at this operating point. That value anchors the pilot
+    # exp-fit, so the pilot curve tracks pressure / inlet T correctly.
     if pilot_NOx_anchor_ppm is None:
         try:
             anchor_res = _run_circuit(
                 fuel_pct, ox_pct, float(pilot_NOx_anchor_phi),
                 T_fuel_K, T3_K, P3_bar,
-                tau_psr_s, tau_pfr_near_s,
+                tau_psr_pilot_s, tau_pfr_pilot_s,
                 WFR, water_mode, mechanism,
             )
             anchor_ppm = float(anchor_res["NO_ppm_vd"])
             # Guard: anchor MUST exceed the 6 ppm floor for the exp-fit to
-            # be well-defined. If the PSR collapsed to near-zero NO, fall
-            # back to the legacy 180 ppm and log-flag via the response.
+            # be well-defined. Otherwise fall back to the legacy 180 ppm.
             if anchor_ppm <= 6.5:
                 anchor_ppm = 180.0
                 anchor_source = "fallback_180_psr_failed"
@@ -396,11 +404,13 @@ def run(
     # kinetic PSR+PFR NO. Compensates for sub-grid effects the 0D network
     # can't see (imperfect premix, local rich zones, unsteady pockets).
     # Defaults calibrated to LMS100 DLE hardware: IM +12 ppm, OM +17.2 ppm.
+    # Each tuple: (name, phi, m_air, m_fuel, is_pilot, nox_adder,
+    #              tau_psr_s, tau_pfr_s)
     circuits_spec = [
-        ("IP", float(phi_IP),         m_air_IP, m_fuel_IP, True,  0.0),
-        ("OP", float(phi_OP),         m_air_OP, m_fuel_OP, True,  0.0),
-        ("IM", float(phi_IM),         m_air_IM, m_fuel_IM, False, float(im_nox_adder_ppm)),
-        ("OM", float(phi_OM_clamped), m_air_OM, m_fuel_OM, False, float(om_nox_adder_ppm)),
+        ("IP", float(phi_IP),         m_air_IP, m_fuel_IP, True,  0.0,                     tau_psr_pilot_s, tau_pfr_pilot_s),
+        ("OP", float(phi_OP),         m_air_OP, m_fuel_OP, True,  0.0,                     tau_psr_pilot_s, tau_pfr_pilot_s),
+        ("IM", float(phi_IM),         m_air_IM, m_fuel_IM, False, float(im_nox_adder_ppm), tau_psr_main_s,  tau_pfr_main_s),
+        ("OM", float(phi_OM_clamped), m_air_OM, m_fuel_OM, False, float(om_nox_adder_ppm), tau_psr_main_s,  tau_pfr_main_s),
     ]
 
     circuits_out: Dict[str, dict] = {}
@@ -409,11 +419,11 @@ def run(
     mix_gases: list = []
     mix_mdots: list = []
 
-    for name, phi_i, m_air_i, m_fuel_i, is_pilot, nox_adder_ppm in circuits_spec:
+    for name, phi_i, m_air_i, m_fuel_i, is_pilot, nox_adder_ppm, tau_psr_i, tau_pfr_i in circuits_spec:
         res = _run_circuit(
             fuel_pct, ox_pct, phi_i,
             T_fuel_K, T3_K, P3_bar,
-            tau_psr_s, tau_pfr_near_s,
+            tau_psr_i, tau_pfr_i,
             WFR, water_mode, mechanism,
         )
 
@@ -460,7 +470,10 @@ def run(
 
     # --- mix + bulk PFR ------------------------------------------------------
     mix_gas = _mix_streams(mix_gases, mix_mdots, mech_path)
-    tau_bulk_s = max(0.0, (float(tau_total_ms) - float(tau_psr_ms) - float(tau_pfr_near_ms)) * 1e-3)
+    # Bulk PFR runs from the mix plane to the combustor exit. The mix plane
+    # sits at t = max(pilot_path, main_path); pilots take the longest to
+    # arrive, so the bulk time is τ_total − max_path.
+    tau_bulk_s = max(0.0, (float(tau_total_ms) - max_path_ms) * 1e-3)
     exit_gas = _advance_pfr(mix_gas, tau_bulk_s, mech_path)
 
     # --- exit emissions ------------------------------------------------------
@@ -495,8 +508,10 @@ def run(
             "cooling_air_kg_s": float(cooling_air),
         },
         "tau_ms": {
-            "psr": float(tau_psr_ms),
-            "pfr_near": float(tau_pfr_near_ms),
+            "psr_pilot": float(tau_psr_pilot_ms),
+            "pfr_pilot": float(tau_pfr_pilot_ms),
+            "psr_main": float(tau_psr_main_ms),
+            "pfr_main": float(tau_pfr_main_ms),
             "pfr_bulk": float(tau_bulk_s * 1000.0),
             "total": float(tau_total_ms),
         },

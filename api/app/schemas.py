@@ -600,10 +600,13 @@ class CombustorMappingRequest(BaseModel):
     phi_OP: float = Field(ge=0, le=5.0)
     phi_IM: float = Field(ge=0, le=5.0)
     m_fuel_total_kg_s: float = Field(gt=0, description="Total combustor fuel (from cycle)")
-    # Residence-time budget (all ms). τ_total must be > τ_psr + τ_pfr_near.
-    tau_total_ms: float = Field(default=5.0, gt=0.5, le=100.0)
-    tau_psr_ms: float = Field(default=0.5, gt=0.0, le=10.0)
-    tau_pfr_near_ms: float = Field(default=1.5, gt=0.0, le=20.0)
+    # Residence-time budget (all ms). Pilots get a longer PSR, mains get a
+    # shorter near-field PFR. τ_total must be ≥ max(pilot_path, main_path).
+    tau_total_ms: float = Field(default=5.0, gt=2.5, le=100.0)
+    tau_psr_pilot_ms: float = Field(default=1.0, gt=0.0, le=10.0)
+    tau_pfr_pilot_ms: float = Field(default=1.5, gt=0.0, le=20.0)
+    tau_psr_main_ms:  float = Field(default=0.5, gt=0.0, le=10.0)
+    tau_pfr_main_ms:  float = Field(default=1.0, gt=0.0, le=20.0)
     # Water injection (distributed ∝ fuel)
     WFR: float = Field(default=0.0, ge=0.0, le=2.0)
     water_mode: str = Field(default="liquid", pattern="^(liquid|steam)$")
@@ -651,8 +654,10 @@ class CombustorMapAirAccounting(BaseModel):
 
 
 class CombustorMapTau(BaseModel):
-    psr: float
-    pfr_near: float
+    psr_pilot: float
+    pfr_pilot: float
+    psr_main: float
+    pfr_main: float
     pfr_bulk: float
     total: float
 
