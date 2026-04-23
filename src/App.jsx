@@ -727,6 +727,45 @@ function PricingModal({show,onClose,onRequestSignin}){if(!show)return null;
 // 300 s client-side is the shortest reasonable ceiling that still lets long
 // sweeps finish).
 const BACKEND_CALC_TIMEOUT_MS = 300_000;
+// Prominent in-panel banner shown while one or more Cantera calls are in flight
+// on the current panel. Sits INSIDE the panel's scrollable content so the user
+// can't miss it (unlike the global fixed-position BusyOverlay, which may be
+// scrolled off-screen or visually ignored). Pass any boolean(s) that represent
+// an active calc — common pattern: <InlineBusyBanner loading={bk.loading}/>.
+function InlineBusyBanner({loading, label="Calculations updating — please wait before trusting any number on this panel or exporting."}){
+  if(!loading) return null;
+  return(<div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 14px",
+    background:`${C.warm}14`,border:`1px solid ${C.warm}60`,borderRadius:6,
+    fontFamily:"'Barlow',sans-serif",fontSize:11.5,color:C.warm,marginBottom:6}}>
+    <span style={{display:"inline-block",width:12,height:12,border:`2px solid ${C.warm}`,borderTopColor:"transparent",borderRadius:"50%",animation:"ctkspin 0.85s linear infinite",flexShrink:0}}/>
+    <strong style={{fontWeight:700,letterSpacing:".3px"}}>CANTERA UPDATING</strong>
+    <span style={{color:C.txtDim,fontWeight:400}}>— {label}</span>
+  </div>);
+}
+
+// Export button that auto-disables while any Cantera calculation is in flight
+// (reading BusyCtx.tasks). Prevents the user from exporting a stale snapshot
+// while inputs are still being re-calculated.
+function BusyGuardedExportButton({onExport}){
+  const {tasks}=useContext(BusyCtx);
+  const busy=tasks.length>0;
+  return(<button
+    onClick={()=>{if(!busy)onExport();}}
+    disabled={busy}
+    title={busy?"Calculations in progress — export is disabled until all Cantera calls settle.":"Export all panels to a comprehensive .xlsx report"}
+    style={{padding:"6px 14px",fontSize:11,fontWeight:600,fontFamily:"'Barlow Condensed',sans-serif",
+      color:busy?C.txtMuted:C.bg,
+      background:busy?"transparent":C.accent2,
+      border:busy?`1px solid ${C.border}`:"none",
+      borderRadius:6,cursor:busy?"not-allowed":"pointer",letterSpacing:".5px",
+      display:"flex",alignItems:"center",gap:5,opacity:busy?0.55:1}}>
+    {busy?
+      <span style={{display:"inline-block",width:11,height:11,border:`2px solid ${C.txtMuted}`,borderTopColor:"transparent",borderRadius:"50%",animation:"ctkspin 0.85s linear infinite"}}/>:
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 12h12M8 2v8M5 7l3 3 3-3" stroke={C.bg} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+    {busy?"Waiting for Cantera…":"Export Excel"}
+  </button>);
+}
+
 function useBackendCalc(kind, args, enabled){
   const [data,setData]=useState(null);const[loading,setLoading]=useState(false);const[err,setErr]=useState(null);
   const {begin}=useContext(BusyCtx);
@@ -865,6 +904,7 @@ function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setC
     adapted?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA</span>:null
   ):null;
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <InlineBusyBanner loading={accurate&&bk.loading}/>
     <HelpBox title="ℹ️ Flame Temperature & Properties — How It Works"><p style={{margin:"0 0 6px"}}>This panel computes the <span style={hs.em}>adiabatic flame temperature</span> by solving an energy balance: total reactant enthalpy = total product enthalpy. Uses NASA 7-coefficient polynomials for temperature-dependent Cp and enthalpy.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Complete Combustion:</span> Assumes all C→CO₂, all H→H₂O. No dissociation — gives the theoretical maximum T. <span style={hs.em}>Chemical Equilibrium:</span> Solves 4 dissociation reactions (CO₂⇌CO+½O₂, H₂O⇌H₂+½O₂, ½N₂+½O₂⇌NO, ½H₂+½O₂⇌OH) via Gibbs free energy Kp iteration. Gives realistic T with dissociation species (CO, OH, NO, H₂) in products.</p><p style={{margin:0}}>All values use the <span style={hs.warn}>fuel and oxidizer compositions</span> defined in the sidebar.</p></HelpBox>
     {modeToggle}
     {Math.abs(Tfuel-Tair)>0.5&&<div style={{background:`${C.accent}0F`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"6px 10px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}}>T_fuel={uv(units,"T",Tfuel).toFixed(0)} {uu(units,"T")} + T_air={uv(units,"T",Tair).toFixed(0)} {uu(units,"T")} → adiabatic mix at φ={phi.toFixed(2)} → <span style={{color:C.accent,fontWeight:700}}>T_mixed={uv(units,"T",Tmix).toFixed(0)} {uu(units,"T")}</span> (fed to equilibrium)</div>}
@@ -1030,6 +1070,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
                  :(!ignition_safe?"AUTOIGNITION RISK"
                  :(!core_flashback_safe?"FLASHBACK RISK":"PREMIXER SAFE"));
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <InlineBusyBanner loading={accurate&&(bk.loading||(bkIgn&&bkIgn.loading))}/>
     <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works"><p style={{margin:"0 0 6px"}}><span style={hs.em}>Laminar Flame Speed (S_L)</span> is computed using Gülder/Metghalchi-Keck empirical correlations: S_L = S_L0 · f(φ) · (T_u/T_0)^α · (P/P_0)^β. For mixtures, species contributions are mole-fraction-weighted.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Blowoff Analysis:</span> τ_chem = α_th / S_L² (chemical timescale), τ_flow = L_char / V (flow timescale). The <span style={hs.em}>Damköhler number Da = τ_flow / τ_chem</span>. When Da &lt; 1, the flame cannot sustain itself and blows off.</p><p style={{margin:0}}><span style={hs.warn}>V_ref</span> is your reference approach velocity. <span style={hs.warn}>L_char</span> is the characteristic recirculation length (typically flameholder diameter or step height).</p></HelpBox>
     <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}</div>
       <div style={{...S.row,gap:8,marginBottom:10}}>
@@ -1154,6 +1195,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
   },[net,units]);
   const emSw=useMemo(()=>{const r=[];for(let p=0.4;p<=1.01;p+=0.02){const n=calcCombustorNetwork(fuel,ox,p,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair);r.push({phi:+p.toFixed(2),NO:n.NO_ppm_15O2,CO:n.CO_ppm_exit});}return r;},[fuel,ox,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair]);
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <InlineBusyBanner loading={accurate&&(bk.loading||bkAFT.loading)}/>
     {!accurate&&<div style={{padding:"12px 14px",background:`${C.strong}10`,border:`1.5px solid ${C.strong}60`,borderRadius:6,fontSize:11.5,lineHeight:1.55,color:C.txtDim,fontFamily:"'Barlow',sans-serif"}}>
       <div style={{fontSize:12.5,fontWeight:700,color:C.strong,marginBottom:6,letterSpacing:".3px"}}>⚠ APPROXIMATION — CASE-SPECIFIC REDUCED-ORDER MODEL</div>
       <p style={{margin:"0 0 6px"}}>This combustor network is <strong style={{color:C.strong}}>not a full chemical-kinetics solver</strong>. It is a calibrated reduced-order model whose CO and NOx kinetics were fit to Cantera (GRI-Mech 3.0) over a <strong style={{color:C.accent2}}>narrow operating envelope</strong>: natural-gas fuel + humid air, φ = 0.4–0.8, T_inlet = 700–900 K, P = 1–30 atm, τ_PSR = 0.3–10 ms. Inside that envelope, emissions are within ±15–35% of Cantera. The temperature and equilibrium composition are rigorous; the PSR/PFR kinetics are correlations.</p>
@@ -1355,6 +1397,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
   </div>;
   const status=(kbk)=>accurate?(kbk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:kbk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {kbk.err}</span>:kbk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA</span>:null):null;
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <InlineBusyBanner loading={accurate&&(bkO2.loading||bkCO2.loading)}/>
     <HelpBox title="ℹ️ Exhaust Analysis — How It Works"><p style={{margin:"0 0 6px"}}>Enter a <span style={hs.em}>measured exhaust O₂ or CO₂ concentration</span> (dry basis, %) from a stack analyzer or CEMS. The tool iteratively solves for the equivalence ratio (φ) that produces that exhaust composition.</p><p style={{margin:"0 0 6px"}}>Two inversions are shown side-by-side: <span style={hs.em}>Complete Combustion</span> (no dissociation — all C → CO₂, all H → H₂O) and <span style={hs.em}>Chemical Equilibrium</span> (Cantera full-Gibbs, includes CO, OH, NO at high T).</p><p style={{margin:0}}><span style={hs.warn}>Which to use:</span> Pick <strong style={{color:C.orange}}>Complete Combustion</strong> for <strong>stack measurements</strong> (gas has cooled, dissociation products recombined). Also pick it for <strong>combustor-exit measurements</strong> unless <em>combustor_air_frac = 1</em> (no dilution). The lower combustor_air_frac drops below 1, the better complete combustion represents reality. Use <strong style={{color:C.accent}}>Equilibrium</strong> only for in-flame readings at the primary zone with no dilution.</p></HelpBox>
     {accurate?null:modeToggle}
     {/* ============== FROM MEASURED O2 ============== */}
@@ -1625,6 +1668,7 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
   };
 
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <InlineBusyBanner loading={accurate&&loading}/>
     <HelpBox title="ℹ️ Gas Turbine Cycle — How It Works">
       <p style={{margin:"0 0 6px"}}>Computes the thermodynamic cycle of a GE <span style={hs.em}>LM6000PF</span> or <span style={hs.em}>LMS100PB+</span> aero-derivative under the specified ambient and load. Uses published performance correlations <span style={hs.em}>anchored exactly at each engine's published design point</span>; ambient density and load scaling follow typical aero-derivative behavior.</p>
       <p style={{margin:"0 0 6px"}}>The combustor firing temperature <span style={hs.em}>T4</span> is commanded by the deck. <span style={hs.em}>φ₄</span> (and FAR₄) is back-solved via Cantera <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>equilibrate("HP")</code> at (T3, P3) so equilibrium product T = T4 — these are the <span style={hs.em}>combustor-exit</span> values after dilution mixing.</p>
@@ -1809,6 +1853,31 @@ function EngineAmbientSidebar({
           <option value="LMS100PB+">LMS100PB+ DLE IC</option>
         </select>
       </div>
+      {/* ── LOAD — hero control (most frequently varied parameter) ───── */}
+      <div style={{background:`${C.accent}0F`,border:`1px solid ${C.accent}60`,borderRadius:6,padding:"8px 10px",marginTop:2}}>
+        <div style={{fontSize:9.5,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:".6px",marginBottom:4,lineHeight:1.25}}>Input or vary the gas turbine load</div>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+          <button onClick={()=>setLoadPct(Math.max(20,Math.min(100,Math.round(loadPct-10))))}
+            title="Decrease load by 10%"
+            style={{padding:"4px 10px",fontSize:13,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}80`,borderRadius:4,cursor:"pointer",lineHeight:1}}>−10</button>
+          <div style={{flex:1,position:"relative"}}>
+            <NumField value={loadPct} decimals={0} onCommit={v=>setLoadPct(Math.max(20,Math.min(100,+v)))}
+              style={{width:"100%",padding:"5px 6px",fontFamily:"'Barlow Condensed',sans-serif",color:C.accent,fontSize:18,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}80`,borderRadius:4,textAlign:"center",outline:"none",letterSpacing:".5px"}}/>
+            <span style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",fontSize:11,color:C.txtMuted,fontFamily:"monospace",pointerEvents:"none"}}>%</span>
+          </div>
+          <button onClick={()=>setLoadPct(Math.max(20,Math.min(100,Math.round(loadPct+10))))}
+            title="Increase load by 10%"
+            style={{padding:"4px 10px",fontSize:13,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}80`,borderRadius:4,cursor:"pointer",lineHeight:1}}>+10</button>
+        </div>
+        <input type="range" min="20" max="100" step="1" value={loadPct} onChange={e=>setLoadPct(+e.target.value)}
+          style={{width:"100%",accentColor:C.accent,display:"block"}}/>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:C.txtMuted,fontFamily:"monospace",marginTop:-1}}>
+          <span>20%</span><span>60%</span><span>100%</span>
+        </div>
+      </div>
+
+      {/* ── AMBIENT CONDITIONS ───────────────────────────────────────── */}
+      <div style={{fontSize:9,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginTop:4,marginBottom:2}}>Ambient Conditions</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
         <div>
           <label style={lbl} title="Ambient (inlet filter) pressure">P_amb ({uu(units,"P")})</label>
@@ -1822,18 +1891,13 @@ function EngineAmbientSidebar({
           <label style={lbl}>RH (%)</label>
           <NumField value={RH} decimals={0} onCommit={v=>setRH(Math.max(0,Math.min(100,+v)))} style={S.inp}/>
         </div>
-        <div>
-          <label style={lbl} title="% of max achievable power on this ambient day. Drives the bleed schedule when Bleed Mode = AUTO.">Load (%)</label>
-          <NumField value={loadPct} decimals={0} onCommit={v=>setLoadPct(Math.max(20,Math.min(100,+v)))} style={S.inp}/>
-        </div>
+        {isLMS?
+          <div>
+            <label style={lbl} title="Intercooler cooling-water supply temperature.">T_cool ({uu(units,"T")})</label>
+            <NumField value={uv(units,"T",Tcool)} decimals={1} onCommit={v=>setTcool(uvI(units,"T",v))} style={S.inp}/>
+          </div>
+          :<div/>}
       </div>
-      <div>
-        <input type="range" min="20" max="100" step="1" value={loadPct} onChange={e=>setLoadPct(+e.target.value)} style={{width:"100%",accentColor:C.accent,marginTop:-2}}/>
-      </div>
-      {isLMS&&<div>
-        <label style={lbl} title="Intercooler cooling-water supply temperature.">T_cool ({uu(units,"T")})</label>
-        <NumField value={uv(units,"T",Tcool)} decimals={1} onCommit={v=>setTcool(uvI(units,"T",v))} style={S.inp}/>
-      </div>}
       <div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
           <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Flame-zone share of combustor airflow. Sets T_Bulk / φ_Bulk only (not η). Default 0.88.">Comb. Air Frac (flame)</label>
@@ -2178,8 +2242,7 @@ export default function App(){
             <button onClick={()=>setShowHelp(true)} title="User Guide & Help" style={{padding:"6px 10px",fontSize:13,fontWeight:700,color:C.accent,background:`${C.accent}15`,border:`1px solid ${C.accent}30`,borderRadius:6,cursor:"pointer",fontFamily:"monospace"}}>?</button>
             <div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>
               {["SI","ENG"].map(u=>(<button key={u} onClick={()=>setUnits(u)} style={{padding:"6px 14px",fontSize:11,fontWeight:units===u?700:400,fontFamily:"'Barlow Condensed',sans-serif",color:units===u?C.bg:C.txtDim,background:units===u?C.accent:"transparent",border:"none",cursor:"pointer",letterSpacing:".5px",transition:"all .15s"}}>{u==="SI"?"SI (Metric)":"English (Imperial)"}</button>))}</div>
-            <button onClick={()=>exportToExcel(fuel,ox,phi,T0,P,units,panelState)} style={{padding:"6px 14px",fontSize:11,fontWeight:600,fontFamily:"'Barlow Condensed',sans-serif",color:C.bg,background:C.accent2,border:"none",borderRadius:6,cursor:"pointer",letterSpacing:".5px",display:"flex",alignItems:"center",gap:5}}>
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 12h12M8 2v8M5 7l3 3 3-3" stroke={C.bg} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>Export Excel</button>
+            <BusyGuardedExportButton onExport={()=>exportToExcel(fuel,ox,phi,T0,P,units,panelState)}/>
           </div></div>
 
         {/* TABS */}
