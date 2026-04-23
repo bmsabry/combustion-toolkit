@@ -1857,10 +1857,10 @@ function CombustorMappingPanel({
   //        face. The balance (1 − W36/W3) is late-liner film cooling and
   //        secondary-dilution air that bypasses the primary zone and
   //        rejoins downstream of the flame before T4.
-  // Default 0.82 reflects the LMS100 DLE design split. User-editable so
+  // Default 0.79 reflects the LMS100 DLE design split. User-editable so
   // hardware variants or off-design operation can be explored. All four
   // circuits' air allocations are computed off this W36 value.
-  const[w36w3,setW36w3]=useState(0.82);
+  const[w36w3,setW36w3]=useState(0.79);
 
   // ── Circuit air fractions (% of W36) ─────────────────────────────────────
   // Defaults reflect LMS100 DLE hardware. Sum must = 100 % (warning if not).
@@ -2000,7 +2000,7 @@ function CombustorMappingPanel({
 
     <HelpBox title="ℹ️ Combustor Mapping — How It Works">
       <p style={{margin:"0 0 6px"}}>The LMS100 DLE combustor has <span style={hs.em}>four fuel circuits</span> feeding its premixer: Inner Pilot (IP), Outer Pilot (OP), Inner Main (IM), and Outer Main (OM). This panel lets you pick an equivalence ratio for each circuit and see what fuel flow + flame temperature each delivers.</p>
-      <p style={{margin:"0 0 6px"}}>The <span style={hs.em}>combustor primary air</span> is <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 = (post-bleed compressor) × (W36/W3)</code> — the fraction of compressor discharge that enters the combustor dome and is split among the four circuits. The balance (1 − W36/W3) is late-liner film-cooling air that rejoins downstream of the flame. Default W36/W3 = 0.82 for LMS100 DLE; tune it on the knob below. Each circuit's fuel follows <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>m_fuel = FAR_stoich · φ · m_air</code>. The Outer Main is the <span style={hs.em}>float circuit</span> — its fuel is whatever's left from the cycle's total fuel after IP/OP/IM take their share, and its φ is back-solved.</p>
+      <p style={{margin:"0 0 6px"}}>The <span style={hs.em}>combustor primary air</span> is <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 = (post-bleed compressor) × (W36/W3)</code> — the fraction of compressor discharge that enters the combustor dome and is split among the four circuits. The balance (1 − W36/W3) is late-liner film-cooling air that rejoins downstream of the flame. Default W36/W3 = 0.79 for LMS100 DLE; tune it on the knob below. Each circuit's fuel follows <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>m_fuel = FAR_stoich · φ · m_air</code>. The Outer Main is the <span style={hs.em}>float circuit</span> — its fuel is whatever's left from the cycle's total fuel after IP/OP/IM take their share, and its φ is back-solved.</p>
       <p style={{margin:0}}><span style={hs.em}>T_fuel, humid-air composition, T3, P3</span>, and the <span style={hs.em}>total fuel flow</span> all come straight from the Cycle solution. Water injection (WFR &gt; 0) is distributed proportionally to each circuit's fuel flow, so every circuit sees the same WFR.</p>
     </HelpBox>
 
