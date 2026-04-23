@@ -170,7 +170,9 @@ def calc_combustor(
 def calc_combustor_mapping(
     body: CombustorMappingRequest, _: User = Depends(require_full_subscription)
 ) -> CombustorMappingResponse:
-    """LMS100 DLE 4-circuit reactor network: 4×(PSR+PFR) → MIX → bulk PFR."""
+    """LMS100 DLE 4-circuit correlation model: T_AFT per circuit +
+    anchored-linear emissions/dynamics prediction with Phi_OP multiplier
+    (HI only) + P3 power-law scaling for part load. No kinetic solver."""
     result = _run_in_pool(
         combustor_mapping.run,
         body.fuel,
@@ -189,18 +191,8 @@ def calc_combustor_mapping(
         body.phi_OP,
         body.phi_IM,
         body.m_fuel_total_kg_s,
-        body.tau_total_ms,
-        body.tau_psr_pilot_ms,
-        body.tau_pfr_pilot_ms,
-        body.tau_psr_main_ms,
-        body.tau_pfr_main_ms,
         body.WFR,
         body.water_mode,
-        body.mechanism,
-        body.pilot_NOx_anchor_phi,
-        body.pilot_NOx_anchor_ppm,
-        body.im_nox_adder_ppm,
-        body.om_nox_adder_ppm,
     )
     return CombustorMappingResponse(**result)
 

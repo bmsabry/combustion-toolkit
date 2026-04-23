@@ -572,12 +572,14 @@ class CycleResponse(BaseModel):
     oxidizer_humid_mol_pct: Dict[str, float]
 
 
-# ---------- combustor mapping (LMS100 DLE 4-circuit reactor network) ----------
+# ---------- combustor mapping (LMS100 DLE 4-circuit correlation model) ------
 class CombustorMappingRequest(BaseModel):
-    """Request for the 4-circuit combustor mapping endpoint.
+    """Request for the 4-circuit correlation-based combustor mapping.
 
-    Reactor topology: 4 × (PSR[τ_psr] → near-field PFR[τ_pfr_near])
-    → mix with cooling air → bulk PFR[τ_total − τ_psr − τ_pfr_near].
+    Computes per-circuit T_AFT via complete combustion, DT_Main, and
+    emissions + dynamics (NOx15, CO15, PX36_SEL, PX36_SEL_HI) from an
+    anchored linear model with a Phi_OP multiplier (HI only) and a P3
+    power-law scaling for part load. No reactor-network kinetics.
     """
     fuel: Dict[str, float] = Field(description="Fuel mole%")
     oxidizer: Dict[str, float] = Field(description="Humid-air mole% (from cycle)")
@@ -600,28 +602,9 @@ class CombustorMappingRequest(BaseModel):
     phi_OP: float = Field(ge=0, le=5.0)
     phi_IM: float = Field(ge=0, le=5.0)
     m_fuel_total_kg_s: float = Field(gt=0, description="Total combustor fuel (from cycle)")
-    # Residence-time budget (all ms). Pilots get a longer PSR, mains get a
-    # shorter near-field PFR. τ_total must be ≥ max(pilot_path, main_path).
-    tau_total_ms: float = Field(default=5.0, ge=5.0, le=100.0)
-    tau_psr_pilot_ms: float = Field(default=3.5, gt=0.0, le=20.0)
-    tau_pfr_pilot_ms: float = Field(default=1.5, gt=0.0, le=20.0)
-    tau_psr_main_ms:  float = Field(default=0.5, gt=0.0, le=10.0)
-    tau_pfr_main_ms:  float = Field(default=0.5, gt=0.0, le=20.0)
-    # Water injection (distributed ∝ fuel)
+    # Water injection (distributed ∝ fuel; currently only affects T_AFT solve)
     WFR: float = Field(default=0.0, ge=0.0, le=2.0)
     water_mode: str = Field(default="liquid", pattern="^(liquid|steam)$")
-    mechanism: str = Field(default="gri30", pattern="^(gri30|glarborg)$")
-    # Pilot NOx exp-fit anchors. Lower anchor is the 6 ppm floor at φ=0.25.
-    # Upper anchor phi is user-set; the ppm value is computed at runtime
-    # from a PSR+PFR at that phi with the current T3/P3/fuel/ox (so it
-    # tracks pressure and inlet T). If the request sets a ppm explicitly,
-    # that value overrides the computed one.
-    pilot_NOx_anchor_phi: float = Field(default=1.0, gt=0.25, le=2.0)
-    pilot_NOx_anchor_ppm: Optional[float] = Field(default=None, gt=6.0, le=5000.0)
-    # Fixed NOx adders (ppm, dry) applied on top of the kinetic PSR+PFR NO
-    # for the main circuits — calibrated to the LMS100 hardware.
-    im_nox_adder_ppm: float = Field(default=12.0, ge=0.0, le=500.0)
-    om_nox_adder_ppm: float = Field(default=17.2, ge=0.0, le=500.0)
 
 
 class CombustorMapCircuit(BaseModel):
@@ -629,21 +612,6 @@ class CombustorMapCircuit(BaseModel):
     m_air_kg_s: float
     m_fuel_kg_s: float
     T_AFT_complete_K: float
-    T_PSR_K: float
-    T_PFR_K: float
-    NOx_ppm_vd: float
-    CO_ppm_vd: float
-
-
-class CombustorMapExit(BaseModel):
-    T_K: float
-    NOx_ppm_15O2: float
-    CO_ppm_15O2: float
-    NOx_ppm_vd: float
-    CO_ppm_vd: float
-    O2_pct_dry: float
-    CO2_pct_dry: float
-    H2O_pct_wet: float
 
 
 class CombustorMapAirAccounting(BaseModel):
@@ -653,25 +621,41 @@ class CombustorMapAirAccounting(BaseModel):
     cooling_air_kg_s: float
 
 
-class CombustorMapTau(BaseModel):
-    psr_pilot: float
-    pfr_pilot: float
-    psr_main: float
-    pfr_main: float
-    pfr_bulk: float
-    total: float
+class CombustorMapDerived(BaseModel):
+    DT_Main_F: float
+    Tflame_K: float
+    Tflame_F: float
+    T3_F: float
+    P3_psia: float
+    C3_effective_pct: float
+    N2_pct: float
+    phi_OP_mult: float       # 1.0 for ≥0.55, 0.8 for ≤0.45, lerp between
+    pressure_ratio: float    # P3 / 638 psia
+
+
+class CombustorMapCorrelations(BaseModel):
+    NOx15: float
+    CO15: float
+    PX36_SEL: float
+    PX36_SEL_HI: float
+
+
+class CombustorMapReference(BaseModel):
+    values: Dict[str, float]
+    conditions: Dict[str, float]
 
 
 class CombustorMappingResponse(BaseModel):
-    exit: CombustorMapExit
-    circuits: Dict[str, CombustorMapCircuit]  # keys: IP, OP, IM, OM
+    circuits: Dict[str, CombustorMapCircuit]
     air_accounting: CombustorMapAirAccounting
-    tau_ms: CombustorMapTau
     phi_OM: float
     FAR_stoich: float
     fuel_residual_kg_s: float
-    mechanism: str = "gri30"
-    # Pilot NOx exp-fit anchor actually used for this call
-    pilot_NOx_anchor_phi: float = 1.0
-    pilot_NOx_anchor_ppm_used: float = 0.0
-    pilot_NOx_anchor_source: str = ""  # psr_at_phi_anchor | user_override | fallback_*
+    derived: CombustorMapDerived
+    # Final predictions at the user's operating point (after all 3 correction steps)
+    correlations: CombustorMapCorrelations
+    # After linear corrections + Phi_OP mult (HI only), BEFORE P3 scaling
+    correlations_100pct_load: CombustorMapCorrelations
+    # After linear corrections only, BEFORE any multipliers or scaling
+    correlations_linear: CombustorMapCorrelations
+    reference: CombustorMapReference

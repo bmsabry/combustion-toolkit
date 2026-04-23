@@ -1855,9 +1855,6 @@ function CombustorMappingPanel({
   // ── Controls ─────────────────────────────────────────────────────────────
   // W36/W3: fraction of post-bleed W3 entering the combustor dome.
   const[w36w3,setW36w3]=useState(0.89);
-  // τ_total (ms): total combustor residence time. PSR=0.5ms + PFR_near=1.5ms are fixed;
-  // bulk PFR runs for (τ_total − 2 ms). Default 5 ms for LMS100 DLE.
-  const[tauTotal,setTauTotal]=useState(5.0);
 
   // Circuit air fractions (% of flame zone air = W36 × com.Air Frac). Sum=100.
   const[fracIP,setFracIP]=useState(2.3);
@@ -1868,7 +1865,7 @@ function CombustorMappingPanel({
 
   // User-set φ for IP / OP / IM. OM is back-solved from total-fuel mass balance.
   const[phiIP,setPhiIP]=useState(0.25);
-  const[phiOP,setPhiOP]=useState(0.45);
+  const[phiOP,setPhiOP]=useState(0.65);
   const[phiIM,setPhiIM]=useState(0.50);
 
   // ── Cycle-provided state ─────────────────────────────────────────────────
@@ -1877,8 +1874,6 @@ function CombustorMappingPanel({
   const oxHumid=cycleResult?.oxidizer_humid_mol_pct||null;
   const m_air_post_bleed=cycleResult?.mdot_air_post_bleed_kg_s||cycleResult?.mdot_air_kg_s||0;
   const m_fuel_total=cycleResult?.mdot_fuel_kg_s||0;
-  // com.Air Frac — fraction of W36 in the flame zone (rest is effusion
-  // cooling, rejoins at the mix point). Default 0.89 LMS100 / 0.85 LM6000.
   const comAirFrac=cycleResult?.combustor_air_frac||0.89;
 
   // ── Derived air allocation (for display; backend authoritative) ──────────
@@ -1901,18 +1896,13 @@ function CombustorMappingPanel({
     frac_IP_pct: fracIP, frac_OP_pct: fracOP, frac_IM_pct: fracIM, frac_OM_pct: fracOM,
     phi_IP: Math.max(0, phiIP), phi_OP: Math.max(0, phiOP), phi_IM: Math.max(0, phiIM),
     m_fuel_total_kg_s: m_fuel_total,
-    tau_total_ms: Math.max(5.0, tauTotal),
-    tau_psr_pilot_ms: 3.5, tau_pfr_pilot_ms: 1.5,
-    tau_psr_main_ms:  0.5, tau_pfr_main_ms:  0.5,
     WFR, water_mode: waterMode,
-    mechanism: "gri30",
   };
   const bkMap = useBackendCalc(
     "combustor_mapping", mapArgs,
     !!(accurate && oxHumid && m_air_post_bleed > 0 && m_fuel_total > 0)
   );
-  const R = bkMap.data;  // shorthand for result
-  const exit = R?.exit;
+  const R = bkMap.data;
   const C_IP = R?.circuits?.IP, C_OP = R?.circuits?.OP, C_IM = R?.circuits?.IM, C_OM = R?.circuits?.OM;
   const phi_OM = R?.phi_OM || 0;
   const m_fuel_OM = C_OM?.m_fuel_kg_s || 0;
@@ -1920,6 +1910,9 @@ function CombustorMappingPanel({
   const m_fuel_OP_bk = C_OP?.m_fuel_kg_s || 0;
   const m_fuel_IM_bk = C_IM?.m_fuel_kg_s || 0;
   const fuel_residual = R?.fuel_residual_kg_s || 0;
+  const derived = R?.derived;
+  const corr    = R?.correlations;
+  const corr100 = R?.correlations_100pct_load;
 
   // ── Formatting helpers ───────────────────────────────────────────────────
   const fmtMdot = k => units==="SI" ? k.toFixed(4) : (k*2.20462).toFixed(3);
@@ -1949,9 +1942,9 @@ function CombustorMappingPanel({
     <InlineBusyBanner loading={accurate&&(bkCycle?.loading||bkMap.loading)}/>
 
     <HelpBox title="ℹ️ Combustor Mapping — How It Works">
-      <p style={{margin:"0 0 6px"}}>The LMS100 DLE combustor has <span style={hs.em}>four fuel circuits</span>: Inner Pilot (IP), Outer Pilot (OP), Inner Main (IM), Outer Main (OM). Set a φ for each circuit and the tool runs a <span style={hs.em}>reactor network</span>: <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>4 × (PSR 0.5 ms → PFR 1.5 ms) → mix (+ effusion cooling) → bulk PFR</code> out to τ_total (default 5 ms).</p>
-      <p style={{margin:"0 0 6px"}}>Air flow: <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 = W3 × (W36/W3)</code> enters the dome. Flame air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × com.Air Frac</code> (split across the 4 circuits). Effusion / cooling air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × (1 − com.Air Frac)</code> — it mixes with the flame products at the mix point (not a true bypass). Outer Main is the <span style={hs.em}>float</span> circuit: fuel = total − IP − OP − IM, φ back-solved.</p>
-      <p style={{margin:0}}>Pilots (IP, OP) are diffusion flames — premixed-PSR kinetics at lean pilot φ under-predict NOx. Reported pilot NOx uses an exp-fit: <strong>6 ppm floor for φ ≤ 0.25</strong> and upper anchor = <strong>PSR+PFR at φ = 1.0 under the current T3/P3/T_fuel</strong> (runtime-computed, so it tracks pressure and inlet T). Mains use the actual kinetic NOx plus their fixed adder. <span style={hs.em}>Combustor exit emissions</span> (bulk PFR exit) are the primary output — the per-circuit and air-accounting cards are intermediate detail.</p>
+      <p style={{margin:"0 0 6px"}}>The LMS100 DLE combustor has <span style={hs.em}>four fuel circuits</span>: Inner Pilot (IP), Outer Pilot (OP), Inner Main (IM), Outer Main (OM). Set a φ for each circuit and the tool computes per-circuit <strong>T_AFT</strong> (complete-combustion flame temperature), then <strong>DT_Main</strong> = T_AFT(OM) − T_AFT(IM).</p>
+      <p style={{margin:"0 0 6px"}}>Emissions (NOx@15%O₂, CO@15%O₂) and dynamics (<strong>PX36_SEL</strong> low-frequency, <strong>PX36_SEL_HI</strong> high-frequency) come from an <strong>anchored linear correlation</strong> calibrated at the LMS100 design point. The correction chain is: (1) linear corrections for DT_Main, Phi_OP, C3, N2, Tflame, T3 deltas from the reference; (2) a Phi_OP multiplier that drops from 1.0 to 0.8 linearly between φ_OP = 0.55 and 0.45 — applied <strong>only</strong> to PX36_SEL_HI; (3) a P3 power-law scaling <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>(P3/638)^exp</code> with exponents 0.467 / −1.0 / 0.44 / 0.44 for part-load bridging.</p>
+      <p style={{margin:0}}>Air flow: <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 = W3 × (W36/W3)</code> enters the dome. Flame air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × com.Air Frac</code> (split across the 4 circuits). Effusion / cooling air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × (1 − com.Air Frac)</code>. Outer Main is the <span style={hs.em}>float</span> circuit: fuel = total − IP − OP − IM, φ back-solved.</p>
     </HelpBox>
 
     {!cycleResult?
@@ -1962,7 +1955,7 @@ function CombustorMappingPanel({
       :<>
 
       {/* ═════════════════════════════════════════════════════════════════
-          1. CONTROLS — inlet state, knobs, and circuit settings
+          1. CONTROLS
          ═════════════════════════════════════════════════════════════════ */}
       <div style={S.card}>
         <div style={S.cardT}>1 · Combustor Inlet & Controls</div>
@@ -1978,34 +1971,19 @@ function CombustorMappingPanel({
           {WFR>0?<div style={{padding:"5px 9px",background:C.bg2,borderRadius:5,border:`1px solid ${C.violet}40`}}><span style={{color:C.txtDim}}>WFR:</span> <strong style={{color:C.violet}}>{WFR.toFixed(3)}</strong> <span style={{color:C.txtMuted,fontSize:10}}>({waterMode})</span></div>:null}
         </div>
 
-        {/* W36/W3 + τ_total knobs, side by side */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-          <div style={{padding:"9px 11px",background:`${C.accent}0A`,border:`1px solid ${C.accent}45`,borderRadius:6}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
-              <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px"}}>W36 / W3</div>
-              <div style={{display:"flex",alignItems:"center",gap:3}}>
-                <button onClick={()=>setW36w3(v=>Math.max(0,+(v-0.01).toFixed(4)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>−</button>
-                <NumField value={w36w3} decimals={3} onCommit={v=>setW36w3(Math.max(0,Math.min(1,+v)))}
-                  style={{width:66,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-                <button onClick={()=>setW36w3(v=>Math.min(1,+(v+0.01).toFixed(4)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>+</button>
-              </div>
-            </div>
+        {/* W36/W3 knob (full width) */}
+        <div style={{padding:"9px 11px",background:`${C.accent}0A`,border:`1px solid ${C.accent}45`,borderRadius:6,marginBottom:10,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <div style={{minWidth:160}}>
+            <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px"}}>W36 / W3</div>
             <div style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic"}}>fraction of W3 → combustor dome</div>
-            <div style={{marginTop:5,fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}}>W36 = {fmtMdot(m_air_W36)} {mdotU}</div>
           </div>
-          <div style={{padding:"9px 11px",background:`${C.violet}0A`,border:`1px solid ${C.violet}45`,borderRadius:6}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
-              <div style={{fontSize:10,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1px"}}>τ_total (ms)</div>
-              <div style={{display:"flex",alignItems:"center",gap:3}}>
-                <button onClick={()=>setTauTotal(v=>Math.max(5.0,+(v-0.5).toFixed(2)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.violet,background:"transparent",border:`1px solid ${C.violet}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>−</button>
-                <NumField value={tauTotal} decimals={2} onCommit={v=>setTauTotal(Math.max(5.0,Math.min(100,+v)))}
-                  style={{width:66,padding:"3px 6px",fontFamily:"monospace",color:C.violet,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-                <button onClick={()=>setTauTotal(v=>Math.min(100,+(v+0.5).toFixed(2)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.violet,background:"transparent",border:`1px solid ${C.violet}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>+</button>
-              </div>
-            </div>
-            <div style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic"}}>total combustor residence time</div>
-            <div style={{marginTop:5,fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}}>pilot path 5.0 · main path 1.0 · bulk = {Math.max(0,tauTotal-5.0).toFixed(2)} ms</div>
+          <div style={{display:"flex",alignItems:"center",gap:3}}>
+            <button onClick={()=>setW36w3(v=>Math.max(0,+(v-0.01).toFixed(4)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>−</button>
+            <NumField value={w36w3} decimals={3} onCommit={v=>setW36w3(Math.max(0,Math.min(1,+v)))}
+              style={{width:66,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+            <button onClick={()=>setW36w3(v=>Math.min(1,+(v+0.01).toFixed(4)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>+</button>
           </div>
+          <div style={{fontSize:11,color:C.txtDim,fontFamily:"monospace"}}>W36 = {fmtMdot(m_air_W36)} {mdotU}</div>
         </div>
 
         {/* Per-circuit controls (air split % and φ) */}
@@ -2048,51 +2026,72 @@ function CombustorMappingPanel({
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════
-          2. COMBUSTOR EXIT — the primary output (bulk PFR exit)
+          2. EMISSIONS & DYNAMICS — headline card (correlation model)
          ═════════════════════════════════════════════════════════════════ */}
       <div style={{...S.card,border:`2px solid ${C.accent}`,background:`linear-gradient(180deg, ${C.accent}08 0%, ${C.bg} 60%)`}}>
         <div style={{...S.cardT,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style={{color:C.accent,fontSize:12}}>★ 2 · Combustor Exit — Emissions at the Bulk-PFR Exit</span>
-          <span style={{fontSize:9.5,fontWeight:500,color:C.txtMuted,fontFamily:"monospace",letterSpacing:0,textTransform:"none"}}>After 4 × (PSR → PFR) + mix + bulk PFR (τ_total = {tauTotal.toFixed(1)} ms)</span>
+          <span style={{color:C.accent,fontSize:12}}>★ 2 · Emissions & Dynamics (correlation @ current operating point)</span>
+          <span style={{fontSize:9.5,fontWeight:500,color:C.txtMuted,fontFamily:"monospace",letterSpacing:0,textTransform:"none"}}>linear + Phi_OP mult (HI only) + (P3/638)^exp</span>
         </div>
 
-        {!exit
+        {!corr
           ? <div style={{padding:"18px",textAlign:"center",color:C.txtDim,fontSize:11,fontStyle:"italic"}}>{bkMap.loading?"Calculating...":bkMap.err?`Error: ${bkMap.err}`:"Waiting for inputs…"}</div>
           : <>
-            {/* Three big headline numbers */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:8}}>
+            {/* 4 big numbers */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10,marginBottom:10}}>
               <div style={{padding:"12px 14px",background:C.bg2,border:`1px solid ${C.accent}40`,borderRadius:8,textAlign:"center"}}>
                 <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:3}}>NOx @ 15% O₂</div>
-                <div style={{fontSize:26,color:C.accent,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{exit.NOx_ppm_15O2.toFixed(2)}</div>
-                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>ppm (dry, 15% O₂)</div>
+                <div style={{fontSize:24,color:C.accent,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr.NOx15.toFixed(2)}</div>
+                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>ppm</div>
               </div>
               <div style={{padding:"12px 14px",background:C.bg2,border:`1px solid ${C.accent2}40`,borderRadius:8,textAlign:"center"}}>
                 <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:3}}>CO @ 15% O₂</div>
-                <div style={{fontSize:26,color:C.accent2,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{exit.CO_ppm_15O2.toFixed(2)}</div>
-                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>ppm (dry, 15% O₂)</div>
+                <div style={{fontSize:24,color:C.accent2,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr.CO15.toFixed(2)}</div>
+                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>ppm</div>
               </div>
               <div style={{padding:"12px 14px",background:C.bg2,border:`1px solid ${C.warm}40`,borderRadius:8,textAlign:"center"}}>
-                <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:3}}>T_exit</div>
-                <div style={{fontSize:26,color:C.warm,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{fmtT(exit.T_K)}</div>
-                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>{uu(units,"T")}</div>
+                <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:3}}>PX36_SEL</div>
+                <div style={{fontSize:24,color:C.warm,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr.PX36_SEL.toFixed(3)}</div>
+                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>low-freq dynamics</div>
+              </div>
+              <div style={{padding:"12px 14px",background:C.bg2,border:`1px solid ${C.violet}40`,borderRadius:8,textAlign:"center"}}>
+                <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:3}}>PX36_SEL_HI</div>
+                <div style={{fontSize:24,color:C.violet,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr.PX36_SEL_HI.toFixed(3)}</div>
+                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>high-freq dynamics</div>
               </div>
             </div>
-            {/* Supporting composition numbers */}
-            <div style={{display:"flex",gap:8,flexWrap:"wrap",fontFamily:"monospace",fontSize:11,color:C.txtDim}}>
-              <div style={{padding:"4px 10px",background:C.bg2,borderRadius:4,border:`1px solid ${C.border}`}}>O₂ (dry): <strong style={{color:C.txt}}>{exit.O2_pct_dry.toFixed(2)} %</strong></div>
-              <div style={{padding:"4px 10px",background:C.bg2,borderRadius:4,border:`1px solid ${C.border}`}}>CO₂ (dry): <strong style={{color:C.txt}}>{exit.CO2_pct_dry.toFixed(2)} %</strong></div>
-              <div style={{padding:"4px 10px",background:C.bg2,borderRadius:4,border:`1px solid ${C.border}`}}>H₂O (wet): <strong style={{color:C.txt}}>{exit.H2O_pct_wet.toFixed(2)} %</strong></div>
-              <div style={{padding:"4px 10px",background:C.bg2,borderRadius:4,border:`1px solid ${C.border}`}}>NOx (dry): <strong style={{color:C.txt}}>{exit.NOx_ppm_vd.toFixed(2)} ppm</strong></div>
-              <div style={{padding:"4px 10px",background:C.bg2,borderRadius:4,border:`1px solid ${C.border}`}}>CO (dry): <strong style={{color:C.txt}}>{exit.CO_ppm_vd.toFixed(2)} ppm</strong></div>
+
+            {/* Live inputs to the correlation */}
+            <div style={{padding:"8px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:9.5,color:C.txtDim,textTransform:"uppercase",letterSpacing:".5px",marginBottom:5}}>Correlation inputs · reference → live · Δ</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4, 1fr)",gap:6,fontSize:10.5,fontFamily:"monospace"}}>
+                <div><span style={{color:C.txtDim}}>DT_Main:</span> <strong style={{color:C.warm}}>{derived.DT_Main_F.toFixed(1)} °F</strong> <span style={{color:C.txtMuted}}>(ref 450)</span></div>
+                <div><span style={{color:C.txtDim}}>Tflame (mass-wt avg):</span> <strong style={{color:C.warm}}>{derived.Tflame_F.toFixed(0)} °F</strong> <span style={{color:C.txtMuted}}>(ref 3035)</span></div>
+                <div><span style={{color:C.txtDim}}>T3:</span> <strong style={{color:C.accent}}>{derived.T3_F.toFixed(0)} °F</strong> <span style={{color:C.txtMuted}}>(ref 700)</span></div>
+                <div><span style={{color:C.txtDim}}>P3:</span> <strong style={{color:C.accent}}>{derived.P3_psia.toFixed(1)} psia</strong> <span style={{color:C.txtMuted}}>(ref 638)</span></div>
+                <div><span style={{color:C.txtDim}}>C3_eff:</span> <strong style={{color:C.accent2}}>{derived.C3_effective_pct.toFixed(2)} %</strong> <span style={{color:C.txtMuted}}>(ref 7.5)</span></div>
+                <div><span style={{color:C.txtDim}}>N2 (fuel):</span> <strong style={{color:C.accent2}}>{derived.N2_pct.toFixed(2)} %</strong> <span style={{color:C.txtMuted}}>(ref 0.5)</span></div>
+                <div><span style={{color:C.txtDim}}>Phi_OP:</span> <strong style={{color:C.orange}}>{phiOP.toFixed(3)}</strong> <span style={{color:C.txtMuted}}>(ref 0.65)</span></div>
+                <div><span style={{color:C.txtDim}}>Phi_OP mult (HI):</span> <strong style={{color:derived.phi_OP_mult<1?C.warm:C.accent}}>{derived.phi_OP_mult.toFixed(3)}</strong> <span style={{color:C.txtMuted}}>(1 if ≥0.55)</span></div>
+              </div>
+              <div style={{marginTop:6,padding:"4px 8px",background:C.bg,borderRadius:4,fontSize:10,color:C.txtDim,fontFamily:"monospace",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span>Pressure ratio (P3/638): <strong style={{color:C.accent}}>{derived.pressure_ratio.toFixed(4)}</strong> — scales all 4 outputs as (ratio)^exp; exp = 0.467 / −1.0 / 0.44 / 0.44</span>
+                <span style={{color:C.txtMuted}}>@ 100% load: {corr100.NOx15.toFixed(1)} / {corr100.CO15.toFixed(1)} / {corr100.PX36_SEL.toFixed(2)} / {corr100.PX36_SEL_HI.toFixed(3)}</span>
+              </div>
             </div>
           </>}
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════
-          3. PER-CIRCUIT DETAILS (intermediate reactor-network steps)
+          3. DT_Main (single-line callout) + per-circuit T_AFT table
          ═════════════════════════════════════════════════════════════════ */}
       <div style={S.card}>
-        <div style={S.cardT}>3 · Per-Circuit Detail (PSR + near-field PFR, before mix)</div>
+        <div style={{...S.cardT,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span>3 · Per-Circuit Flame Temperatures</span>
+          {derived?<div style={{padding:"4px 10px",background:`${C.warm}14`,border:`1px solid ${C.warm}55`,borderRadius:5,fontSize:11,fontFamily:"monospace",color:C.txtDim,fontWeight:500,textTransform:"none",letterSpacing:0}}>
+            <strong style={{color:C.warm}}>DT_Main</strong> (OM − IM) = <strong style={{color:C.warm,fontSize:13}}>{derived.DT_Main_F.toFixed(1)} °F</strong>
+          </div>:null}
+        </div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"monospace"}}>
             <thead>
@@ -2102,10 +2101,6 @@ function CombustorMappingPanel({
                 <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>m_air ({mdotU})</th>
                 <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>m_fuel ({mdotU})</th>
                 <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>T_AFT ({uu(units,"T")})</th>
-                <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>T_PSR ({uu(units,"T")})</th>
-                <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>T_PFR ({uu(units,"T")})</th>
-                <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>NOx (ppm)</th>
-                <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>CO (ppm)</th>
               </tr>
             </thead>
             <tbody>
@@ -2123,18 +2118,14 @@ function CombustorMappingPanel({
                   <td style={{padding:"6px 8px",textAlign:"right",color,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{row?row.phi.toFixed(4):"—"}</td>
                   <td style={{padding:"6px 8px",textAlign:"right",color:C.txt,borderBottom:`1px solid ${C.border}40`}}>{row?fmtMdot(row.m_air_kg_s):"—"}</td>
                   <td style={{padding:"6px 8px",textAlign:"right",color:C.accent2,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{row?fmtMdot(row.m_fuel_kg_s):"—"}</td>
-                  <td style={{padding:"6px 8px",textAlign:"right",color:C.orange,borderBottom:`1px solid ${C.border}40`}}>{row?fmtT(row.T_AFT_complete_K):"—"}</td>
-                  <td style={{padding:"6px 8px",textAlign:"right",color:C.warm,borderBottom:`1px solid ${C.border}40`}}>{row?fmtT(row.T_PSR_K):"—"}</td>
-                  <td style={{padding:"6px 8px",textAlign:"right",color:C.warm,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{row?fmtT(row.T_PFR_K):"—"}</td>
-                  <td style={{padding:"6px 8px",textAlign:"right",color:C.accent,fontWeight:700,borderBottom:`1px solid ${C.border}40`}}>{row?row.NOx_ppm_vd.toFixed(2):"—"}</td>
-                  <td style={{padding:"6px 8px",textAlign:"right",color:C.accent2,borderBottom:`1px solid ${C.border}40`}}>{row?row.CO_ppm_vd.toFixed(2):"—"}</td>
+                  <td style={{padding:"6px 8px",textAlign:"right",color:C.orange,fontWeight:700,borderBottom:`1px solid ${C.border}40`}}>{row?fmtT(row.T_AFT_complete_K):"—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
         <div style={{marginTop:6,fontSize:10,color:C.txtMuted,fontFamily:"monospace"}}>
-          Pilot NOx: <strong>6 ppm</strong> floor for φ ≤ 0.25; exp-fit to upper anchor (<strong>{R?.pilot_NOx_anchor_phi?.toFixed(2)||"1.00"}, {R?.pilot_NOx_anchor_ppm_used?.toFixed(1)||"—"} ppm</strong>, from PSR+PFR at φ=1 with current T3/P3). Mains: real PSR+PFR kinetic NO + fixed adder. T_AFT = complete-combustion reference (no dissociation).
+          T_AFT = complete-combustion adiabatic flame temperature (no dissociation). DT_Main = T_AFT(OM) − T_AFT(IM) in °F drives the emissions &amp; dynamics correlation.
         </div>
       </div>
 
