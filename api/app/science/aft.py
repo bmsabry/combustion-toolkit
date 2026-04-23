@@ -20,6 +20,7 @@ def run(
     T_air_K: Optional[float] = None,
     WFR: float = 0.0,
     water_mode: str = "liquid",
+    T_products_K: Optional[float] = None,
 ) -> dict:
     """Equilibrium adiabatic flame temp with optional heat-loss fraction.
 
@@ -87,6 +88,24 @@ def run(
 
     FAR, FAR_stoich, AFR, AFR_stoich = compute_ratios(fuel_pct, ox_pct, phi)
 
+    # Optional second equilibrium at a target product temperature (e.g. T4 = turbine
+    # inlet from the cycle). Same elemental composition, re-equilibrated at fixed (T,P).
+    # Used to show the diluted/cooled product mix the turbine actually sees, which
+    # differs from the hot adiabatic flame composition above.
+    mole_fracs_at_T: Dict[str, float] = {}
+    if T_products_K is not None and float(T_products_K) > 0:
+        try:
+            gas_T = ct.Solution("gri30.yaml")
+            # Reuse the equilibrated product elemental state, then re-equilibrate at fixed T,P.
+            gas_T.TPX = float(T_products_K), gas.P, gas.X
+            gas_T.equilibrate("TP")
+            mole_fracs_at_T = {
+                s: float(v) for s, v in zip(gas_T.species_names, gas_T.X) if v > 1e-10
+            }
+        except Exception:
+            # Never let the secondary calculation break the primary AFT response.
+            mole_fracs_at_T = {}
+
     return {
         "T_ad": float(T_ad),
         "T_actual": float(T_actual),
@@ -102,4 +121,6 @@ def run(
         "FAR": FAR,
         "AFR_stoich": AFR_stoich,
         "AFR": AFR,
+        "T_products_K": float(T_products_K) if T_products_K is not None else None,
+        "mole_fractions_at_T_products": mole_fracs_at_T,
     }

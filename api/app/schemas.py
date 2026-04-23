@@ -126,6 +126,12 @@ class AFTRequest(BaseCalcRequest):
     # streams are mixed adiabatically before equilibrium.
     T_fuel_K: Optional[float] = Field(default=None, gt=0, description="Fuel inlet T in K")
     T_air_K: Optional[float] = Field(default=None, gt=0, description="Air inlet T in K")
+    # Optional secondary equilibration at a target product temperature (e.g. T4
+    # from the cycle). When provided, the response also includes
+    # `mole_fractions_at_T_products` re-equilibrated at fixed (T,P).
+    T_products_K: Optional[float] = Field(
+        default=None, gt=0, description="Target product T (K) for secondary equilibrium (e.g. T4)"
+    )
 
 
 class AFTResponse(BaseModel):
@@ -143,6 +149,8 @@ class AFTResponse(BaseModel):
     FAR: float
     AFR_stoich: float
     AFR: float
+    T_products_K: Optional[float] = None
+    mole_fractions_at_T_products: Dict[str, float] = Field(default_factory=dict)
 
 
 class FlameSpeedRequest(BaseCalcRequest):

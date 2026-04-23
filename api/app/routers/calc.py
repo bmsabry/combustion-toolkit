@@ -63,6 +63,7 @@ def calc_aft(body: AFTRequest, _: User = Depends(require_full_subscription)) -> 
         body.T_air_K,
         body.WFR,
         body.water_mode,
+        body.T_products_K,
     )
     return AFTResponse(**result)
 

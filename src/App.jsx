@@ -337,7 +337,58 @@ function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new()
   // Adiabatic fuel/air mix T that's used everywhere downstream
   const T_mix_phi=mixT(fuel,ox,phi,T_fuel??T0,T_air??T0);
   const aft=calcAFTx(fuel,ox,phi,T_mix_phi,P,combMode);
-const s1=[["COMBUSTION ENGINEERING TOOLKIT — ProReadyEngineer LLC"],["Generated: "+new Date().toISOString().slice(0,16)],["Unit System: "+(u==="SI"?"SI (Metric)":"English (Imperial)")],["Combustion Mode: "+(combMode==="equilibrium"?"Chemical Equilibrium (with dissociation)":"Complete Combustion (no dissociation)")],[],["═══ FUEL COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(fuel).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OXIDIZER COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(ox).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OPERATING CONDITIONS (INPUTS) ═══"],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(fp.AFR_mass/phi).toFixed(4),uu(u,"afr_mass")],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["Adiabatic Mixed Inlet T (T_mixed @ φ)",+uv(u,"T",T_mix_phi).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],["Water/Fuel Mass Ratio (WFR)",+(+WFR).toFixed(3),"kg_water/kg_fuel"],["Water Injection Mode",WFR>0?(waterMode==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],[],["═══ COMBUSTION PROPERTIES (OUTPUTS) ═══"],["Parameter","Value","Unit"],["Adiabatic Flame Temperature",+uv(u,"T",aft.T_ad).toFixed(1),uu(u,"T")],["Lower Heating Value (mass)",+uv(u,"energy_mass",fp.LHV_mass).toFixed(4),uu(u,"energy_mass")],["Lower Heating Value (volumetric)",+uv(u,"energy_vol",fp.LHV_vol).toFixed(4),uu(u,"energy_vol")],["Higher Heating Value (mass)",+uv(u,"energy_mass",fp.HHV_mass).toFixed(4),uu(u,"energy_mass")],["Higher Heating Value (volumetric)",+uv(u,"energy_vol",fp.HHV_vol).toFixed(4),uu(u,"energy_vol")],["Fuel Molecular Weight",+fp.MW_fuel.toFixed(4),"g/mol"],["Specific Gravity",+fp.SG.toFixed(5),"—"],["Wobbe Index",+uv(u,"energy_vol",fp.WI).toFixed(2),uu(u,"energy_vol")],["Stoichiometric Air/Fuel (mass)",+fp.AFR_mass.toFixed(4),uu(u,"afr_mass")],["Stoichiometric Air/Fuel (vol)",+fp.AFR_vol.toFixed(4),"mol/mol"],["Stoichiometric O₂ Demand",+fp.stoichO2.toFixed(5),"mol O₂ / mol fuel"],[],["═══ EQUILIBRIUM PRODUCTS — WET BASIS (mol%) ═══"],["Species","Mole Fraction (%)"],...Object.entries(aft.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ EQUILIBRIUM PRODUCTS — DRY BASIS (mol%, H₂O removed) ═══"],["Species","Mole Fraction (%)"],...Object.entries(dryBasis(aft.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ AFT vs φ SWEEP ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed_inlet ("+uu(u,"T")+")","Adiabatic Flame Temperature ("+uu(u,"T")+")"],...Array.from({length:18},(_,i)=>{const p=0.3+i*0.04;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);const a=calcAFTx(fuel,ox,p,Tm,P,combMode);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"T",a.T_ad).toFixed(1)];})];const ws1=XLSX.utils.aoa_to_sheet(s1);ws1["!cols"]=[{wch:32},{wch:20},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,"Flame Temp & Props");
+  // T4 (turbine inlet) re-equilibration for the products section. Only computed if Cycle has been run.
+  const T4_K=cycleResult?.T4_K||null;
+  const T_fuel_eff=T_fuel??T0;
+  // MWI uses the same formula as the UI card: LHV_vol/√(SG·T_fuel). SI: MJ/m³·√K. ENG: BTU/scf·√°R.
+  const MWI=(u==="SI")?(fp.LHV_vol/Math.sqrt(Math.max(fp.SG,1e-9)*T_fuel_eff)):((fp.LHV_vol*26.839)/Math.sqrt(Math.max(fp.SG,1e-9)*T_fuel_eff*1.8));
+  const MWI_unit=(u==="SI")?"MJ/m³·√K":"BTU/scf·√°R";
+  // Re-equilibrate at T4 if available (free-mode 6-reaction Newton solver). Returns mol%, sums to 100.
+  let productsAtT4=null;
+  if(T4_K&&aft.products&&Object.keys(aft.products).length){
+    try{const _prod0={};for(const[sp,pct]of Object.entries(aft.products))_prod0[sp]=pct/100;
+      const _eq=equilibrateAtT(_prod0,T4_K,P,phi>1);
+      const _tot=Object.values(_eq).reduce((a,b)=>a+Math.max(0,b),0);
+      if(_tot>0){const _o={};for(const[sp,n]of Object.entries(_eq)){if(n>0&&n/_tot>1e-5)_o[sp]=n/_tot*100;}productsAtT4=Object.keys(_o).length?_o:null;}
+    }catch(e){productsAtT4=null;}
+  }
+const s1=[["COMBUSTION ENGINEERING TOOLKIT — ProReadyEngineer LLC"],["Generated: "+new Date().toISOString().slice(0,16)],["Unit System: "+(u==="SI"?"SI (Metric)":"English (Imperial)")],["Combustion Mode: "+(combMode==="equilibrium"?"Chemical Equilibrium (with dissociation)":"Complete Combustion (no dissociation)")],[],["═══ FUEL COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(fuel).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OXIDIZER COMPOSITION (mol%) ═══"],["Species","Mole %"],...Object.entries(ox).filter(([_,v])=>v>0).map(([sp,v])=>[fmt(sp),+v.toFixed(2)]),[],["═══ OPERATING CONDITIONS (INPUTS) ═══"],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(fp.AFR_mass/phi).toFixed(4),uu(u,"afr_mass")],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel_eff).toFixed(2),uu(u,"T")],["Adiabatic Mixed Inlet T (T_mixed @ φ)",+uv(u,"T",T_mix_phi).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],["Water/Fuel Mass Ratio (WFR)",+(+WFR).toFixed(3),"kg_water/kg_fuel"],["Water Injection Mode",WFR>0?(waterMode==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],[],
+  ["═══ FUEL PROPERTIES (composition + T_fuel only — no φ dependence) ═══"],["Parameter","Value","Unit"],
+  ["Lower Heating Value (mass)",+uv(u,"energy_mass",fp.LHV_mass).toFixed(4),uu(u,"energy_mass")],
+  ["Lower Heating Value (volumetric)",+uv(u,"energy_vol",fp.LHV_vol).toFixed(4),uu(u,"energy_vol")],
+  ["Higher Heating Value (mass)",+uv(u,"energy_mass",fp.HHV_mass).toFixed(4),uu(u,"energy_mass")],
+  ["Higher Heating Value (volumetric)",+uv(u,"energy_vol",fp.HHV_vol).toFixed(4),uu(u,"energy_vol")],
+  ["Fuel Molecular Weight",+fp.MW_fuel.toFixed(4),"g/mol"],
+  ["Specific Gravity",+fp.SG.toFixed(5),"—"],
+  ["Wobbe Index (WI = HHV_vol/√SG)",+uv(u,"energy_vol",fp.WI).toFixed(2),uu(u,"energy_vol")],
+  ["Modified Wobbe Index (MWI = LHV_vol/√(SG·T_fuel))",+MWI.toFixed(u==="SI"?4:3),MWI_unit],
+  ["Stoichiometric Air/Fuel (mass)",+fp.AFR_mass.toFixed(4),uu(u,"afr_mass")],
+  ["Stoichiometric Air/Fuel (vol)",+fp.AFR_vol.toFixed(4),"mol/mol"],
+  ["Stoichiometric O₂ Demand",+fp.stoichO2.toFixed(5),"mol O₂ / mol fuel"],[],
+  ["═══ FLAME PROPERTIES (depend on φ, oxidizer, conditions) ═══"],["Parameter","Value","Unit"],
+  ["Adiabatic Flame Temperature (T_Bulk)",+uv(u,"T",aft.T_ad).toFixed(1),uu(u,"T")],
+  ["T₄ (Turbine Inlet, from Cycle)",T4_K?+uv(u,"T",T4_K).toFixed(1):"n/a",T4_K?uu(u,"T"):"—"],[],
+  ...(productsAtT4?[
+    ["═══ EQUILIBRIUM PRODUCTS — WET BASIS at T₄ (mol%) ═══"],
+    ["Note","Re-equilibrated at T₄ = "+(+uv(u,"T",T4_K).toFixed(1))+" "+uu(u,"T")+" (turbine inlet, dilution-cooled). NO and OH equilibrium are sensitive to product T.",""],
+    ["Species","Mole Fraction (%)"],
+    ...Object.entries(productsAtT4).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],
+    ["═══ EQUILIBRIUM PRODUCTS — DRY BASIS at T₄ (mol%, H₂O removed) ═══"],
+    ["Species","Mole Fraction (%)"],
+    ...Object.entries(dryBasis(productsAtT4)).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],
+    ["═══ EQUILIBRIUM PRODUCTS — WET BASIS at T_ad (reference, hot flame zone) ═══"],
+    ["Species","Mole Fraction (%)"],
+    ...Object.entries(aft.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],
+  ]:[
+    ["═══ EQUILIBRIUM PRODUCTS — WET BASIS at T_ad (mol%) ═══"],
+    ["Note","Run the Cycle panel and re-export to also see products re-equilibrated at T₄ (turbine inlet).",""],
+    ["Species","Mole Fraction (%)"],
+    ...Object.entries(aft.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],
+    ["═══ EQUILIBRIUM PRODUCTS — DRY BASIS at T_ad (mol%, H₂O removed) ═══"],
+    ["Species","Mole Fraction (%)"],
+    ...Object.entries(dryBasis(aft.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],
+  ]),
+  ["═══ AFT vs φ SWEEP ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed_inlet ("+uu(u,"T")+")","Adiabatic Flame Temperature ("+uu(u,"T")+")"],...Array.from({length:18},(_,i)=>{const p=0.3+i*0.04;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);const a=calcAFTx(fuel,ox,p,Tm,P,combMode);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"T",a.T_ad).toFixed(1)];})];const ws1=XLSX.utils.aoa_to_sheet(s1);ws1["!cols"]=[{wch:42},{wch:20},{wch:18}];XLSX.utils.book_append_sheet(wb,ws1,"Flame Temp & Props");
 const SL=calcSL(fuel,phi,T_mix_phi,P)*100;const bo=calcBlowoff(fuel,phi,T_mix_phi,P,velocity,Lchar);
 // Premixer stability derived quantities (SL_ms = m/s, SL export is in user units; internal calcs use m/s).
 const _SLms=SL/100;
@@ -744,11 +795,15 @@ const atmToBar=(P)=>P*1.01325;
 function adaptBackendAFT(r){
   if(!r)return null;
   const products={};for(const[k,v]of Object.entries(r.mole_fractions||{})){if(v>1e-5)products[k]=v*100;}
-  return{T_ad:r.T_actual||r.T_ad,products,fromBackend:true};
+  // Optional secondary equilibrium at T4 (turbine-inlet T). Only present when the request
+  // included T_products_K and the backend successfully re-equilibrated at that T.
+  const _at_T={};for(const[k,v]of Object.entries(r.mole_fractions_at_T_products||{})){if(v>1e-5)_at_T[k]=v*100;}
+  const productsAtT4=Object.keys(_at_T).length?_at_T:null;
+  return{T_ad:r.T_actual||r.T_ad,products,productsAtT4,T_products_K:r.T_products_K||null,fromBackend:true};
 }
 
 /* ══════════════════ PANELS ══════════════════ */
-function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setCombMode}){
+function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setCombMode,T4_K}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   const Tair=T0;
@@ -756,9 +811,33 @@ function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setC
   // this collapses to T0 (old single-inlet behavior).
   const Tmix=useMemo(()=>mixT(fuel,ox,phi,Tfuel,Tair),[fuel,ox,phi,Tfuel,Tair]);
   const localResult=useMemo(()=>calcAFTx(fuel,ox,phi,Tmix,P,combMode),[fuel,ox,phi,Tmix,P,combMode]);
-  const bk=useBackendCalc("aft",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),mode:"adiabatic",heat_loss_fraction:0,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate);
+  // T4 (turbine-inlet) is plumbed in from the cycle. When present we pass it to the
+  // backend so it returns a second equilibrium at T4 (cooled-products composition the
+  // turbine actually sees), and we re-equilibrate locally for the free-mode path below.
+  const T4_for_backend=(T4_K&&T4_K>0)?T4_K:null;
+  const bk=useBackendCalc("aft",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),mode:"adiabatic",heat_loss_fraction:0,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode,T_products_K:T4_for_backend},accurate);
   const adapted=adaptBackendAFT(bk.data);
   const result=accurate&&adapted?adapted:localResult;
+  // Free-mode equilibrium at T4: same elemental composition as the local AFT solution,
+  // but re-equilibrated at the (cooler) turbine-inlet temperature. Uses the existing
+  // 6-reaction Newton solver; pass mole fractions (sum≈1) as the consistent basis.
+  const productsAtT4Free=useMemo(()=>{
+    if(accurate||!T4_for_backend||!localResult||!localResult.products)return null;
+    const prod0={};for(const[sp,pct]of Object.entries(localResult.products))prod0[sp]=pct/100;
+    const isRich=phi>1;
+    try{
+      const eq=equilibrateAtT(prod0,T4_for_backend,P,isRich);
+      const tot=Object.values(eq).reduce((a,b)=>a+Math.max(0,b),0);
+      if(!(tot>0))return null;
+      const out={};for(const[sp,n]of Object.entries(eq)){if(n>0&&n/tot>1e-5)out[sp]=n/tot*100;}
+      return Object.keys(out).length?out:null;
+    }catch(e){return null;}
+  },[accurate,T4_for_backend,localResult,phi,P]);
+  // Decide which product mix to display in the Equilibrium Products card. Prefer Cantera-
+  // at-T4 when available, fall back to free-mode-at-T4, then to T_ad equilibrium.
+  const productsAtT4=accurate?(adapted&&adapted.productsAtT4):productsAtT4Free;
+  const productsForDisplay=productsAtT4||result?.products;
+  const usingT4=!!productsAtT4&&!!T4_for_backend;
   // Sweep recomputes T_mixed at each phi since Z (fuel-stream mass fraction) depends on phi.
   const sweep=useMemo(()=>{const out=[];for(let p=0.3;p<=1.01;p+=0.02){const Tm=mixT(fuel,ox,p,Tfuel,Tair);const a=calcAFTx(fuel,ox,p,Tm,P,combMode);out.push({phi:+p.toFixed(2),T_ad:uv(units,"T",a.T_ad)});}return out;},[fuel,ox,Tfuel,Tair,P,combMode,units]);
   const props=useMemo(()=>calcFuelProps(fuel,ox),[fuel,ox]);
@@ -775,29 +854,43 @@ function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setC
     <HelpBox title="ℹ️ Flame Temperature & Properties — How It Works"><p style={{margin:"0 0 6px"}}>This panel computes the <span style={hs.em}>adiabatic flame temperature</span> by solving an energy balance: total reactant enthalpy = total product enthalpy. Uses NASA 7-coefficient polynomials for temperature-dependent Cp and enthalpy.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Complete Combustion:</span> Assumes all C→CO₂, all H→H₂O. No dissociation — gives the theoretical maximum T. <span style={hs.em}>Chemical Equilibrium:</span> Solves 4 dissociation reactions (CO₂⇌CO+½O₂, H₂O⇌H₂+½O₂, ½N₂+½O₂⇌NO, ½H₂+½O₂⇌OH) via Gibbs free energy Kp iteration. Gives realistic T with dissociation species (CO, OH, NO, H₂) in products.</p><p style={{margin:0}}>All values use the <span style={hs.warn}>fuel and oxidizer compositions</span> defined in the sidebar.</p></HelpBox>
     {modeToggle}
     {Math.abs(Tfuel-Tair)>0.5&&<div style={{background:`${C.accent}0F`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"6px 10px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}}>T_fuel={uv(units,"T",Tfuel).toFixed(0)} {uu(units,"T")} + T_air={uv(units,"T",Tair).toFixed(0)} {uu(units,"T")} → adiabatic mix at φ={phi.toFixed(2)} → <span style={{color:C.accent,fontWeight:700}}>T_mixed={uv(units,"T",Tmix).toFixed(0)} {uu(units,"T")}</span> (fed to equilibrium)</div>}
-    <div style={S.card}><div style={S.cardT}>Fuel & Combustion Properties {combMode==="equilibrium"&&!accurate&&<span style={{color:C.accent,fontWeight:400}}> — Equilibrium Mode</span>}{statusBadge}</div>
+    {/* ────── Card 1: Fuel Properties — composition + T_fuel only ────── */}
+    <div style={S.card}><div style={S.cardT}>Fuel Properties</div>
+      <div style={{fontSize:9.5,color:C.txtMuted,marginBottom:8}}>Functions of fuel composition (and T_fuel for MWI) only — independent of φ, oxidizer, or flame temperature.</div>
       <div style={{...S.row,gap:8}}>
-        <M l="Adiabatic Flame Temperature" v={uv(units,"T",result?.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="Maximum theoretical temperature when fuel burns with no heat loss. Computed via enthalpy balance at constant pressure."/>
         <M l="LHV (mass basis)" v={uv(units,"energy_mass",props.LHV_mass).toFixed(units==="SI"?1:0)} u={uu(units,"energy_mass")} c={C.accent2} tip="Lower Heating Value per unit mass. Water in products remains as vapor. Used for gas turbine calculations."/>
         <M l="LHV (volumetric)" v={uv(units,"energy_vol",props.LHV_vol).toFixed(units==="SI"?1:0)} u={uu(units,"energy_vol")} c={C.accent2} tip="Lower Heating Value per unit volume at STP (15°C, 1 atm). Key parameter for gas metering and burner sizing."/>
         <M l="HHV (mass basis)" v={uv(units,"energy_mass",props.HHV_mass).toFixed(units==="SI"?1:0)} u={uu(units,"energy_mass")} c={C.orange} tip="Higher Heating Value per unit mass. Includes latent heat of water condensation. Used for boiler efficiency calculations."/>
         <M l="HHV (volumetric)" v={uv(units,"energy_vol",props.HHV_vol).toFixed(units==="SI"?1:0)} u={uu(units,"energy_vol")} c={C.orange} tip="Higher Heating Value per unit volume at STP. Used in gas utility billing and furnace sizing."/>
         <M l="Fuel Molecular Weight" v={props.MW_fuel.toFixed(2)} u="g/mol" c={C.accent3} tip="Mole-fraction-weighted average molecular weight of the fuel mixture."/>
         <M l="Specific Gravity" v={props.SG.toFixed(3)} u="—" c={C.accent3} tip="Ratio of fuel MW to standard air MW (28.97). SG > 1 means heavier than air."/>
-        <M l="Wobbe Index" v={uv(units,"energy_vol",props.WI).toFixed(0)} u={uu(units,"energy_vol")} c={C.violet} tip="WI = HHV_vol / √SG. Measures fuel interchangeability — fuels with similar WI can be swapped without re-tuning burners."/>
+        <M l="Wobbe Index" v={uv(units,"energy_vol",props.WI).toFixed(0)} u={uu(units,"energy_vol")} c={C.violet} tip="WI = HHV_vol / √SG. Measures fuel interchangeability — fuels with similar WI can be swapped without re-tuning burners. Pure fuel-composition property."/>
         <M l="Modified Wobbe Index (MWI)" v={(units==="SI"?props.LHV_vol/Math.sqrt(Math.max(props.SG,1e-9)*Tfuel):(props.LHV_vol*26.839)/Math.sqrt(Math.max(props.SG,1e-9)*Tfuel*1.8)).toFixed(units==="SI"?3:2)} u={units==="SI"?"MJ/m³·√K":"BTU/scf·√°R"} c={C.violet} tip={`MWI = LHV_vol / √(SG × T_fuel).  Uses your fuel temperature directly (no reference-T ratio), so units carry √T. SI: LHV in MJ/m³, T in K → MJ/m³·√K.  ENG: LHV in BTU/scf, T in °R → BTU/scf·√°R.  Evaluated at T_fuel = ${uv(units,"T",Tfuel).toFixed(0)} ${uu(units,"T")} (absolute: ${(units==="SI"?Tfuel:Tfuel*1.8).toFixed(1)} ${units==="SI"?"K":"°R"}).`}/>
         <M l="Stoichiometric Air/Fuel (mass)" v={props.AFR_mass.toFixed(1)} u={uu(units,"afr_mass")} c={C.good} tip="Mass of oxidizer per mass of fuel at stoichiometric conditions (φ=1). Used for combustor sizing."/>
         <M l="Stoichiometric Air/Fuel (vol)" v={props.AFR_vol.toFixed(1)} u="mol/mol" c={C.accent3} tip="Moles of oxidizer per mole of fuel at stoichiometric conditions."/>
         <M l="Stoichiometric O₂ Demand" v={props.stoichO2.toFixed(3)} u="mol" c={C.accent3} tip="Moles of O₂ required per mole of fuel for complete combustion: C→CO₂, H→H₂O."/>
-      </div></div>
+      </div>
+    </div>
+    {/* ────── Card 2: Flame Properties — depend on φ, oxidizer, operating point ────── */}
+    <div style={S.card}><div style={S.cardT}>Flame Properties{combMode==="equilibrium"&&!accurate&&<span style={{color:C.accent,fontWeight:400}}> — Equilibrium Mode</span>}{statusBadge}</div>
+      <div style={{fontSize:9.5,color:C.txtMuted,marginBottom:8}}>Depend on φ, oxidizer composition, and inlet conditions. T₄ comes from the Cycle panel.</div>
+      <div style={{...S.row,gap:8}}>
+        <M l="Adiabatic Flame Temperature (T_Bulk)" v={uv(units,"T",result?.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="Maximum theoretical flame temperature when fuel burns with no heat loss. Same quantity as T_Bulk in cycle analysis (the flame-zone temperature before dilution). Computed via enthalpy balance at constant pressure."/>
+        <M l="T₄ (Turbine Inlet)" v={T4_for_backend?uv(units,"T",T4_for_backend).toFixed(0):"—"} u={T4_for_backend?uu(units,"T"):""} c={C.warm} tip={T4_for_backend?"Combustor exit / turbine-inlet temperature from the Cycle solution. T₄ = T_Bulk diluted by combustor secondary air, so T₄ < T_Bulk.":"Run the Cycle panel to compute T₄ — it is the dilution-cooled product temperature the turbine actually sees."}/>
+      </div>
+    </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>T_ad vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Yellow marker shows current φ. Peak T_ad typically occurs near φ≈1.05 due to dissociation effects.</div><Chart data={sweep} xK="phi" yK="T_ad" xL="Equivalence Ratio (φ)" yL={`Temperature (${uu(units,"T")})`} color={C.accent} marker={mk}/></div>
-      <div style={S.card}><div style={S.cardT}>Equilibrium Products (mol%)</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Major species at equilibrium. Lean mixtures (φ&lt;1) show excess O₂; rich mixtures (φ&gt;1) show CO and H₂.</div>
-        {result&&<>
-          <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",margin:"4px 0 4px"}}>Wet Basis</div>
-          <HBar data={result.products} h={Math.max(120,Object.keys(result.products).length*24+10)}/>
-          <div style={{fontSize:10,fontWeight:700,color:C.accent2,textTransform:"uppercase",letterSpacing:"1px",margin:"10px 0 4px"}}>Dry Basis (H₂O removed, renormalized)</div>
-          <HBar data={dryBasis(result.products)} h={Math.max(110,Math.max(0,Object.keys(result.products).length-1)*24+10)}/>
+      <div style={S.card}><div style={S.cardT}>Equilibrium Products (mol%){usingT4&&<span style={{color:C.warm,fontWeight:400}}> — at T₄ conditions</span>}</div>
+        <div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Major species at equilibrium. Lean mixtures (φ&lt;1) show excess O₂; rich mixtures (φ&gt;1) show CO and H₂.</div>
+        {usingT4?<div style={{background:`${C.warm}0F`,border:`1px solid ${C.warm}44`,borderRadius:5,padding:"6px 10px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",marginBottom:8}}>📍 Re-equilibrated at <span style={{color:C.warm,fontWeight:700}}>T₄ = {uv(units,"T",T4_for_backend).toFixed(0)} {uu(units,"T")}</span> (turbine inlet) instead of T_ad = {uv(units,"T",result?.T_ad).toFixed(0)} {uu(units,"T")}. NO and OH equilibrium are sensitive to product temperature — the diluted, cooler products carry less of these minor species than the hot flame zone.</div>
+          :T4_for_backend?<div style={{fontSize:10,color:C.txtMuted,fontStyle:"italic",marginBottom:6}}>Showing equilibrium at T_ad (T_Bulk). T₄ = {uv(units,"T",T4_for_backend).toFixed(0)} {uu(units,"T")} is available but the secondary equilibrium did not return — check Accurate-mode response.</div>
+          :<div style={{fontSize:10,color:C.txtMuted,fontStyle:"italic",marginBottom:6}}>Showing equilibrium at T_ad (T_Bulk). Run the Cycle panel to also compute products at T₄ (turbine inlet).</div>}
+        {productsForDisplay&&<>
+          <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",margin:"4px 0 4px"}}>Wet Basis{usingT4?" (at T₄)":""}</div>
+          <HBar data={productsForDisplay} h={Math.max(120,Object.keys(productsForDisplay).length*24+10)}/>
+          <div style={{fontSize:10,fontWeight:700,color:C.accent2,textTransform:"uppercase",letterSpacing:"1px",margin:"10px 0 4px"}}>Dry Basis{usingT4?" (at T₄)":""} (H₂O removed, renormalized)</div>
+          <HBar data={dryBasis(productsForDisplay)} h={Math.max(110,Math.max(0,Object.keys(productsForDisplay).length-1)*24+10)}/>
         </>}
       </div>
     </div></div>);}
@@ -1926,7 +2019,7 @@ export default function App(){
               linkOx={linkOx} setLinkOx={setLinkOx}
               result={cycleResult} loading={bkCycle.loading} err={bkCycle.err}
             />}
-            {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} combMode={combMode} setCombMode={setCombMode}/>}
+            {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} combMode={combMode} setCombMode={setCombMode} T4_K={cycleResult?.T4_K}/>}
             {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar} Dfh={Dfh} setDfh={setDfh} Lpremix={Lpremix} setLpremix={setLpremix} Vpremix={Vpremix} setVpremix={setVpremix}/>}
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
