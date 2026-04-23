@@ -333,7 +333,7 @@ const _PSR_SEED_LBL={unreacted:"Unreacted (cold)",hot_eq:"Hot equilibrium",cold_
 const _EQ_LBL={HP:"HP (constant enthalpy+pressure)",UV:"UV (constant internal energy+volume)",TP:"TP (constant temperature+pressure)"};
 const _INT_LBL={steady_state:"Steady-state solver",chunked:"Chunked time advance (default)",step:"Step-by-step"};
 const _MECH_LBL={gri30:"GRI-Mech 3.0 (53 species, 325 rxns)",glarborg:"Glarborg 2018 (151 species, 1395 rxns)",usc2:"USC-Mech II (coming soon)",aramco30:"AramcoMech 3.0 (coming soon)"};
-function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult}=ps||{};
+function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult}=ps||{};
   // Adiabatic fuel/air mix T that's used everywhere downstream
   const T_mix_phi=mixT(fuel,ox,phi,T_fuel??T0,T_air??T0);
   const aft=calcAFTx(fuel,ox,phi,T_mix_phi,P,combMode);
@@ -432,6 +432,10 @@ if(cycleResult){
     ["Fuel Temperature",fmtN(uv(u,"T",cr.T_fuel_K??cycleTamb),2),uu(u,"T")],
     ["Water/Fuel Mass Ratio (WFR)",fmtN(cr.WFR??WFR,3),"kg_water/kg_fuel"],
     ["Water Injection Mode",(cr.WFR??WFR)>0?((cr.water_mode||waterMode)==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],
+    ["Compressor Bleed Mode",bleedMode==="auto"?"AUTO (vs Load schedule)":"MANUAL","—"],
+    ["Compressor Bleed Valve Size",fmtN(bleedValveSizePct,2),"% of compressor air"],
+    ["Compressor Bleed Open",fmtN(bleedOpenPct,1),"% (0=closed, 100=full)"],
+    ["Compressor Bleed Effective Fraction",fmtN(100*(cr.bleed_air_frac??bleedAirFrac),3),"% of compressor air dumped"],
     [],
     ["═══ STATION STATES ═══"],[],
     ["Station","Temperature ("+uu(u,"T")+")","Pressure (bar)","Mass Flow (kg/s)"],
@@ -452,7 +456,11 @@ if(cycleResult){
     ["FAR_Bulk (flame-zone fuel/air)",fmtN(cr.FAR_Bulk,6),"—"],
     ["T_Bulk (flame-zone adiabatic T)",fmtN(uv(u,"T",cr.T_Bulk_K),1),uu(u,"T")],
     ["mdot_fuel",fmtN(cr.mdot_fuel_kg_s,4),"kg/s"],
-    ["mdot_air (total, core + bypass)",fmtN(cr.mdot_air_kg_s,3),"kg/s"],
+    ["mdot_air (compressor inlet, total)",fmtN(cr.mdot_air_kg_s,3),"kg/s"],
+    ["mdot_bleed (lost to ambient)",fmtN(cr.mdot_bleed_kg_s||0,4),"kg/s"],
+    ["mdot_air_post_bleed (combustor + turbine path)",fmtN(cr.mdot_air_post_bleed_kg_s||cr.mdot_air_kg_s,3),"kg/s"],
+    ["Bleed iterations (T4 power-hold)",fmtN(cr.bleed_iters||0,0),"—"],
+    ["Bleed converged",cr.bleed_converged===false?"NO":(cr.bleed_air_frac>0?"YES":"n/a (no bleed)"),"—"],
     [],
     ["═══ OPTION A — ENERGY BALANCE ═══"],[],
     ["Parameter","Value","Unit"],
@@ -1514,10 +1522,9 @@ function AssumptionsPanel(){
       • linkP3  → sidebar Pressure        = P3
       • linkFAR → sidebar phi (and FAR)   = cycle-computed phi at target T4
 */
-function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct,setLoadPct,Tcool,setTcool,airFrac,setAirFrac,linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx,setLinkOx,result,loading,err}){
+function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx,setLinkOx,result,loading,err}){
   const units=useContext(UnitCtx);
   const {accurate,available}=useContext(AccurateCtx);
-  const isLMS=engine==="LMS100PB+";
   const fmtT=K=>uv(units,"T",K).toFixed(1)+" "+uu(units,"T");
   const fmtP=bar=>{
     // Internal unit is bar (cycle outputs bar). Display uses the main unit
@@ -1534,13 +1541,6 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
     return (k*2.20462*3600).toFixed(0)+" lb/hr";
   };
 
-  // Design-point anchor hints — help the user see the reference state
-  // the off-design correlation is anchored to.
-  const DESIGN_HINTS={
-    "LM6000PF":"60 °F / 60 % RH / 100 % → MW 45.0, T3 811 K, P3 30.3 bar, T4 1755 K",
-    "LMS100PB+":"44 °F / 80 % RH / 100 % → MW 107.5, T3 644 K, P3 44.0 bar, T4 1825 K (intercooled)",
-  };
-
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ Gas Turbine Cycle — How It Works">
       <p style={{margin:"0 0 6px"}}>Computes the thermodynamic cycle of a GE <span style={hs.em}>LM6000PF</span> or <span style={hs.em}>LMS100PB+</span> aero-derivative under the specified ambient and load. Uses published performance correlations <span style={hs.em}>anchored exactly at each engine's published design point</span>; ambient density and load scaling follow typical aero-derivative behavior.</p>
@@ -1549,53 +1549,9 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
       <p style={{margin:0}}><span style={hs.em}>Linkages:</span> the four toggles pipe T3, P3, φ_Bulk, and humid-air oxidizer into the sidebar so every other tab (AFT, flame speed, combustor, exhaust, autoignition) runs at the engine's actual flame-zone state. Each toggle has a <span style={hs.warn}>Break link</span> button to reclaim manual control.</p>
     </HelpBox>
 
-    {/* Inputs */}
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <div style={S.card}>
-        <div style={S.cardT}>Engine & Ambient</div>
-        <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          <div>
-            <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}}>Engine</label>
-            <select style={S.sel} value={engine} onChange={e=>setEngine(e.target.value)}>
-              <option value="LM6000PF">GE LM6000PF (2-spool, non-intercooled)</option>
-              <option value="LMS100PB+">GE LMS100PB+ (3-spool, intercooled)</option>
-            </select>
-            <div style={{fontSize:9.5,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.4}}>{DESIGN_HINTS[engine]}</div>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-            <div>
-              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="Ambient (inlet filter) pressure">Ambient Pressure ({uu(units,"P")})</label>
-              <NumField value={uv(units,"P",Pamb/1.01325)} decimals={3} onCommit={v=>setPamb(uvI(units,"P",v)*1.01325)} style={S.inp}/>
-            </div>
-            <div>
-              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="Ambient dry-bulb temperature at the inlet filter">Ambient T ({uu(units,"T")})</label>
-              <NumField value={uv(units,"T",Tamb)} decimals={1} onCommit={v=>setTamb(uvI(units,"T",v))} style={S.inp}/>
-            </div>
-            <div>
-              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="Relative humidity (%). Humid air has lower density — affects MW lapse on wet days.">Relative Humidity (%)</label>
-              <NumField value={RH} decimals={0} onCommit={v=>setRH(Math.max(0,Math.min(100,+v)))} style={S.inp}/>
-            </div>
-            <div>
-              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="% of max achievable power on this ambient day. Load=100 is the limiter-bounded peak at these ambient conditions (not ISO reference).">Load (%)</label>
-              <NumField value={loadPct} decimals={0} onCommit={v=>setLoadPct(Math.max(20,Math.min(100,+v)))} style={S.inp}/>
-              <input type="range" min="20" max="100" step="1" value={loadPct} onChange={e=>setLoadPct(+e.target.value)} style={{width:"100%",accentColor:C.accent,marginTop:3}}/>
-            </div>
-          </div>
-          {isLMS&&<div>
-            <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",display:"block",marginBottom:3}} title="Intercooler cooling-water supply temperature. LMS100 holds T3 ≈ 644 K as long as the IC can drop air to ~311 K (approach ≈10 K). Warmer supply → T3 creeps up.">Cooling Water T ({uu(units,"T")})</label>
-            <NumField value={uv(units,"T",Tcool)} decimals={1} onCommit={v=>setTcool(uvI(units,"T",v))} style={S.inp}/>
-          </div>}
-          <div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}} title="Flame-zone share of combustor airflow (m_flame / m_comb_air). The rest is dilution / liner cooling downstream of the primary zone. Does NOT affect thermal efficiency — only sets the flame-zone state: FAR_Bulk = FAR₄/frac, φ_Bulk = φ₄/frac, T_Bulk = adiabatic equilibrium T at (T3, P3, φ_Bulk). Typical DLE primary-zone fraction ≈ 0.80–0.95. Default 0.88.">Combustor Air Fraction (flame/dilution)</label>
-              <NumField value={airFrac} decimals={3} onCommit={v=>setAirFrac(Math.max(0.30,Math.min(1.00,+v)))} style={{width:72,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-            </div>
-            <input type="range" min="0.30" max="1.00" step="0.005" value={airFrac} onChange={e=>setAirFrac(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
-            <div style={{fontSize:9.5,color:C.txtMuted,marginTop:-2,fontStyle:"italic",lineHeight:1.3}}>{(airFrac*100).toFixed(1)}% in flame zone · {((1-airFrac)*100).toFixed(1)}% dilution · sets T_Bulk / φ_Bulk only (not η)</div>
-          </div>
-        </div>
-      </div>
-
+    {/* Inputs — Engine & Ambient inputs are now in the global sidebar (top of page).
+        This panel only owns the cycle-specific Linkages card. */}
+    <div>
       {/* Linkages */}
       <div style={S.card}>
         <div style={S.cardT}>Linkages to Other Panels</div>
@@ -1668,7 +1624,9 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
       <div style={S.card}>
         <div style={S.cardT}>Flows & Performance</div>
         <div style={{display:"flex",flexDirection:"column",gap:6,fontFamily:"monospace",fontSize:11.5}}>
-          <KV k="Air flow (inlet)"        v={fmtMdot(result.mdot_air_kg_s)}/>
+          <KV k="Air flow (compressor)"   v={fmtMdot(result.mdot_air_kg_s)}/>
+          {(result.bleed_air_frac||0)>0&&<KV k="└─ Bleed (lost to ambient)" v={`${fmtMdot(result.mdot_bleed_kg_s||0)}  (${((result.bleed_air_frac||0)*100).toFixed(2)} %)`}/>}
+          {(result.bleed_air_frac||0)>0&&<KV k="└─ Combustor air (post-bleed)" v={fmtMdot(result.mdot_air_post_bleed_kg_s||result.mdot_air_kg_s)}/>}
           <KV k="Fuel flow"               v={fmtMdot(result.mdot_fuel_kg_s)}/>
           <KV k="Fuel flow (hourly)"      v={fmtMdotHr(result.mdot_fuel_kg_s)}/>
           <div style={{marginTop:4,fontSize:9.5,color:C.txtMuted,textTransform:"uppercase",letterSpacing:"1px",fontWeight:700}}>Combustor exit (after dilution)</div>
@@ -1716,6 +1674,156 @@ function StationRow({n,desc,T,P,fmtT,fmtP,hi}){return(<tr style={hi?{background:
 function KV({k,v}){return(<div style={{display:"flex",justifyContent:"space-between",gap:8,padding:"4px 0",borderBottom:`1px solid ${C.border}50`}}>
   <span style={{color:C.txtDim}}>{k}</span><span style={{color:C.accent,fontWeight:600}}>{v}</span>
 </div>);}
+
+/* ══════════════════ ENGINE & AMBIENT (sidebar version) ══════════════════
+   Used to live inside CyclePanel. Lifted to the global sidebar so the engine
+   inputs (which the user sweeps the most) are always one click away on every
+   tab. Includes the Bleed sub-section. Dimmed when Accurate Mode is off
+   because the cycle endpoint is FULL-tier-only.
+
+   Bleed model:
+     • bleedMode  = "auto" — bleed_open_pct is a piecewise-linear function of
+                              load (100 % ≤ 75 %, 0 % ≥ 95 %, linear between).
+     •            = "manual" — user types open % directly (slider 0–100 step 1).
+     • bleedValveSizePct — max % of compressor air bled when fully open
+                              (default 3.3 %, free-typed; quick 15 %-step buttons).
+     • bleed_air_frac = open% × valve_size% / 10000  → backend lops that
+       fraction off mdot_air_combustor & mdot_air_turbine (compressor work
+       unchanged) and iteratively raises T4 to hold gross power.
+*/
+function EngineAmbientSidebar({
+  engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct,setLoadPct,
+  Tcool,setTcool,airFrac,setAirFrac,
+  bleedMode,setBleedMode,bleedOpenPct,bleedOpenManualPct,setBleedOpenManualPct,
+  bleedValveSizePct,setBleedValveSizePct,bleedAirFrac,
+  accurate,
+}){
+  const units=useContext(UnitCtx);
+  const isLMS=engine==="LMS100PB+";
+  const dim=!accurate;
+  // Wrap the whole card in a fieldset-style dim. Inputs still render so the
+  // user can SEE the engine inputs even on the free tier (per spec) but
+  // pointer-events disabled to avoid mutating values that don't drive
+  // anything in free mode.
+  const wrap={
+    background:C.bg2,border:`1px solid ${C.accent}25`,borderRadius:8,
+    padding:12,marginBottom:10,position:"relative",
+    opacity:dim?0.55:1,
+    pointerEvents:dim?"none":"auto",
+    transition:"opacity .15s",
+  };
+  const lbl={fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3};
+  const sec={fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6};
+  const subSec={fontSize:9.5,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1.2px",marginTop:10,marginBottom:6,paddingTop:8,borderTop:`1px solid ${C.border}50`};
+  return(<div style={wrap}>
+    <div style={sec}>Engine & Ambient {dim&&<span style={{fontSize:9,color:C.warm,fontWeight:600,letterSpacing:".4px",textTransform:"none",marginLeft:6}}>(Accurate Mode required)</span>}</div>
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      <div>
+        <label style={lbl}>Engine</label>
+        <select style={S.sel} value={engine} onChange={e=>setEngine(e.target.value)}>
+          <option value="LM6000PF">GE LM6000PF (2-spool, non-IC)</option>
+          <option value="LMS100PB+">GE LMS100PB+ (3-spool, IC)</option>
+        </select>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+        <div>
+          <label style={lbl} title="Ambient (inlet filter) pressure">P_amb ({uu(units,"P")})</label>
+          <NumField value={uv(units,"P",Pamb/1.01325)} decimals={3} onCommit={v=>setPamb(uvI(units,"P",v)*1.01325)} style={S.inp}/>
+        </div>
+        <div>
+          <label style={lbl} title="Ambient dry-bulb temperature">T_amb ({uu(units,"T")})</label>
+          <NumField value={uv(units,"T",Tamb)} decimals={1} onCommit={v=>setTamb(uvI(units,"T",v))} style={S.inp}/>
+        </div>
+        <div>
+          <label style={lbl}>RH (%)</label>
+          <NumField value={RH} decimals={0} onCommit={v=>setRH(Math.max(0,Math.min(100,+v)))} style={S.inp}/>
+        </div>
+        <div>
+          <label style={lbl} title="% of max achievable power on this ambient day. Drives the bleed schedule when Bleed Mode = AUTO.">Load (%)</label>
+          <NumField value={loadPct} decimals={0} onCommit={v=>setLoadPct(Math.max(20,Math.min(100,+v)))} style={S.inp}/>
+        </div>
+      </div>
+      <div>
+        <input type="range" min="20" max="100" step="1" value={loadPct} onChange={e=>setLoadPct(+e.target.value)} style={{width:"100%",accentColor:C.accent,marginTop:-2}}/>
+      </div>
+      {isLMS&&<div>
+        <label style={lbl} title="Intercooler cooling-water supply temperature.">T_cool ({uu(units,"T")})</label>
+        <NumField value={uv(units,"T",Tcool)} decimals={1} onCommit={v=>setTcool(uvI(units,"T",v))} style={S.inp}/>
+      </div>}
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+          <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Flame-zone share of combustor airflow. Sets T_Bulk / φ_Bulk only (not η). Default 0.88.">Comb. Air Frac (flame)</label>
+          <NumField value={airFrac} decimals={3} onCommit={v=>setAirFrac(Math.max(0.30,Math.min(1.00,+v)))} style={{width:64,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:11.5,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+        </div>
+        <input type="range" min="0.30" max="1.00" step="0.005" value={airFrac} onChange={e=>setAirFrac(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
+      </div>
+
+      {/* ── BLEED ───────────────────────────────────────────── */}
+      <div style={subSec}>Compressor Bleed</div>
+      <div>
+        <label style={lbl} title="Maximum bleed fraction when valve is fully open. Free-type any value; quick steps below.">Bleed Valve Size (%)</label>
+        <NumField value={bleedValveSizePct} decimals={2} onCommit={v=>setBleedValveSizePct(Math.max(0,Math.min(100,+v)))} style={S.inp}/>
+        <div style={{display:"flex",gap:3,marginTop:4,flexWrap:"wrap"}}>
+          {[0,15,30,45,60,75,90].map(v=>(
+            <button key={v} onClick={()=>setBleedValveSizePct(v)}
+              title={`Set Bleed Valve Size = ${v}%`}
+              style={{padding:"2px 6px",fontSize:9.5,fontWeight:600,fontFamily:"monospace",
+                color:Math.abs(bleedValveSizePct-v)<0.01?C.bg:C.txtDim,
+                background:Math.abs(bleedValveSizePct-v)<0.01?C.accent:"transparent",
+                border:`1px solid ${C.border}`,borderRadius:3,cursor:"pointer"}}>{v}</button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div style={{display:"flex",gap:6,marginBottom:6}}>
+          {[
+            {k:"auto",lbl:"AUTO (vs Load)",tip:"Bleed open % is a continuous function of load. 100% open ≤75% load, 0% ≥95%, linear between."},
+            {k:"manual",lbl:"MANUAL",tip:"You set the bleed open % directly via the slider below."},
+          ].map(o=>(
+            <button key={o.k} onClick={()=>{
+              if(o.k==="manual"&&bleedMode!=="manual"){
+                // Seed manual % with the current programmed value when switching modes
+                setBleedOpenManualPct(bleedOpenPct);
+              }
+              setBleedMode(o.k);
+            }} title={o.tip} style={{
+              flex:1,padding:"4px 8px",fontSize:10,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",
+              letterSpacing:".5px",
+              color:bleedMode===o.k?C.bg:C.accent,
+              background:bleedMode===o.k?C.accent:"transparent",
+              border:`1px solid ${C.accent}`,borderRadius:4,cursor:"pointer"
+            }}>{o.lbl}</button>
+          ))}
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+          <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>Bleed Open (%)</label>
+          <NumField
+            value={bleedOpenPct}
+            decimals={0}
+            onCommit={v=>{
+              if(bleedMode==="manual")setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(+v))));
+            }}
+            disabled={bleedMode==="auto"}
+            title={bleedMode==="auto"?"AUTO mode — switch to MANUAL to type a value":"Type any value 0–100"}
+            style={{width:64,padding:"3px 6px",fontFamily:"monospace",
+              color:bleedMode==="auto"?C.txtMuted:C.accent2,
+              fontSize:12,fontWeight:700,background:C.bg,
+              border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}50`,
+              borderRadius:4,textAlign:"center",outline:"none"}}/>
+        </div>
+        <input type="range" min="0" max="100" step="1"
+          value={bleedOpenPct}
+          disabled={bleedMode==="auto"}
+          onChange={e=>{if(bleedMode==="manual")setBleedOpenManualPct(+e.target.value);}}
+          style={{width:"100%",accentColor:C.accent2,opacity:bleedMode==="auto"?0.45:1}}/>
+        <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:1,fontStyle:"italic",lineHeight:1.3}}>
+          {bleedMode==="auto"?"programmed schedule (Load → Open %)":"manual override"}
+          {" · "}lost air = <strong style={{color:C.accent2}}>{(bleedAirFrac*100).toFixed(2)}%</strong>
+        </div>
+      </div>
+    </div>
+  </div>);
+}
 
 /* ══════════════════ LOGO ══════════════════ */
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
@@ -1770,6 +1878,16 @@ export default function App(){
   // Both feed the Cantera adiabatic enthalpy balance in the backend.
   const[WFR,setWFR]=useState(0);
   const[waterMode,setWaterMode]=useState("liquid");
+  // Compressor-discharge bleed. The bleed valve dumps a fraction of compressor
+  // air to ambient (it never reaches the combustor or turbine). Two knobs:
+  //   • bleedMode   = "auto" (programmed schedule vs load) | "manual" (user value)
+  //   • bleedValveSizePct = max bleed % at fully-open (default 3.3 %)
+  //   • bleedOpenManualPct = override % open (only used in manual mode)
+  // Auto schedule: 100 % open at load ≤ 75 %, 0 % at load ≥ 95 %, linear between.
+  // Effective bleed_air_frac = (open % / 100) × (valve_size % / 100).
+  const[bleedMode,setBleedMode]=useState("auto");
+  const[bleedOpenManualPct,setBleedOpenManualPct]=useState(100);
+  const[bleedValveSizePct,setBleedValveSizePct]=useState(3.3);
   const[measO2,setMeasO2]=useState(14.0);const[measCO2,setMeasCO2]=useState(3.0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
@@ -1821,6 +1939,20 @@ export default function App(){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[cycleEngine]);
 
+  // Auto bleed schedule — pure function of load. Continuous, displayed as
+  // rounded integer in the UI. 100 % at low load (rotor cooling demand high),
+  // ramps closed between 75 → 95 % load to recover combustor air at full
+  // power. Numbers match the user-specified schedule.
+  const autoBleedOpenPct=(L)=>{
+    if(L<=75)return 100;
+    if(L>=95)return 0;
+    return 100*(95-L)/20;
+  };
+  const bleedOpenPct=bleedMode==="auto"?Math.round(autoBleedOpenPct(cycleLoad)):bleedOpenManualPct;
+  // Effective compressor-discharge fraction lost to ambient. Backend clamps
+  // to [0, 0.50] so the UI never has to.
+  const bleedAirFrac=Math.max(0,Math.min(0.50,(bleedOpenPct/100)*(bleedValveSizePct/100)));
+
   const bkCycle=useBackendCalc("cycle",{
     engine:cycleEngine,
     P_amb_bar:cyclePamb,
@@ -1841,12 +1973,16 @@ export default function App(){
     // real-engine penalty.
     WFR,
     water_mode:waterMode,
+    // Compressor-discharge bleed dumped to ambient. Reduces air to combustor
+    // + turbine; backend iteratively elevates T4 to hold gross power.
+    bleed_air_frac:bleedAirFrac,
   },accurate&&hasOnline);
   const cycleResult=bkCycle.data;
   // panelState is built AFTER cycleResult to avoid temporal-dead-zone reference.
   // Consumed by exportToExcel button further below; safe to declare here.
   const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,accurate:accurate&&!!auth.hasOnlineAccess,
-    cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult};
+    cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult,
+    bleedMode,bleedOpenPct,bleedValveSizePct,bleedAirFrac};
 
   // Propagate cycle outputs into main sidebar state when linkages are ON.
   // Re-runs whenever the cycle result changes or a toggle flips.
@@ -1937,6 +2073,43 @@ export default function App(){
         <div style={{display:"flex",flex:"1 1 auto",minHeight:0}}>
           {/* SIDEBAR (hidden on Account tab) */}
           {tab!=="account"&&<div style={{width:255,flexShrink:0,borderRight:`1px solid ${C.border}`,padding:"12px 10px",overflowY:"auto",background:`${C.bg}CC`}}>
+            {/* Engine & Ambient (lifted from CyclePanel) — drives the entire toolkit when Accurate Mode is on */}
+            <EngineAmbientSidebar
+              engine={cycleEngine} setEngine={setCycleEngine}
+              Pamb={cyclePamb} setPamb={setCyclePamb}
+              Tamb={cycleTamb} setTamb={setCycleTamb}
+              RH={cycleRH} setRH={setCycleRH}
+              loadPct={cycleLoad} setLoadPct={setCycleLoad}
+              Tcool={cycleTcool} setTcool={setCycleTcool}
+              airFrac={cycleAirFrac} setAirFrac={setCycleAirFrac}
+              bleedMode={bleedMode} setBleedMode={setBleedMode}
+              bleedOpenPct={bleedOpenPct}
+              bleedOpenManualPct={bleedOpenManualPct} setBleedOpenManualPct={setBleedOpenManualPct}
+              bleedValveSizePct={bleedValveSizePct} setBleedValveSizePct={setBleedValveSizePct}
+              bleedAirFrac={bleedAirFrac}
+              accurate={accurate&&hasOnline}
+            />
+            {/* Water / steam injection — kept right under Engine & Ambient per spec.
+                Applies to AFT, Flame Speed, Combustor, Exhaust, Autoignition AND Cycle. */}
+            <div style={{background:C.bg2,border:`1px solid ${C.accent3}25`,borderRadius:8,padding:12,marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.accent3,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6}}>Water / Steam Injection</div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Water-to-Fuel mass Ratio (WFR). Water / steam injection is the classic NOx-knockdown lever: liquid water absorbs the latent heat of vaporization on the way to flame temperature, dropping T_ad by 100–300 K and cutting thermal NOx exponentially via Zeldovich. Steam gives dilution-only cooling (smaller T drop). Typical gas-turbine DLE WFR: 0.5–1.0.">Water/Fuel Ratio (WFR) ⓘ</label>
+                <NumField value={WFR} decimals={2} onCommit={v=>setWFR(Math.max(0,Math.min(2,+v)))} style={{width:60,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+              </div>
+              <input type="range" min="0" max="2" step="0.05" value={WFR} onChange={e=>setWFR(+e.target.value)} style={{width:"100%",accentColor:C.accent3}}/>
+              <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{WFR===0?"dry (no water)":WFR<0.3?"trace":WFR<0.8?"moderate":WFR<1.3?"typical DLE":"heavy"}</div>
+              <div style={{display:"flex",gap:6,marginTop:6,fontSize:10,fontFamily:"monospace"}}>
+                <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",flex:1,padding:"4px 6px",border:`1px solid ${waterMode==="liquid"?C.accent3:C.border}`,borderRadius:4,background:waterMode==="liquid"?`${C.accent3}18`:"transparent"}}>
+                  <input type="radio" name="waterMode" value="liquid" checked={waterMode==="liquid"} onChange={()=>setWaterMode("liquid")} style={{accentColor:C.accent3}}/>
+                  <span title="Liquid water at 288 K (15 °C supply). Absorbs latent heat h_fg ≈ 2.45 MJ/kg on vaporization; biggest flame-T drop per unit WFR.">Liquid</span>
+                </label>
+                <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",flex:1,padding:"4px 6px",border:`1px solid ${waterMode==="steam"?C.accent3:C.border}`,borderRadius:4,background:waterMode==="steam"?`${C.accent3}18`:"transparent"}}>
+                  <input type="radio" name="waterMode" value="steam" checked={waterMode==="steam"} onChange={()=>setWaterMode("steam")} style={{accentColor:C.accent3}}/>
+                  <span title="Steam at the air plenum temperature. Dilution-only cooling (no latent heat). Smaller T_ad drop per unit WFR but easier to deliver in industrial plants with a boiler.">Steam</span>
+                </label>
+              </div>
+            </div>
             <div style={{...hs.box,marginBottom:10,background:`${C.accent2}08`,borderColor:`${C.accent2}18`}}>
               <strong style={{color:C.accent2,fontSize:11}}>📌 Quick Start:</strong> <span style={{fontSize:10}}>Select a fuel preset below (e.g., "Pipeline NG"), set your equivalence ratio and conditions, then explore each tab. All panels share these settings.</span></div>
             <CompEditor title="Fuel (mol%)" comp={fuel} setComp={setFuel} presets={FUEL_PRESETS} speciesList={FUEL_SP} accent={C.accent2} initialPreset="Pipeline NG (US)"
@@ -1986,38 +2159,13 @@ export default function App(){
                 <NumField value={uv(units,"P",P)} decimals={3} onCommit={v=>setP(uvI(units,"P",v))} style={S.inp}/>
                 {accurate&&hasOnline&&linkP3&&<LinkChip onBreak={()=>setLinkP3(false)} label="Linked to Cycle P3"/>}
               </div>
-              {/* Water / steam injection — applies to AFT, Flame Speed, Combustor, Exhaust, Autoignition in Accurate Mode */}
-              <div style={{marginTop:12,paddingTop:10,borderTop:`1px solid ${C.border}`}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Water-to-Fuel mass Ratio (WFR). Water / steam injection is the classic NOx-knockdown lever: liquid water absorbs the latent heat of vaporization on the way to flame temperature, dropping T_ad by 100–300 K and cutting thermal NOx exponentially via Zeldovich. Steam gives dilution-only cooling (smaller T drop). Typical gas-turbine DLE WFR: 0.5–1.0.">Water/Fuel Ratio (WFR) ⓘ</label>
-                  <NumField value={WFR} decimals={2} onCommit={v=>setWFR(Math.max(0,Math.min(2,+v)))} style={{width:60,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-                </div>
-                <input type="range" min="0" max="2" step="0.05" value={WFR} onChange={e=>setWFR(+e.target.value)} style={{width:"100%",accentColor:C.accent3}}/>
-                <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{WFR===0?"dry (no water)":WFR<0.3?"trace":WFR<0.8?"moderate":WFR<1.3?"typical DLE":"heavy"}</div>
-                <div style={{display:"flex",gap:6,marginTop:6,fontSize:10,fontFamily:"monospace"}}>
-                  <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",flex:1,padding:"4px 6px",border:`1px solid ${waterMode==="liquid"?C.accent3:C.border}`,borderRadius:4,background:waterMode==="liquid"?`${C.accent3}18`:"transparent"}}>
-                    <input type="radio" name="waterMode" value="liquid" checked={waterMode==="liquid"} onChange={()=>setWaterMode("liquid")} style={{accentColor:C.accent3}}/>
-                    <span title="Liquid water at 288 K (15 °C supply). Absorbs latent heat h_fg ≈ 2.45 MJ/kg on vaporization; biggest flame-T drop per unit WFR.">Liquid</span>
-                  </label>
-                  <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",flex:1,padding:"4px 6px",border:`1px solid ${waterMode==="steam"?C.accent3:C.border}`,borderRadius:4,background:waterMode==="steam"?`${C.accent3}18`:"transparent"}}>
-                    <input type="radio" name="waterMode" value="steam" checked={waterMode==="steam"} onChange={()=>setWaterMode("steam")} style={{accentColor:C.accent3}}/>
-                    <span title="Steam at the air plenum temperature. Dilution-only cooling (no latent heat). Smaller T_ad drop per unit WFR but easier to deliver in industrial plants with a boiler.">Steam</span>
-                  </label>
-                </div>
-              </div>
+              {/* Water/steam injection (WFR) is now lifted to the dedicated card directly under Engine & Ambient at the top of the sidebar — it drives every Accurate Mode panel from a single source. */}
             </div>
           </div>}
 
           {/* CONTENT */}
           <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
             {tab==="cycle"&&<CyclePanel
-              engine={cycleEngine} setEngine={setCycleEngine}
-              Pamb={cyclePamb} setPamb={setCyclePamb}
-              Tamb={cycleTamb} setTamb={setCycleTamb}
-              RH={cycleRH} setRH={setCycleRH}
-              loadPct={cycleLoad} setLoadPct={setCycleLoad}
-              Tcool={cycleTcool} setTcool={setCycleTcool}
-              airFrac={cycleAirFrac} setAirFrac={setCycleAirFrac}
               linkT3={linkT3} setLinkT3={setLinkT3}
               linkP3={linkP3} setLinkP3={setLinkP3}
               linkFAR={linkFAR} setLinkFAR={setLinkFAR}
