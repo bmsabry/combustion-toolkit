@@ -1529,6 +1529,10 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
     if(units==="SI")return k.toFixed(2)+" kg/s";
     return (k*2.20462).toFixed(1)+" lb/s";
   };
+  const fmtMdotHr=k=>{
+    if(units==="SI")return (k*3600).toFixed(0)+" kg/hr";
+    return (k*2.20462*3600).toFixed(0)+" lb/hr";
+  };
 
   // Design-point anchor hints — help the user see the reference state
   // the off-design correlation is anchored to.
@@ -1666,6 +1670,7 @@ function CyclePanel({engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct
         <div style={{display:"flex",flexDirection:"column",gap:6,fontFamily:"monospace",fontSize:11.5}}>
           <KV k="Air flow (inlet)"        v={fmtMdot(result.mdot_air_kg_s)}/>
           <KV k="Fuel flow"               v={fmtMdot(result.mdot_fuel_kg_s)}/>
+          <KV k="Fuel flow (hourly)"      v={fmtMdotHr(result.mdot_fuel_kg_s)}/>
           <div style={{marginTop:4,fontSize:9.5,color:C.txtMuted,textTransform:"uppercase",letterSpacing:"1px",fontWeight:700}}>Combustor exit (after dilution)</div>
           <KV k="T₄ (firing)"             v={fmtT(result.T4_K)}/>
           <KV k="FAR₄"                    v={(result.FAR4!=null?result.FAR4:result.FAR_flame||result.FAR).toFixed(5)}/>
