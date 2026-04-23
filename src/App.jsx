@@ -1682,9 +1682,6 @@ export default function App(){
   const[integration,setIntegration]=useState("chunked");
   const[heatLossFrac,setHeatLossFrac]=useState(0);
   const[mechanism,setMechanism]=useState("gri30");
-  const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,accurate:accurate&&!!auth.hasOnlineAccess,
-    // Cycle (Option A/B) — exposed for Excel export
-    cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult};
   const hasOnline=!!auth.hasOnlineAccess;
 
   // Checkout return — refresh subscription state after coming back from Stripe
@@ -1735,6 +1732,10 @@ export default function App(){
     combustor_air_frac:cycleAirFrac,
   },accurate&&hasOnline);
   const cycleResult=bkCycle.data;
+  // panelState is built AFTER cycleResult to avoid temporal-dead-zone reference.
+  // Consumed by exportToExcel button further below; safe to declare here.
+  const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,accurate:accurate&&!!auth.hasOnlineAccess,
+    cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult};
 
   // Propagate cycle outputs into main sidebar state when linkages are ON.
   // Re-runs whenever the cycle result changes or a toggle flips.
