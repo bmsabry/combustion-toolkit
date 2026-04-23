@@ -1869,7 +1869,15 @@ function CombustorMappingPanel({
   const T3=cycleResult?.T3_K||300;
   const P3_bar=cycleResult?.P3_bar||1;
   const oxHumid=cycleResult?.oxidizer_humid_mol_pct||null;
-  const m_air_combustor=cycleResult?.mdot_air_combustor_kg_s||0;
+  // Combustor inlet air = full post-bleed compressor flow. All air that makes
+  // it past the compressor-discharge bleed enters the combustor (through the
+  // four premixer circuits + film cooling); there is no separate "bypass
+  // duct" on the LMS100 DLE. We deliberately do NOT use cycleResult's
+  // mdot_air_combustor_kg_s because that field has the deck's
+  // combustor_bypass_frac calibration (0.747 for LMS100, 0.683 for LM6000)
+  // baked in — it exists only to keep the Brayton fuel accounting consistent
+  // with the OEM-published η, and does not reflect a physical bypass.
+  const m_air_combustor=cycleResult?.mdot_air_post_bleed_kg_s||cycleResult?.mdot_air_kg_s||0;
   const m_fuel_total=cycleResult?.mdot_fuel_kg_s||0;
   // Flame-zone air = combustor air × flame/dilution split (sidebar value).
   const m_air_flame=m_air_combustor*(cycleAirFrac||0.89);
@@ -2005,7 +2013,9 @@ function CombustorMappingPanel({
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>T₃:</span> <strong style={{color:C.accent}}>{fmtT(T3)} {uu(units,"T")}</strong></div>
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>P₃:</span> <strong style={{color:C.accent}}>{units==="SI"?(P3_bar/1.01325).toFixed(3)+" atm":(P3_bar*14.5038).toFixed(1)+" psia"}</strong></div>
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>T_fuel:</span> <strong style={{color:C.accent2}}>{fmtT(Tfuel)} {uu(units,"T")}</strong></div>
-          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Combustor air:</span> <strong style={{color:C.txt}}>{fmtMdot(m_air_combustor)} {mdotU}</strong></div>
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Compressor air:</span> <strong style={{color:C.txt}}>{fmtMdot(cycleResult?.mdot_air_kg_s||0)} {mdotU}</strong></div>
+          {(cycleResult?.bleed_air_frac||0)>0?<div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.orange}40`}}><span style={{color:C.txtDim}}>Bleed flow:</span> <strong style={{color:C.orange}}>−{fmtMdot(cycleResult?.mdot_bleed_kg_s||0)} {mdotU}</strong></div>:null}
+          <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Combustor inlet (post-bleed):</span> <strong style={{color:C.accent}}>{fmtMdot(m_air_combustor)} {mdotU}</strong></div>
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Flame-zone air frac:</span> <strong style={{color:C.txt}}>{(cycleAirFrac*100).toFixed(1)} %</strong></div>
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Flame-zone air:</span> <strong style={{color:C.accent3}}>{fmtMdot(m_air_flame)} {mdotU}</strong></div>
           <div style={{padding:"6px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>Total fuel:</span> <strong style={{color:C.accent2}}>{fmtMdot(m_fuel_total)} {mdotU}</strong></div>
