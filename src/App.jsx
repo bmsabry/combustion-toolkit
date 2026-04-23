@@ -1730,6 +1730,10 @@ export default function App(){
     T_cool_in_K:cycleEngine==="LMS100PB+"?cycleTcool:null,
     fuel_pct:nonzero(fuel),
     combustor_air_frac:cycleAirFrac,
+    // Pass sidebar T_fuel so cycle's T_Bulk uses the same enthalpy-balanced
+    // fuel/air mix as the Flame Temp panel (otherwise T_Bulk overshoots when
+    // T_fuel ≪ T3, because cycle would treat fuel as if preheated to T3).
+    T_fuel_K:T_fuel,
   },accurate&&hasOnline);
   const cycleResult=bkCycle.data;
   // panelState is built AFTER cycleResult to avoid temporal-dead-zone reference.

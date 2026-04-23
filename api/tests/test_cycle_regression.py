@@ -107,18 +107,27 @@ def test_far_bulk_consistency():
 
 def test_t_bulk_hotter_when_flame_zone_is_smaller():
     """Smaller combustor_air_frac → flame zone sees less air at the same fuel
-    load → richer bulk φ → hotter T_Bulk. At frac = 1.0, T_Bulk collapses to T4.
+    load → richer bulk φ → hotter T_Bulk.
+
+    Convention note: T_Bulk uses cold-fuel enthalpy mix (matches Flame Temp
+    panel). T4 back-solve uses deck convention (fuel preheated to T3) so the
+    published LHV efficiency anchors hold. So at frac = 1.0 with cold fuel,
+    T_Bulk ≈ T4 − ΔT_fuel_cooling (small for natural gas, ~25–30 K).
+    Pass T_fuel_K=T3_K to recover the strict T_Bulk = T4 collapse.
     """
-    r_full = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 100.0, combustor_air_frac=1.00)
+    r_full = cycle.run(
+        "LM6000PF", 1.01325, 288.706, 60.0, 100.0,
+        combustor_air_frac=1.00, T_fuel_K=811.0,  # fuel at T3 → no mix cooling
+    )
     r_split = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 100.0, combustor_air_frac=0.70)
-    # With no split, bulk = exit
+    # With no split AND no fuel-mix cooling, bulk = exit
     assert r_full["T_Bulk_K"] == pytest.approx(r_full["T4_K"], abs=3.0)
     assert r_full["phi_Bulk"] == pytest.approx(r_full["phi4"], rel=1e-9)
-    # With a split, flame is richer and hotter
+    # With a split, flame is richer and hotter than the diluted exit
     assert r_split["phi_Bulk"] > r_split["phi4"]
-    assert r_split["T_Bulk_K"] > r_split["T4_K"] + 50.0, (
+    assert r_split["T_Bulk_K"] > r_split["T4_K"] + 30.0, (
         f"T_Bulk={r_split['T_Bulk_K']:.1f} should exceed T4={r_split['T4_K']:.1f} "
-        f"by >50 K at frac=0.70"
+        f"by >30 K at frac=0.70 (split brings hotter primary zone)"
     )
 
 
@@ -225,6 +234,34 @@ def test_phi4_from_t4_is_lean():
         assert r["phi"] == pytest.approx(r["phi_Bulk"], rel=1e-9)
 
 
+def test_aft_at_phi_bulk_equals_t_bulk_with_cold_fuel():
+    """The realistic case: T_fuel ≪ T_air. Cycle's T_Bulk must include the
+    enthalpy cooling from cold fuel mixing in, so it matches what the Flame
+    Temp panel computes (which always does the proper enthalpy mix). Without
+    this fix, T_Bulk overshoots by ~30–80 K and the Flame Temp value visibly
+    'drops' to a lower number when the user switches tabs.
+    """
+    from app.science import aft
+    fuel = {"CH4": 95.0, "C2H6": 3.0, "C3H8": 1.0, "N2": 1.0}
+    T_fuel = 294.261  # 70 °F — typical sidebar default
+    r = cycle.run(
+        "LM6000PF", 1.01325, 288.706, 60.0, 100.0,
+        combustor_air_frac=0.88, T_fuel_K=T_fuel,
+    )
+    r_aft = aft.run(
+        fuel_pct=fuel, ox_pct=r["oxidizer_humid_mol_pct"],
+        phi=r["phi_Bulk"], T0_K=r["T3_K"], P_bar=r["P3_bar"],
+        heat_loss_fraction=0.0,
+        T_fuel_K=T_fuel, T_air_K=r["T3_K"],
+        WFR=0.0, water_mode="liquid",
+    )
+    assert r_aft["T_ad"] == pytest.approx(r["T_Bulk_K"], abs=5.0), (
+        f"AFT T_ad={r_aft['T_ad']:.1f} vs cycle T_Bulk={r['T_Bulk_K']:.1f} — "
+        f"cycle T_Bulk is not using the same enthalpy-balanced mix as AFT, "
+        f"so the Cycle and Flame Temp panels will disagree."
+    )
+
+
 def test_aft_at_phi_bulk_equals_t_bulk():
     """Integration guard for the sidebar linkages. With Oxidizer linked to
     humid air, T_air=T3, P=P3, and phi=phi_Bulk, the AFT panel must reproduce
@@ -232,13 +269,18 @@ def test_aft_at_phi_bulk_equals_t_bulk():
     PSR-PFR / Blowoff / Exhaust panels when all link toggles are ON — they
     all model the flame zone, which is exactly T_Bulk.
 
-    At combustor_air_frac = 1.0 the bulk collapses to the combustor exit,
-    so T_Bulk = T4. This is a good debug point. We test a real split too.
+    For this collapse to be exact, both the cycle's T_Bulk and the AFT call
+    must use the SAME T_fuel. Here we set T_fuel = T3 on both sides — that's
+    the no-cooling reference point. The realistic cold-fuel case is covered
+    by test_aft_at_phi_bulk_equals_t_bulk_with_cold_fuel.
     """
     from app.science import aft
     fuel = {"CH4": 95.0, "C2H6": 3.0, "C3H8": 1.0, "N2": 1.0}
-    # Case A: no split — bulk = exit, so AFT @ phi_Bulk must equal T4.
-    r = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 100.0, combustor_air_frac=1.0)
+    # Case A: no split, no fuel-mix cooling — bulk = exit, AFT @ phi_Bulk = T4.
+    r = cycle.run(
+        "LM6000PF", 1.01325, 288.706, 60.0, 100.0,
+        combustor_air_frac=1.0, T_fuel_K=811.0,
+    )
     r_aft = aft.run(
         fuel_pct=fuel, ox_pct=r["oxidizer_humid_mol_pct"],
         phi=r["phi_Bulk"], T0_K=r["T3_K"], P_bar=r["P3_bar"],
@@ -248,8 +290,12 @@ def test_aft_at_phi_bulk_equals_t_bulk():
     assert r_aft["T_ad"] == pytest.approx(r["T_Bulk_K"], abs=15.0)
     assert r_aft["T_ad"] == pytest.approx(r["T4_K"], abs=15.0)
 
-    # Case B: realistic DLE split — T_Bulk > T4, and AFT @ phi_Bulk must match T_Bulk.
-    r2 = cycle.run("LM6000PF", 1.01325, 288.706, 60.0, 100.0, combustor_air_frac=0.88)
+    # Case B: realistic DLE split, no fuel-mix cooling — T_Bulk > T4, and AFT
+    # @ phi_Bulk must match T_Bulk.
+    r2 = cycle.run(
+        "LM6000PF", 1.01325, 288.706, 60.0, 100.0,
+        combustor_air_frac=0.88, T_fuel_K=811.0,
+    )
     r2_aft = aft.run(
         fuel_pct=fuel, ox_pct=r2["oxidizer_humid_mol_pct"],
         phi=r2["phi_Bulk"], T0_K=r2["T3_K"], P_bar=r2["P3_bar"],

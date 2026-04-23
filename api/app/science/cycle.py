@@ -72,7 +72,7 @@ from typing import Any, Dict, Optional
 
 import cantera as ct
 
-from .mixture import GRI_MECH, _normalize_to_gri, fuel_mass_fraction_at_phi
+from .mixture import GRI_MECH, _normalize_to_gri, fuel_mass_fraction_at_phi, make_gas_mixed
 
 # ---------------------------- Physical constants ---------------------------
 GAMMA_AIR = 1.40            # cold-air approximation (used only for compressor T-rise)
@@ -240,6 +240,36 @@ def _t_ad_at_phi(
     return float(gas.T)
 
 
+def _t_bulk_with_mix(
+    fuel_x: Dict[str, float],
+    ox_x: Dict[str, float],
+    T_fuel_K: float,
+    T_air_K: float,
+    P_bar: float,
+    phi: float,
+) -> float:
+    """HP-adiabatic equilibrium T at (T_mixed, P, phi), where T_mixed is the
+    enthalpy-balanced adiabatic mix of fuel at T_fuel_K with air at T_air_K
+    at this equivalence ratio.
+
+    This matches the Flame Temp / Combustor / AFT panel convention exactly:
+    those panels also call make_gas_mixed → equilibrate('HP') with the
+    sidebar's T_fuel and T_air. Using the same convention here guarantees
+    that T_Bulk on the Cycle panel equals T_ad on the Flame Temp panel
+    when all linkages (T3, P3, φ_Bulk, oxidizer humid air) are ON.
+
+    Without this, T_Bulk would be computed with both streams at T_air
+    (i.e. fuel preheated to compressor exit) — overshooting the realistic
+    flame temperature by however much the cold fuel would have cooled it.
+    """
+    gas, _, _, _ = make_gas_mixed(
+        fuel_x, ox_x, float(phi),
+        float(T_fuel_K), float(T_air_K), float(P_bar),
+    )
+    gas.equilibrate("HP")
+    return float(gas.T)
+
+
 def _phi_for_target_T4(
     fuel_x: Dict[str, float],
     ox_x: Dict[str, float],
@@ -249,8 +279,17 @@ def _phi_for_target_T4(
 ) -> float:
     """Bisect phi in [0.10, 1.00] so that Cantera equilibrate('HP') at (T3, P3) → T4_target.
 
-    Returns the phi whose equilibrium adiabatic product T matches the target T4
-    to within 1 K (or the edge of the bracket if T4 is outside the reachable range).
+    Uses the deck convention (fuel preheated to T3), NOT the cold-fuel
+    enthalpy mix used for T_Bulk. The deck T4 anchors and the published
+    LHV efficiency (44 % for LMS100, 41.5 % for LM6000) are calibrated
+    against this convention — which implicitly bakes in real-world fuel
+    preheat (recuperation / waste-heat) common to industrial GTs. Changing
+    this would shift fuel flow ~3 % and break the published-efficiency
+    anchors. T_Bulk separately uses the realistic cold-fuel mix to match
+    what the user sees on the Flame Temp panel.
+
+    Returns the phi whose equilibrium product T matches the target T4
+    to within ~1 K (or the edge of the bracket if T4 is outside reach).
     """
     def T_eq(phi: float) -> float:
         return _t_ad_at_phi(fuel_x, ox_x, T3_K, P3_bar, phi)
@@ -515,9 +554,12 @@ def run(
         Set = 1.0 to collapse the flame zone onto the combustor exit
         (T_Bulk = T4, phi_Bulk = phi4) — useful for debugging linkage.
     T_fuel_K
-        Fuel delivery temperature (K). Used only in the Modified Wobbe Index
-        denominator MWI = LHV_vol / √(SG × T_fuel_absolute). Defaults to
-        288.706 K (60 °F) — the reference T for tabulated MWI values.
+        Fuel delivery temperature (K). Two uses:
+          (a) Modified Wobbe Index denominator: MWI = LHV_vol / √(SG × T_fuel).
+          (b) Enthalpy-balanced fuel/air mix temperature for T_Bulk, so that
+              the cycle's flame-zone T matches the Flame Temp / AFT panel at
+              the linked sidebar state (T_air=T3, P=P3, φ=φ_Bulk).
+        Defaults to 288.706 K (60 °F) — the reference T for tabulated MWI.
 
     Returns a dict with all station properties and diagnostics (see
     docstring and CycleResponse schema for fields).
@@ -637,7 +679,12 @@ def run(
     f_safe = max(combustor_air_frac, 1e-6)
     FAR_Bulk = FAR4 / f_safe
     phi_Bulk = phi4 / f_safe
-    T_Bulk_K = _t_ad_at_phi(fuel_x, ox_x, stations["T3_K"], P3_bar, phi_Bulk)
+    # Use enthalpy-balanced fuel↔air mixing so T_Bulk matches what the Flame
+    # Temp panel computes at the linked sidebar state (T_fuel, T_air=T3).
+    # See _t_bulk_with_mix for the full motivation.
+    T_Bulk_K = _t_bulk_with_mix(
+        fuel_x, ox_x, T_fuel_K, stations["T3_K"], P3_bar, phi_Bulk,
+    )
 
     # --- Fuel flow ----------------------------------------------------------
     # combustor_bypass_frac is the fraction of compressor-discharge air that
