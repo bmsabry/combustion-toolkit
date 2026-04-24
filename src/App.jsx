@@ -34,6 +34,20 @@ function uv(units,key,val){return UC[units][key].from(val);}
 function uvI(units,key,disp){return UC[units][key].to(disp);}  // display units -> SI
 function uu(units,key){return UC[units][key].u;}
 
+// Burner mode lookup — piecewise-constant function of net shaft power (MW).
+// Table:   MW ≤ 10 → 1,  ≤ 45 → 2,  ≤ 65 → 4,  ≤ 75 → 6,  > 75 → 7.
+// Used across the app wherever the burner-mode class is needed (Operations
+// Summary display, future Mapping-panel gating, reports, …).
+function calcBRNDMD(MW_net){
+  const mw=Number(MW_net);
+  if(!Number.isFinite(mw)||mw<=0)return 0;
+  if(mw<=10)return 1;
+  if(mw<=45)return 2;
+  if(mw<=65)return 4;
+  if(mw<=75)return 6;
+  return 7;
+}
+
 /* ══════════════════════════════════════════════════════════════
    NASA POLYNOMIAL DATABASE
    ══════════════════════════════════════════════════════════════ */
@@ -2441,16 +2455,18 @@ function OperationsSummaryPanel({
           tip="Compressor-exit / combustor-inlet pressure. Drives the pressure-ratio scaling of NOx, CO, and PX36 dynamics via the (P3/638)^exp terms in the correlation."/>
       </div>
 
-      {/* ═══ ROW 2 — T4 + η + HR + Bleed Valve (tight) ═══ */}
+      {/* ═══ ROW 2 — T4 + η + HR + Bleed Valve + BRNDMD (tight, small) ═══ */}
       <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-        <Hero flex={0} label="T₄ (firing)" value={fmtT(T4_fromCycle).split(" ")[0]} unit={uu(units,"T")} color={C.warm}
+        <Hero flex={0} small label="T₄ (firing)" value={fmtT(T4_fromCycle).split(" ")[0]} unit={uu(units,"T")} color={C.warm}
           tip="Combustor-exit firing temperature from the cycle result — identical to T4 shown on the Cycle panel. Independent from the O2/CO2 calculation below, which uses a separate equilibrium at φ_new = fuel / ((W3 − bleed) × FAR_stoich)."/>
-        <Hero flex={0} label="Thermal Efficiency (LHV)" value={(cycleResult.efficiency_LHV*100).toFixed(2)} unit="%" color={C.good}
+        <Hero flex={0} small label="Thermal Efficiency (LHV)" value={(cycleResult.efficiency_LHV*100).toFixed(2)} unit="%" color={C.good}
           tip="Net shaft power divided by fuel LHV thermal input. Equivalent to 1 / HR in consistent units."/>
-        <Hero flex={0} label="Heat Rate" value={cycleResult.heat_rate_kJ_per_kWh.toFixed(0)} unit="kJ/kWh" color={C.accent3}
+        <Hero flex={0} small label="Heat Rate" value={cycleResult.heat_rate_kJ_per_kWh.toFixed(0)} unit="kJ/kWh" color={C.accent3}
           tip="Fuel heat input per unit electrical output. Lower is better."/>
-        <Hero flex={0} label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
+        <Hero flex={0} small label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
           tip="Bleed valve position — 0 % = closed, 100 % = fully open. Auto schedule: 100 % below 75 % load, 0 % above 95 %, linear between. Effective air dumped = valve % × Max Bleed split %."/>
+        <Hero flex={0} small label="BRNDMD" value={String(calcBRNDMD(cycleResult.MW_net))} unit="" color={C.violet}
+          tip="Burner mode — piecewise-constant function of net shaft power (MW). Breakpoints: ≤10 MW → 1, ≤45 → 2, ≤65 → 4, ≤75 → 6, >75 → 7."/>
       </div>
 
       {/* ═══ MASS FLOWS ═══ */}
