@@ -241,26 +241,26 @@ def make_gas_mixed(
 
 
 def compute_ratios(fuel_pct: Dict[str, float], ox_pct: Dict[str, float], phi: float) -> Tuple[float, float, float, float]:
-    """Return (FAR, FAR_stoich, AFR, AFR_stoich) on a mass basis using Cantera's mixture_fraction.
+    """Return (FAR, FAR_stoich, AFR, AFR_stoich) on a mass basis.
 
-    Uses Cantera's built-in mixture_fraction which correctly separates fuel-stream mass
-    from oxidizer-stream mass even when both streams share species like N2 / CO2 / H2O.
+    FAR_stoich is computed from atom-count stoichiometry and the two stream
+    MWs (NOT from Cantera's Bilger `mixture_fraction`). Bilger Z under-counts
+    fuel mass by 10–30 % whenever the oxidizer carries C/H atoms (humid air,
+    EGR, vitiated air), so using it here produces a FAR_stoich that is
+    inconsistent with the atom-count path used in the rest of the codebase
+    (cycle.py FAR4, water_mix.py, make_gas_mixed, combustor_mapping Tflame).
+
+    By computing FAR_stoich = Y_f(phi=1) / (1 − Y_f(phi=1)) via
+    `fuel_mass_fraction_at_phi`, we guarantee:
+      • FAR = phi × FAR_stoich exactly at every phi,
+      • identical stoichiometry between cycle's FAR4 and mapping's FAR_stoich,
+      • correct numbers for humid, EGR, and other non-dry oxidizer streams.
     """
-    gas = ct.Solution(GRI_MECH)
     fuel_x = _normalize_to_gri(fuel_pct)
     ox_x = _normalize_to_gri(ox_pct)
-    fuel_str = ", ".join(f"{k}:{v:.10f}" for k, v in fuel_x.items())
-    ox_str = ", ".join(f"{k}:{v:.10f}" for k, v in ox_x.items())
-    gas.TP = 298.15, 101325.0
-    gas.set_equivalence_ratio(1.0, fuel=fuel_str, oxidizer=ox_str)
-    # Z = fuel-stream mass fraction in the combined mixture (0 ≤ Z ≤ 1)
-    try:
-        Z_stoich = float(gas.mixture_fraction(fuel=fuel_str, oxidizer=ox_str, basis="mass"))
-    except Exception:
-        # Older Cantera fallback
-        Z_stoich = 1.0 / (1.0 + 16.0)  # approximate methane stoich
-    FAR_stoich = Z_stoich / max(1.0 - Z_stoich, 1e-20)
+    Y_f_stoich = fuel_mass_fraction_at_phi(fuel_x, ox_x, 1.0, GRI_MECH)
+    FAR_stoich = Y_f_stoich / max(1.0 - Y_f_stoich, 1e-20)
     AFR_stoich = 1.0 / max(FAR_stoich, 1e-20)
-    FAR = phi * FAR_stoich
+    FAR = float(phi) * FAR_stoich
     AFR = 1.0 / max(FAR, 1e-20)
     return FAR, FAR_stoich, AFR, AFR_stoich

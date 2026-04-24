@@ -79,7 +79,7 @@ from typing import Any, Dict, Optional
 
 import cantera as ct
 
-from .mixture import GRI_MECH, _normalize_to_gri, fuel_mass_fraction_at_phi, make_gas_mixed
+from .mixture import GRI_MECH, _normalize_to_gri, compute_ratios, fuel_mass_fraction_at_phi, make_gas_mixed
 from .water_mix import make_gas_mixed_with_water
 
 # ---------------------------- Physical constants ---------------------------
@@ -856,9 +856,11 @@ def run(
     water_mode = water_mode if water_mode in ("liquid", "steam") else "liquid"
     phi4 = _phi_for_target_T4(fuel_x, ox_x, T_fuel_K, stations["T3_K"], P3_bar, T4_K)
 
-    # FAR4 = fuel mass / combustor air mass at the phi that produces T4
-    Y_f = fuel_mass_fraction_at_phi(fuel_x, ox_x, phi4, GRI_MECH)
-    FAR4 = Y_f / max(1.0 - Y_f, 1e-20)
+    # FAR4 = phi4 × FAR_stoich. FAR_stoich is the stoichiometric fuel-to-
+    # oxidizer mass ratio for the ACTUAL fuel and oxidizer composition
+    # (atom-count via fuel_mass_fraction_at_phi — correct for humid air).
+    _, FAR_stoich, _, _ = compute_ratios(fuel_x, ox_x, 1.0)
+    FAR4 = float(phi4) * FAR_stoich
 
     # --- Flame-zone (bulk) state -------------------------------------------
     # combustor_air_frac is the fraction of combustor air in the flame zone.
