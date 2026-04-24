@@ -1854,13 +1854,13 @@ function CombustorMappingPanel({
 
   // ── Controls ─────────────────────────────────────────────────────────────
   // W36/W3: fraction of post-bleed W3 entering the combustor dome.
-  const[w36w3,setW36w3]=useState(0.89);
+  const[w36w3,setW36w3]=useState(0.75);
 
   // Circuit air fractions (% of flame zone air = W36 × com.Air Frac). Sum=100.
   const[fracIP,setFracIP]=useState(2.3);
   const[fracOP,setFracOP]=useState(2.2);
-  const[fracIM,setFracIM]=useState(41.0);
-  const[fracOM,setFracOM]=useState(54.5);
+  const[fracIM,setFracIM]=useState(39.9);
+  const[fracOM,setFracOM]=useState(55.6);
   const sumFrac=fracIP+fracOP+fracIM+fracOM;
 
   // User-set φ for IP / OP / IM. OM is back-solved from total-fuel mass balance.
@@ -2790,7 +2790,7 @@ export default function App(){
   // Effective bleed_air_frac = (open % / 100) × (valve_size % / 100).
   const[bleedMode,setBleedMode]=useState("auto");
   const[bleedOpenManualPct,setBleedOpenManualPct]=useState(100);
-  const[bleedValveSizePct,setBleedValveSizePct]=useState(6);
+  const[bleedValveSizePct,setBleedValveSizePct]=useState(7.75);
   // UI step size for Bleed Open % (manual mode). Selectable via the chips
   // under the Bleed Open NumField. 1 = fine (per-% step); 15/30/45/60/75/90 are
   // coarse steps for quickly nudging the valve to common operating points.
