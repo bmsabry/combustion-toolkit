@@ -147,7 +147,11 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         "beta_MW": 0.25,  # intercooler flattens MW-vs-ambient (hot-day hold)
         # LMS100 intercooler control: T3 stays at the design value across
         # ambient at max load. At part load T3 drops (HPC works less).
-        "T3_load_slope_K_per_pct": 1.6,  # at load=50% T3 falls by ~80 K
+        # Anchored to two points:
+        #   100 % load → T3 = 700 °F = 644.26 K  (design)
+        #    75 % load → T3 = 660 °F = 622.04 K
+        # Slope = (644.26 − 622.04) K / 25 % = 0.8889 K per % load.
+        "T3_load_slope_K_per_pct": 0.8889,
     },
     "LM6000PF": {
         "label": "GE LM6000PF (2-spool aero-derivative, non-intercooled)",

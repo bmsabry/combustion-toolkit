@@ -2790,7 +2790,7 @@ export default function App(){
   // Effective bleed_air_frac = (open % / 100) × (valve_size % / 100).
   const[bleedMode,setBleedMode]=useState("auto");
   const[bleedOpenManualPct,setBleedOpenManualPct]=useState(100);
-  const[bleedValveSizePct,setBleedValveSizePct]=useState(3.3);
+  const[bleedValveSizePct,setBleedValveSizePct]=useState(6);
   // UI step size for Bleed Open % (manual mode). Selectable via the chips
   // under the Bleed Open NumField. 1 = fine (per-% step); 15/30/45/60/75/90 are
   // coarse steps for quickly nudging the valve to common operating points.
