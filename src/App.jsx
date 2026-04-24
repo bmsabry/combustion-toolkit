@@ -2208,8 +2208,12 @@ function OperationsSummaryPanel({
     WFR, water_mode:waterMode,
   }, !!(accurate&&cycleResult&&phi_new>0));
 
-  const T4_complete=bkAFT_T4.data?.T_ad_complete||cycleResult?.T4_K||0;
-  // Equilibrium (wet) mole fractions, then convert to dry.
+  // T4 displayed here is the SAME cycle T4 that the Cycle panel shows —
+  // nothing to do with the AFT call at phi_new. Equilibrium firing T, back-
+  // solved by cycle.py to hit the deck's T4 target.
+  const T4_fromCycle=cycleResult?.T4_K||0;
+  // Equilibrium (wet) mole fractions at phi_new, then convert to dry for
+  // the O2/CO2 display ONLY (completely independent from T4).
   const eqWet=bkAFT_T4.data?.mole_fractions||{};
   const X_H2O=eqWet.H2O||0;
   const denomDry=Math.max(1e-9,1-X_H2O);
@@ -2268,21 +2272,30 @@ function OperationsSummaryPanel({
             WFR, water_mode:waterMode, T_water_K:WFR>0?T_water:null,
             bleed_air_frac:bleedAirFracAtL,
           });
-          // AFT at phi4 for T4 complete + O2/CO2
-          let T4_cc=c.T4_K, O2dry=0, CO2dry=0;
+          // T4 comes straight from the cycle result (same as Cycle panel).
+          // O2/CO2 come from a SEPARATE AFT call at the new phi = fuel /
+          // ((W3 − bleed) × FAR_stoich), HP equilibrium, dry basis.
+          const T4_cycle=c.T4_K||0;
+          let O2dry=0, CO2dry=0;
+          const W3_pb = c.mdot_air_post_bleed_kg_s || c.mdot_air_kg_s || 0;
+          const FAR_stoich_sweep = 0.0600;  // atom-count stoich for pipeline NG
+          const phi_sweep = (W3_pb>0 && FAR_stoich_sweep>0)
+            ? (c.mdot_fuel_kg_s||0)/(W3_pb*FAR_stoich_sweep) : 0;
           try{
-            const aft=await api.calcAFT({
-              fuel:nonzero(fuel),oxidizer:nonzero(ox),
-              phi:c.phi4, T0:c.T3_K, P:c.P3_bar,
-              mode:"adiabatic", heat_loss_fraction:0,
-              T_fuel_K:Tfuel, T_air_K:c.T3_K,
-              WFR, water_mode:waterMode,
-            });
-            T4_cc=aft.T_ad_complete||c.T4_K;
-            const d=aft.mole_fractions_complete_dry||{};
-            O2dry=(d.O2||0)*100;
-            CO2dry=(d.CO2||0)*100;
-          }catch(e){/* fall back to equilibrium T4 */}
+            if(phi_sweep>0){
+              const aft=await api.calcAFT({
+                fuel:nonzero(fuel),oxidizer:nonzero(ox),
+                phi:phi_sweep, T0:c.T3_K, P:c.P3_bar,
+                mode:"adiabatic", heat_loss_fraction:0,
+                T_fuel_K:Tfuel, T_air_K:c.T3_K,
+                WFR, water_mode:waterMode,
+              });
+              const X_H2O=aft.mole_fractions?.H2O||0;
+              const den=Math.max(1e-9,1-X_H2O);
+              O2dry=((aft.mole_fractions?.O2||0)/den)*100;
+              CO2dry=(((aft.mole_fractions?.CO2||0)+(aft.mole_fractions?.CO||0))/den)*100;
+            }
+          }catch(e){/* leave O2/CO2 at 0 if AFT errors */}
           const m_bleed=c.mdot_bleed_kg_s||0;
           const m_water=c.mdot_water_kg_s||0;
           results.push({
@@ -2297,7 +2310,7 @@ function OperationsSummaryPanel({
             // The effective fraction = %-open × valve_size is a derived
             // cycle-input, not a physically meaningful operator control.
             bleed_open:openAtL,
-            T4_complete:T4_cc,
+            T4:T4_cycle,
             eta:(c.efficiency_LHV||0)*100,
             O2:O2dry, CO2:CO2dry,
           });
@@ -2342,7 +2355,7 @@ function OperationsSummaryPanel({
   const mCurrent={
     MW:cycleResult?.MW_net||null,
     eta:cycleResult?(cycleResult.efficiency_LHV*100):null,
-    T4_complete:T4_complete||null,
+    T4:T4_fromCycle||null,
     fuel:cycleResult?.mdot_fuel_kg_s||null,
     air:cycleResult?(cycleResult.mdot_air_post_bleed_kg_s||cycleResult.mdot_air_kg_s||0):null,
     water:cycleResult?.mdot_water_kg_s||null,
@@ -2430,8 +2443,8 @@ function OperationsSummaryPanel({
 
       {/* ═══ ROW 2 — T4 + η + HR + Bleed Valve (tight) ═══ */}
       <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-        <Hero flex={0} label="T₄ — Complete Combustion" value={fmtT(T4_complete).split(" ")[0]} unit={uu(units,"T")} color={C.warm}
-          tip="Combustor-exit firing temperature computed under the complete-combustion assumption (no dissociation) at the cycle's φ₄. Pulled from the Flame Temp backend."/>
+        <Hero flex={0} label="T₄ (firing)" value={fmtT(T4_fromCycle).split(" ")[0]} unit={uu(units,"T")} color={C.warm}
+          tip="Combustor-exit firing temperature from the cycle result — identical to T4 shown on the Cycle panel. Independent from the O2/CO2 calculation below, which uses a separate equilibrium at φ_new = fuel / ((W3 − bleed) × FAR_stoich)."/>
         <Hero flex={0} label="Thermal Efficiency (LHV)" value={(cycleResult.efficiency_LHV*100).toFixed(2)} unit="%" color={C.good}
           tip="Net shaft power divided by fuel LHV thermal input. Equivalent to 1 / HR in consistent units."/>
         <Hero flex={0} label="Heat Rate" value={cycleResult.heat_rate_kJ_per_kWh.toFixed(0)} unit="kJ/kWh" color={C.accent3}
@@ -2512,7 +2525,7 @@ function OperationsSummaryPanel({
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
           <MiniChart title="Net Power" yKey="MW" color={C.accent} unit={`MW`} currentRaw={mCurrent.MW}/>
           <MiniChart title="Thermal Efficiency (LHV)" yKey="eta" color={C.good} unit="%" currentRaw={mCurrent.eta}/>
-          <MiniChart title="T₄ (complete combustion)" yKey="T4_complete" color={C.warm} unit={uu(units,"T")} transformY={(K)=>uv(units,"T",K)} currentRaw={mCurrent.T4_complete}/>
+          <MiniChart title="T₄ (firing, cycle)" yKey="T4" color={C.warm} unit={uu(units,"T")} transformY={(K)=>uv(units,"T",K)} currentRaw={mCurrent.T4}/>
           <MiniChart title="Fuel flow" yKey="fuel" color={C.accent2} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.fuel}/>
           <MiniChart title="Air flow (post-bleed)" yKey="air" color={C.accent3} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.air}/>
           {WFR>0?<MiniChart title="Water inject flow" yKey="water" color={C.violet} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.water}/>:null}
