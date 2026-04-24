@@ -1848,25 +1848,17 @@ function KV({k,v}){return(<div style={{display:"flex",justifyContent:"space-betw
 function CombustorMappingPanel({
   fuel, Tfuel, WFR=0, waterMode="liquid", T_water,
   cycleResult, bkCycle,
+  // Lifted state — Operations Summary shares this so its NOx15/CO15 agree
+  // with the mapping panel's correlation values.
+  w36w3, setW36w3,
+  fracIP, setFracIP, fracOP, setFracOP, fracIM, setFracIM, fracOM, setFracOM,
+  phiIP, setPhiIP, phiOP, setPhiOP, phiIM, setPhiIM,
+  bkMap,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
 
-  // ── Controls ─────────────────────────────────────────────────────────────
-  // W36/W3: fraction of post-bleed W3 entering the combustor dome.
-  const[w36w3,setW36w3]=useState(0.75);
-
-  // Circuit air fractions (% of flame zone air = W36 × com.Air Frac). Sum=100.
-  const[fracIP,setFracIP]=useState(2.3);
-  const[fracOP,setFracOP]=useState(2.2);
-  const[fracIM,setFracIM]=useState(39.9);
-  const[fracOM,setFracOM]=useState(55.6);
   const sumFrac=fracIP+fracOP+fracIM+fracOM;
-
-  // User-set φ for IP / OP / IM. OM is back-solved from total-fuel mass balance.
-  const[phiIP,setPhiIP]=useState(0.25);
-  const[phiOP,setPhiOP]=useState(0.65);
-  const[phiIM,setPhiIM]=useState(0.50);
 
   // ── Cycle-provided state ─────────────────────────────────────────────────
   const T3=cycleResult?.T3_K||300;
@@ -1885,24 +1877,8 @@ function CombustorMappingPanel({
   const m_air_IM        = m_air_flame * fracIM/100;
   const m_air_OM        = m_air_flame * fracOM/100;
 
-  // ── Backend — single /calc/combustor_mapping call ────────────────────────
-  const mapArgs = {
-    fuel: nonzero(fuel),
-    oxidizer: oxHumid ? nonzero(oxHumid) : null,
-    T3_K: T3, P3_bar, T_fuel_K: Tfuel,
-    W3_kg_s: m_air_post_bleed,
-    W36_over_W3: Math.max(0.01, Math.min(1.0, w36w3)),
-    com_air_frac: Math.max(0.01, Math.min(1.0, comAirFrac)),
-    frac_IP_pct: fracIP, frac_OP_pct: fracOP, frac_IM_pct: fracIM, frac_OM_pct: fracOM,
-    phi_IP: Math.max(0, phiIP), phi_OP: Math.max(0, phiOP), phi_IM: Math.max(0, phiIM),
-    m_fuel_total_kg_s: m_fuel_total,
-    WFR, water_mode: waterMode,
-  };
-  const bkMap = useBackendCalc(
-    "combustor_mapping", mapArgs,
-    !!(accurate && oxHumid && m_air_post_bleed > 0 && m_fuel_total > 0)
-  );
-  const R = bkMap.data;
+  // bkMap is computed once in App and passed down — shared with Ops Summary.
+  const R = bkMap?.data;
   const C_IP = R?.circuits?.IP, C_OP = R?.circuits?.OP, C_IM = R?.circuits?.IM, C_OM = R?.circuits?.OM;
   const phi_OM = R?.phi_OM || 0;
   const m_fuel_OM = C_OM?.m_fuel_kg_s || 0;
@@ -2187,6 +2163,7 @@ function OperationsSummaryPanel({
   tau_psr, L_pfr, V_pfr, heatLossFrac,
   psrSeed, eqConstraint, integration, mechanism,
   cycleResult, bleedAirFrac, bkCycle,
+  bkMap,  // shared /calc/combustor_mapping result — NOx15/CO15 from correlation
   // bleed state — needed so the sweep can vary the correct % open at every
   // load (auto schedule) and so the current-load marker shows the actual
   // % open the user has dialled in, not the multiplied "effective" fraction
@@ -2202,42 +2179,45 @@ function OperationsSummaryPanel({
   // stay silent because we call api.calcCycle/api.calcAFT directly.
   const {begin:beginBusy}=useContext(BusyCtx);
 
-  // ── Complete-combustion at COMBUSTOR EXIT state (phi4, T3, P3) ──────────
-  // We call /calc/aft at the cycle's phi4 — NOT phi_Bulk — so T_ad_complete
-  // reflects the diluted combustor-exit condition, which is what T4 means.
-  // The same call's mole_fractions_complete_dry gives O₂% and CO₂% at T4.
-  const phi4=cycleResult?.phi4||0;
+  // ── NOx15 / CO15 come from the shared mapping correlation (bkMap) ───────
+  // This matches exactly what the Combustor Mapping panel displays because
+  // both panels consume the same /calc/combustor_mapping result.
+  const NOx_15=bkMap?.data?.correlations?.NOx15||0;
+  const CO_15 =bkMap?.data?.correlations?.CO15 ||0;
+
+  // ── T4 (complete-combustion) + equilibrium O2/CO2 at NEW phi ────────────
+  // phi_new = total_fuel / ((compressor_air − bleed_air) × FAR_stoich).
+  // The compressor-air-minus-bleed is cycle's mdot_air_post_bleed. The O2 /
+  // CO2 come from HP-equilibrium at that phi (dry basis). This bypasses the
+  // cycle's internal combustor_bypass_frac calibration knob and gives the
+  // values that correspond to the physical air+fuel mass balance.
   const T3_K=cycleResult?.T3_K||Tfuel||300;
   const P3_bar=cycleResult?.P3_bar||1;
+  const W3_post_bleed=cycleResult?.mdot_air_post_bleed_kg_s||cycleResult?.mdot_air_kg_s||0;
+  const mdot_fuel=cycleResult?.mdot_fuel_kg_s||0;
+  const FAR_stoich_map=bkMap?.data?.FAR_stoich||0.053;  // fallback if bkMap missing
+  const FAR_new=W3_post_bleed>0?(mdot_fuel/W3_post_bleed):0;
+  const phi_new=FAR_stoich_map>0?FAR_new/FAR_stoich_map:0;
+
+  // Equilibrium at phi_new: HP equilibrium mole fractions → dry basis for O2/CO2.
   const bkAFT_T4=useBackendCalc("aft",{
     fuel:nonzero(fuel),oxidizer:nonzero(ox),
-    phi:phi4>0?phi4:0.01, T0:T3_K, P:P3_bar,
+    phi:phi_new>0?phi_new:0.01, T0:T3_K, P:P3_bar,
     mode:"adiabatic", heat_loss_fraction:0,
     T_fuel_K:Tfuel, T_air_K:T3_K,
     WFR, water_mode:waterMode,
-  }, !!(accurate&&cycleResult&&phi4>0));
+  }, !!(accurate&&cycleResult&&phi_new>0));
 
   const T4_complete=bkAFT_T4.data?.T_ad_complete||cycleResult?.T4_K||0;
-  const ccDry=bkAFT_T4.data?.mole_fractions_complete_dry||{};
-  const O2_pct_T4=ccDry.O2?ccDry.O2*100:0;
-  const CO2_pct_T4=ccDry.CO2?ccDry.CO2*100:0;
-
-  // ── PFR-exit NOx / CO from the combustor PSR-PFR reactor network ────────
-  // Uses the same sidebar linkage the Combustor panel itself uses (phi_Bulk,
-  // T3, P3, user's tau/L/V/seed selections).
-  const phi_for_combustor=cycleResult?.phi_Bulk||phi4;
-  const bkComb=useBackendCalc("combustor",{
-    fuel:nonzero(fuel),oxidizer:nonzero(ox),
-    phi:phi_for_combustor>0?phi_for_combustor:0.01,
-    T0:T3_K, P:P3_bar,
-    tau_psr_s:tau_psr/1000, L_pfr_m:L_pfr, V_pfr_m_s:V_pfr, profile_points:20,
-    T_fuel_K:Tfuel, T_air_K:T3_K,
-    psr_seed:psrSeed, eq_constraint:eqConstraint, integration,
-    heat_loss_fraction:heatLossFrac, mechanism,
-    WFR, water_mode:waterMode,
-  }, !!(accurate&&cycleResult&&phi_for_combustor>0));
-  const NOx_15=bkComb.data?.NO_ppm_15O2||0;
-  const CO_15=bkComb.data?.CO_ppm_15O2||0;
+  // Equilibrium (wet) mole fractions, then convert to dry.
+  const eqWet=bkAFT_T4.data?.mole_fractions||{};
+  const X_H2O=eqWet.H2O||0;
+  const denomDry=Math.max(1e-9,1-X_H2O);
+  const O2_pct_T4=(eqWet.O2||0)/denomDry*100;
+  const CO2_pct_T4=((eqWet.CO2||0)+(eqWet.CO||0))/denomDry*100;
+  // Legacy bkComb retained only for backward-compatibility with the loading
+  // banner (the NOx/CO values themselves now come from bkMap, above).
+  const bkComb={data:null,loading:false,err:null};
 
   // ── Sweep state (client-side load sweep) ─────────────────────────────────
   const[sweepData,setSweepData]=useState([]);
@@ -2422,7 +2402,8 @@ function OperationsSummaryPanel({
         <div style={{fontSize:13,fontWeight:600,color:C.warm,marginBottom:8}}>Cycle solution not available</div>
         <div style={{fontSize:11}}>Turn on Accurate Mode in the header. The cycle must run before the summary can populate.</div>
       </div>
-      :<>
+      :<div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:16,alignItems:"start"}}>
+      <div style={{display:"flex",flexDirection:"column",gap:12,minWidth:0}}>
 
       {/* ═══ HEADLINE ROW — Power + Load as hero ═══ */}
       <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
@@ -2441,8 +2422,8 @@ function OperationsSummaryPanel({
         </div>
         <Hero flex={1.1} label="Load" value={cycleResult.load_pct.toFixed(0)} unit="%" color={C.accent2}
           tip="Percent of max-on-day power at current ambient conditions. Set in sidebar."/>
-        <Hero flex={1} label="Bleed (lost air)" value={((cycleResult.bleed_air_frac||0)*100).toFixed(2)} unit="%" color={C.orange}
-          tip="Effective compressor-discharge bleed fraction dumped to ambient (= bleed open × valve size). Drives T4 up to hold power."/>
+        <Hero flex={1} label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
+          tip="Bleed valve position — 0 % = closed, 100 % = fully open. Auto schedule: 100 % below 75 % load, 0 % above 95 %, linear between. Effective air dumped = valve % × Max Bleed split %."/>
       </div>
 
       {/* ═══ FLAME STATE — T4, η ═══ */}
@@ -2485,14 +2466,17 @@ function OperationsSummaryPanel({
         </div>
       </div>
 
-      {/* ═══ T4-STATE COMPOSITION (complete combustion, dry basis) ═══ */}
+      {/* ═══ EXHAUST COMPOSITION (equilibrium, dry basis) ═══ */}
       <div>
-        <div style={{fontSize:9.5,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.2px",margin:"2px 0 6px",paddingBottom:3,borderBottom:`1px solid ${C.violet}30`}}>T₄ Composition — Complete Combustion, Dry {bkAFT_T4.loading?<span style={{fontSize:9,color:C.accent2,marginLeft:6,fontWeight:500,textTransform:"none",letterSpacing:0}}>⟳ updating</span>:null}</div>
+        <div style={{fontSize:9.5,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.2px",margin:"2px 0 6px",paddingBottom:3,borderBottom:`1px solid ${C.violet}30`}}>Exhaust Composition — Equilibrium, Dry {bkAFT_T4.loading?<span style={{fontSize:9,color:C.accent2,marginLeft:6,fontWeight:500,textTransform:"none",letterSpacing:0}}>⟳ updating</span>:null}</div>
+        <div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6,fontFamily:"monospace"}}>
+          φ_new = m_fuel / ((W3 − bleed) × FAR_stoich) = {phi_new.toFixed(4)}   (HP equilibrium at T3, P3)
+        </div>
         <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
           <Hero small label="O₂ dry" value={O2_pct_T4.toFixed(2)} unit="%" color="#38BDF8"
-            tip="Oxygen in combustor-exit products on a dry basis, under the complete-combustion assumption at φ₄, T3, P3. This is what a dry stack O₂ analyzer would read if dissociation products have recombined (typical for real stacks)."/>
+            tip="Oxygen in exhaust products on a dry basis, from HP equilibrium at the NEW phi based on post-bleed air flow and total fuel flow. Does not use cycle's internal combustor_bypass_frac calibration."/>
           <Hero small label="CO₂ dry" value={CO2_pct_T4.toFixed(2)} unit="%" color={C.warm}
-            tip="Carbon dioxide in combustor-exit products on a dry basis, complete-combustion assumption. Equivalent to a dry-basis CO₂ CEMS reading."/>
+            tip="CO₂ + CO on a dry basis (CO from equilibrium dissociation recombines to CO₂ as stack cools). From HP equilibrium at the new phi."/>
         </div>
       </div>
 
@@ -2521,7 +2505,7 @@ function OperationsSummaryPanel({
         </div>
         {sweepErr?<div style={{padding:"6px 10px",background:`${C.strong}14`,border:`1px solid ${C.strong}60`,borderRadius:4,fontSize:10.5,color:C.strong,marginBottom:10}}>Sweep error: {sweepErr}</div>:null}
 
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(360px, 1fr))",gap:10}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
           <MiniChart title="Net Power" yKey="MW" color={C.accent} unit={`MW`} currentRaw={mCurrent.MW}/>
           <MiniChart title="Thermal Efficiency (LHV)" yKey="eta" color={C.good} unit="%" currentRaw={mCurrent.eta}/>
           <MiniChart title="T₄ (complete combustion)" yKey="T4_complete" color={C.warm} unit={uu(units,"T")} transformY={(K)=>uv(units,"T",K)} currentRaw={mCurrent.T4_complete}/>
@@ -2529,11 +2513,20 @@ function OperationsSummaryPanel({
           <MiniChart title="Air flow (post-bleed)" yKey="air" color={C.accent3} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.air}/>
           {WFR>0?<MiniChart title="Water inject flow" yKey="water" color={C.violet} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.water}/>:null}
           <MiniChart title="Bleed Valve — % Open" yKey="bleed_open" color={C.orange} unit="% open" currentRaw={mCurrent.bleed_open}/>
-          <MiniChart title="O₂ dry (complete-comb.)" yKey="O2" color="#38BDF8" unit="%" currentRaw={mCurrent.O2}/>
-          <MiniChart title="CO₂ dry (complete-comb.)" yKey="CO2" color={C.warm} unit="%" currentRaw={mCurrent.CO2}/>
+          <MiniChart title="O₂ dry (equilibrium)" yKey="O2" color="#38BDF8" unit="%" currentRaw={mCurrent.O2}/>
+          <MiniChart title="CO₂ dry (equilibrium)" yKey="CO2" color={C.warm} unit="%" currentRaw={mCurrent.CO2}/>
         </div>
       </div>
-      </>}
+      </div>
+
+      {/* ═════════════════════════════════════════════════════════════════
+          RIGHT HALF — reserved placeholder for future content
+         ═════════════════════════════════════════════════════════════════ */}
+      <div style={{background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:10,padding:"24px",minHeight:480,color:C.txtMuted,fontSize:11,fontFamily:"monospace",display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
+        Right panel — reserved for future content
+      </div>
+
+      </div>}
   </div>);
 }
 
@@ -2795,6 +2788,17 @@ export default function App(){
   // under the Bleed Open NumField. 1 = fine (per-% step); 15/30/45/60/75/90 are
   // coarse steps for quickly nudging the valve to common operating points.
   const[bleedStepPct,setBleedStepPct]=useState(15);
+  // ── Combustor-Mapping panel inputs (lifted to App so Operations Summary
+  // can reuse the same correlation result — /calc/combustor_mapping is
+  // fired once in App and the bkMap handle is passed to both panels).
+  const[mapW36w3,setMapW36w3]=useState(0.75);
+  const[mapFracIP,setMapFracIP]=useState(2.3);
+  const[mapFracOP,setMapFracOP]=useState(2.2);
+  const[mapFracIM,setMapFracIM]=useState(39.9);
+  const[mapFracOM,setMapFracOM]=useState(55.6);
+  const[mapPhiIP,setMapPhiIP]=useState(0.25);
+  const[mapPhiOP,setMapPhiOP]=useState(0.65);
+  const[mapPhiIM,setMapPhiIM]=useState(0.50);
   const[measO2,setMeasO2]=useState(14.0);const[measCO2,setMeasCO2]=useState(3.0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
@@ -2899,6 +2903,32 @@ export default function App(){
     bleed_air_frac:bleedAirFrac,
   },accurate&&hasOnline);
   const cycleResult=bkCycle.data;
+
+  // ── Shared /calc/combustor_mapping — drives the Mapping panel AND the
+  // Operations Summary emissions + dynamics display. State lifted above.
+  const _oxHumid=cycleResult?.oxidizer_humid_mol_pct||null;
+  const _m_air_post_bleed=cycleResult?.mdot_air_post_bleed_kg_s||cycleResult?.mdot_air_kg_s||0;
+  const _m_fuel_total=cycleResult?.mdot_fuel_kg_s||0;
+  const _comAirFrac=cycleResult?.combustor_air_frac||0.89;
+  const bkMap=useBackendCalc(
+    "combustor_mapping",
+    {
+      fuel:nonzero(fuel),
+      oxidizer:_oxHumid?nonzero(_oxHumid):null,
+      T3_K:cycleResult?.T3_K||300, P3_bar:cycleResult?.P3_bar||1,
+      T_fuel_K:T_fuel,
+      W3_kg_s:_m_air_post_bleed,
+      W36_over_W3:Math.max(0.01,Math.min(1.0,mapW36w3)),
+      com_air_frac:Math.max(0.01,Math.min(1.0,_comAirFrac)),
+      frac_IP_pct:mapFracIP, frac_OP_pct:mapFracOP,
+      frac_IM_pct:mapFracIM, frac_OM_pct:mapFracOM,
+      phi_IP:Math.max(0,mapPhiIP), phi_OP:Math.max(0,mapPhiOP), phi_IM:Math.max(0,mapPhiIM),
+      m_fuel_total_kg_s:_m_fuel_total,
+      WFR, water_mode:waterMode,
+    },
+    !!(accurate && _oxHumid && _m_air_post_bleed > 0 && _m_fuel_total > 0)
+  );
+
   // panelState is built AFTER cycleResult to avoid temporal-dead-zone reference.
   // Consumed by exportToExcel button further below; safe to declare here.
   const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,T_water,accurate:accurate&&!!auth.hasOnlineAccess,
@@ -3109,6 +3139,15 @@ export default function App(){
               fuel={fuel} Tfuel={T_fuel}
               WFR={WFR} waterMode={waterMode} T_water={T_water}
               cycleResult={cycleResult} bkCycle={bkCycle}
+              bkMap={bkMap}
+              w36w3={mapW36w3} setW36w3={setMapW36w3}
+              fracIP={mapFracIP} setFracIP={setMapFracIP}
+              fracOP={mapFracOP} setFracOP={setMapFracOP}
+              fracIM={mapFracIM} setFracIM={setMapFracIM}
+              fracOM={mapFracOM} setFracOM={setMapFracOM}
+              phiIP={mapPhiIP} setPhiIP={setMapPhiIP}
+              phiOP={mapPhiOP} setPhiOP={setMapPhiOP}
+              phiIM={mapPhiIM} setPhiIM={setMapPhiIM}
             />}
             {tab==="summary"&&<OperationsSummaryPanel
               fuel={fuel} ox={ox} Tfuel={T_fuel}
@@ -3117,6 +3156,7 @@ export default function App(){
               heatLossFrac={heatLossFrac} psrSeed={psrSeed}
               eqConstraint={eqConstraint} integration={integration} mechanism={mechanism}
               cycleResult={cycleResult} bleedAirFrac={bleedAirFrac} bkCycle={bkCycle}
+              bkMap={bkMap}
               bleedMode={bleedMode} bleedOpenPct={bleedOpenPct}
               bleedOpenManualPct={bleedOpenManualPct} bleedValveSizePct={bleedValveSizePct}
               cycleEngine={cycleEngine} cyclePamb={cyclePamb} cycleTamb={cycleTamb}
