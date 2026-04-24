@@ -34,6 +34,64 @@ function uv(units,key,val){return UC[units][key].from(val);}
 function uvI(units,key,disp){return UC[units][key].to(disp);}  // display units -> SI
 function uu(units,key){return UC[units][key].u;}
 
+// Default mapping tables — φ for IP/OP/IM as a function of T3 (°F) and BRNDMD.
+// Used by the Combustor Mapping panel: once T3 and BRNDMD are known, look up
+// the three φ values and auto-fill the IP/OP/IM circuit inputs. User can edit
+// any cell; software re-reads continuously. Linear interpolation between rows.
+function _tblRow(T3, OP, IP, IM){ return {T3, OP, IP, IM}; }
+const DEFAULT_MAPPING_TABLES = {
+  7: [
+    ...Array.from({length:17}, (_,i) => _tblRow(500+i*10, 0.85, 0.25, 0.58)),  // 500–660
+    _tblRow(670, 0.75, 0.25, 0.58),
+    _tblRow(680, 0.65, 0.25, 0.58),
+    _tblRow(690, 0.55, 0.25, 0.575),
+    _tblRow(700, 0.45, 0.25, 0.57),
+    _tblRow(750, 0.45, 0.25, 0.57),
+    _tblRow(800, 0.45, 0.25, 0.57),
+    _tblRow(850, 0.45, 0.25, 0.57),
+  ],
+  6: [
+    ...Array.from({length:21}, (_,i) => _tblRow(500+i*10, 0.7, 1.2, 0.47)),    // 500–700
+    _tblRow(750, 0.7, 1.2, 0.47),
+    _tblRow(800, 0.7, 1.2, 0.47),
+    _tblRow(850, 0.7, 1.2, 0.47),
+  ],
+  4: [
+    ...Array.from({length:21}, (_,i) => _tblRow(500+i*10, 0.7, 2.0, 0.43)),    // 500–700
+    _tblRow(750, 0.7, 2.0, 0.43),
+    _tblRow(800, 0.7, 2.0, 0.43),
+    _tblRow(850, 0.7, 2.0, 0.43),
+  ],
+  2: [
+    ...Array.from({length:21}, (_,i) => _tblRow(500+i*10, 0.85, 5.3, 0.0)),    // 500–700
+    _tblRow(750, 0.85, 5.3, 0.0),
+    _tblRow(800, 0.85, 5.3, 0.0),
+    _tblRow(850, 0.85, 5.3, 0.0),
+  ],
+};
+
+// Linear interpolation of {OP, IP, IM} at T3 through a sorted mapping table.
+// Clamps to first/last row if T3 is outside the table range.
+function interpMappingTable(table, T3_F){
+  if(!table || !table.length) return null;
+  const s = [...table].sort((a,b) => a.T3 - b.T3);
+  if(T3_F <= s[0].T3)              return {OP: s[0].OP, IP: s[0].IP, IM: s[0].IM};
+  const last = s[s.length-1];
+  if(T3_F >= last.T3)              return {OP: last.OP, IP: last.IP, IM: last.IM};
+  for(let i=0; i<s.length-1; i++){
+    const a=s[i], b=s[i+1];
+    if(T3_F >= a.T3 && T3_F <= b.T3){
+      const t = (T3_F - a.T3) / Math.max(1e-9, b.T3 - a.T3);
+      return {
+        OP: a.OP + t*(b.OP - a.OP),
+        IP: a.IP + t*(b.IP - a.IP),
+        IM: a.IM + t*(b.IM - a.IM),
+      };
+    }
+  }
+  return null;
+}
+
 // Burner mode lookup — piecewise-constant function of net shaft power (MW).
 // When emissionsMode is true (default): the full ladder
 //   MW ≤ 10 → 1,  ≤ 45 → 2,  ≤ 65 → 4,  ≤ 75 → 6,  > 75 → 7.
@@ -351,7 +409,7 @@ const _PSR_SEED_LBL={unreacted:"Unreacted (cold)",hot_eq:"Hot equilibrium",cold_
 const _EQ_LBL={HP:"HP (constant enthalpy+pressure)",UV:"UV (constant internal energy+volume)",TP:"TP (constant temperature+pressure)"};
 const _INT_LBL={steady_state:"Steady-state solver",chunked:"Chunked time advance (default)",step:"Step-by-step"};
 const _MECH_LBL={gri30:"GRI-Mech 3.0 (53 species, 325 rxns)",glarborg:"Glarborg 2018 (151 species, 1395 rxns)",usc2:"USC-Mech II (coming soon)",aramco30:"AramcoMech 3.0 (coming soon)"};
-function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult}=ps||{};
+function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult,mappingTables}=ps||{};
   // Adiabatic fuel/air mix T that's used everywhere downstream
   const T_mix_phi=mixT(fuel,ox,phi,T_fuel??T0,T_air??T0);
   const aft=calcAFTx(fuel,ox,phi,T_mix_phi,P,combMode);
@@ -599,6 +657,20 @@ const sA=[
 const wsA=XLSX.utils.aoa_to_sheet(sA);
 wsA["!cols"]=[{wch:34},{wch:36},{wch:40},{wch:52}];
 XLSX.utils.book_append_sheet(wb,wsA,"Assumptions");
+
+// ══════════════════ MAPPING TABLES ══════════════════
+if(mappingTables){
+  const sM=[["═══ COMBUSTOR MAPPING TABLES — φ lookup by T3 × BRNDMD ═══"],[],
+    ["BRNDMD","T3 (°F)","φ_OuterPilot","φ_InnerPilot","φ_InnerMain"]];
+  for(const k of [7,6,4,2]){
+    const rows=mappingTables[k]||[];
+    for(const r of rows){sM.push([k,+r.T3,+r.OP,+r.IP,+r.IM]);}
+    sM.push([]);
+  }
+  const wsM=XLSX.utils.aoa_to_sheet(sM);
+  wsM["!cols"]=[{wch:10},{wch:10},{wch:16},{wch:16},{wch:16}];
+  XLSX.utils.book_append_sheet(wb,wsM,"Mapping Tables");
+}
 
 XLSX.writeFile(wb,"ProReadyEngineer_CombustionReport.xlsx");}
 
@@ -1870,11 +1942,58 @@ function CombustorMappingPanel({
   fracIP, setFracIP, fracOP, setFracOP, fracIM, setFracIM, fracOM, setFracOM,
   phiIP, setPhiIP, phiOP, setPhiOP, phiIM, setPhiIM,
   bkMap,
+  mappingTables, setMappingTables,
+  emissionsMode,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
 
   const sumFrac=fracIP+fracOP+fracIM+fracOM;
+
+  // ── Mapping-table lookup — auto-fill IP/OP/IM φ from (T3, BRNDMD) ───────
+  // T3 state comes from cycle; BRNDMD from MW_net + emissionsMode. Active
+  // table defaults to BRNDMD=2 when BRNDMD=0 or 1 (no table for 1).
+  const T3_K_cycle = cycleResult?.T3_K || 0;
+  const T3_F_cycle = T3_K_cycle > 0 ? (T3_K_cycle - 273.15) * 9/5 + 32 : 0;
+  const brndmdVal = calcBRNDMD(cycleResult?.MW_net || 0, emissionsMode);
+  const tableKey = brndmdVal >= 2 ? brndmdVal : 2;
+  const activeTable = mappingTables?.[tableKey] || mappingTables?.[2];
+  const tableLookup = activeTable ? interpMappingTable(activeTable, T3_F_cycle) : null;
+
+  // Auto-fill the three φ inputs when the lookup result changes (table edits,
+  // T3 changes, or BRNDMD changes). Manual bumps on the + / − buttons stick
+  // until the next lookup update, then get overwritten.
+  useEffect(() => {
+    if(!tableLookup) return;
+    setPhiIP(tableLookup.IP);
+    setPhiOP(tableLookup.OP);
+    setPhiIM(tableLookup.IM);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tableLookup?.IP, tableLookup?.OP, tableLookup?.IM]);
+
+  // Active BRNDMD tab for the Mapping Tables card (default to current lookup)
+  const [tblTab, setTblTab] = useState(7);
+  useEffect(() => {
+    if(tableKey !== tblTab) setTblTab(tableKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tableKey]);
+
+  // Edit one cell of one table and persist via setMappingTables.
+  const updateCell = (BRNDMD, rowIdx, key, value) => {
+    setMappingTables(prev => {
+      const next = {...prev};
+      const rows = [...(prev[BRNDMD]||[])];
+      if(!rows[rowIdx]) return prev;
+      rows[rowIdx] = {...rows[rowIdx], [key]: Number(value)};
+      next[BRNDMD] = rows;
+      return next;
+    });
+  };
+  const resetTables = () => {
+    if(typeof window !== "undefined" && window.confirm("Reset ALL mapping tables to factory defaults? Your edits will be lost.")){
+      setMappingTables(JSON.parse(JSON.stringify(DEFAULT_MAPPING_TABLES)));
+    }
+  };
 
   // ── Cycle-provided state ─────────────────────────────────────────────────
   const T3=cycleResult?.T3_K||300;
@@ -2149,6 +2268,91 @@ function CombustorMappingPanel({
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* ═════════════════════════════════════════════════════════════════
+          5 · MAPPING TABLES — editable φ(T3) by BRNDMD; auto-fill circuits
+         ═════════════════════════════════════════════════════════════════ */}
+      <div style={S.card}>
+        <div style={S.cardT}>5 · Mapping Tables (φ lookup by T₃ × BRNDMD)</div>
+
+        {/* Current-lookup summary */}
+        <div style={{padding:"8px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`,marginBottom:10,fontSize:11,fontFamily:"monospace"}}>
+          <div style={{color:C.txtDim,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px",marginBottom:3}}>Active lookup</div>
+          <div>
+            BRNDMD = <strong style={{color:C.violet}}>{brndmdVal}</strong>
+            {brndmdVal<2?<span style={{color:C.warm}}> (no table for BRNDMD ≤ 1 — using BRNDMD=2 table)</span>:null}
+            {", "}T₃ = <strong style={{color:C.accent}}>{T3_F_cycle.toFixed(1)} °F</strong>
+            {tableLookup?(
+              <>  →  φ_OP = <strong style={{color:C.orange}}>{tableLookup.OP.toFixed(3)}</strong>
+                , φ_IP = <strong style={{color:C.strong}}>{tableLookup.IP.toFixed(3)}</strong>
+                , φ_IM = <strong style={{color:C.accent}}>{tableLookup.IM.toFixed(3)}</strong></>
+            ):<span style={{color:C.txtMuted}}> (waiting for cycle)</span>}
+          </div>
+        </div>
+
+        {/* Tab buttons */}
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          {[7,6,4,2].map(k=>(
+            <button key={k} onClick={()=>setTblTab(k)} style={{
+              flex:1,padding:"6px 12px",fontSize:11,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",
+              color:tblTab===k?C.bg:C.violet,
+              background:tblTab===k?C.violet:"transparent",
+              border:`1.5px solid ${C.violet}`,
+              borderRadius:5,cursor:"pointer",
+              display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+              BRNDMD {k}
+              {brndmdVal===k?<span style={{fontSize:8.5,opacity:0.85,fontWeight:500}}>● active</span>:null}
+            </button>
+          ))}
+        </div>
+
+        {/* Editable table of active tab */}
+        <div style={{border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden",maxHeight:360,overflowY:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"monospace"}}>
+            <thead style={{position:"sticky",top:0,background:C.bg2,zIndex:1}}>
+              <tr>
+                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.txtDim,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>T₃ (°F)</th>
+                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.orange,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>φ_OP</th>
+                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.strong,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>φ_IP</th>
+                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.accent,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>φ_IM</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(mappingTables?.[tblTab]||[]).map((row,idx)=>{
+                const isActive = brndmdVal===tblTab && tableLookup &&
+                  T3_F_cycle>=row.T3-5 && T3_F_cycle<=row.T3+5;
+                return(
+                  <tr key={idx} style={{background:isActive?`${C.accent}12`:"transparent"}}>
+                    <td style={{padding:"3px 6px",textAlign:"center",borderBottom:`1px solid ${C.border}40`}}>
+                      <NumField value={row.T3} decimals={0} onCommit={v=>updateCell(tblTab,idx,"T3",v)}
+                        style={{width:72,padding:"3px 5px",fontSize:11,fontFamily:"monospace",color:C.accent,fontWeight:600,background:C.bg,border:`1px solid ${C.border}`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                    </td>
+                    <td style={{padding:"3px 6px",textAlign:"center",borderBottom:`1px solid ${C.border}40`}}>
+                      <NumField value={row.OP} decimals={3} onCommit={v=>updateCell(tblTab,idx,"OP",v)}
+                        style={{width:72,padding:"3px 5px",fontSize:11,fontFamily:"monospace",color:C.orange,fontWeight:600,background:C.bg,border:`1px solid ${C.border}`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                    </td>
+                    <td style={{padding:"3px 6px",textAlign:"center",borderBottom:`1px solid ${C.border}40`}}>
+                      <NumField value={row.IP} decimals={3} onCommit={v=>updateCell(tblTab,idx,"IP",v)}
+                        style={{width:72,padding:"3px 5px",fontSize:11,fontFamily:"monospace",color:C.strong,fontWeight:600,background:C.bg,border:`1px solid ${C.border}`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                    </td>
+                    <td style={{padding:"3px 6px",textAlign:"center",borderBottom:`1px solid ${C.border}40`}}>
+                      <NumField value={row.IM} decimals={3} onCommit={v=>updateCell(tblTab,idx,"IM",v)}
+                        style={{width:72,padding:"3px 5px",fontSize:11,fontFamily:"monospace",color:C.accent,fontWeight:600,background:C.bg,border:`1px solid ${C.border}`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10,color:C.txtMuted,fontFamily:"monospace",gap:10}}>
+          <span>Edits persist across page reloads (localStorage). Card 1 φ inputs auto-fill from the active lookup; linear interpolation between rows.</span>
+          <button onClick={resetTables} style={{padding:"4px 10px",fontSize:10,fontWeight:600,color:C.warm,background:"transparent",border:`1px solid ${C.warm}80`,borderRadius:4,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
+            ↺ RESET TO DEFAULTS
+          </button>
         </div>
       </div>
       </>}
@@ -2857,6 +3061,17 @@ export default function App(){
   const[mapPhiIP,setMapPhiIP]=useState(0.25);
   const[mapPhiOP,setMapPhiOP]=useState(0.65);
   const[mapPhiIM,setMapPhiIM]=useState(0.50);
+  // ── Mapping tables (φ vs T3 for BRNDMD ∈ {2,4,6,7}) — persisted to
+  // localStorage so user edits survive page refresh. Tables auto-fill the
+  // IP/OP/IM φ inputs whenever T3 or BRNDMD changes.
+  const[mappingTables,setMappingTables]=useState(()=>{
+    try{
+      const s=localStorage.getItem("ctk.mappingTables.v1");
+      if(s){const p=JSON.parse(s);if(p&&p[2]&&p[4]&&p[6]&&p[7])return p;}
+    }catch(e){}
+    return JSON.parse(JSON.stringify(DEFAULT_MAPPING_TABLES));
+  });
+  useEffect(()=>{try{localStorage.setItem("ctk.mappingTables.v1",JSON.stringify(mappingTables));}catch(e){}},[mappingTables]);
   const[measO2,setMeasO2]=useState(14.0);const[measCO2,setMeasCO2]=useState(3.0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
@@ -2991,7 +3206,7 @@ export default function App(){
   // Consumed by exportToExcel button further below; safe to declare here.
   const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,T_water,accurate:accurate&&!!auth.hasOnlineAccess,
     cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult,
-    bleedMode,bleedOpenPct,bleedValveSizePct,bleedAirFrac};
+    bleedMode,bleedOpenPct,bleedValveSizePct,bleedAirFrac,mappingTables};
 
   // Propagate cycle outputs into main sidebar state when linkages are ON.
   // Re-runs whenever the cycle result changes or a toggle flips.
@@ -3207,6 +3422,8 @@ export default function App(){
               phiIP={mapPhiIP} setPhiIP={setMapPhiIP}
               phiOP={mapPhiOP} setPhiOP={setMapPhiOP}
               phiIM={mapPhiIM} setPhiIM={setMapPhiIM}
+              mappingTables={mappingTables} setMappingTables={setMappingTables}
+              emissionsMode={emissionsMode}
             />}
             {tab==="summary"&&<OperationsSummaryPanel
               fuel={fuel} ox={ox} Tfuel={T_fuel}
