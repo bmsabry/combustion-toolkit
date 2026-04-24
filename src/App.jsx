@@ -675,7 +675,21 @@ if(mappingTables){
 XLSX.writeFile(wb,"ProReadyEngineer_CombustionReport.xlsx");}
 
 /* ══════════════════ SVG CHART ══════════════════ */
-function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,markerColor=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}let yn=yn_-(yx_-yn_)*0.05;const yx=yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;const pts=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy(d[yK]).toFixed(1)}`).join(' ');let y2n,y2x,sy2,pts2;if(y2K){const y2s=data.map(d=>d[y2K]);let y2n_=Math.min(...y2s),y2x_=Math.max(...y2s);if(y2n_===y2x_){y2n_-=1;y2x_+=1;}y2n=y2n_-(y2x_-y2n_)*0.05;y2x=y2x_+(y2x_-y2n_)*0.05;if(y2n_>=0&&y2n<0)y2n=0;sy2=v=>p.t+H-(v-y2n)/(y2x-y2n||1)*H;pts2=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy2(d[y2K]).toFixed(1)}`).join(' ');}const nY=5,nX=6;const yTk=Array.from({length:nY+1},(_,i)=>yn+(yx-yn)*i/nY);const xTk=Array.from({length:nX+1},(_,i)=>xn+(xx-xn)*i/nX);const fmt=v=>Math.abs(v)>=1e4?(v/1e3).toFixed(0)+'k':Math.abs(v)>=100?v.toFixed(0):Math.abs(v)>=1?v.toFixed(1):v.toFixed(3);const gid=`g${yK}${color.replace('#','')}${Math.random().toString(36).slice(2,6)}`;return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}><defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".2"/><stop offset="100%" stopColor={color} stopOpacity=".01"/></linearGradient></defs>{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmt(v)}</text></g>)}<path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/><path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={markerColor||C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="4" fill={markerColor||C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={markerColor||C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
+function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,markerColor=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null,step=false}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}let yn=yn_-(yx_-yn_)*0.05;const yx=yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;
+// Staircase path: hold each y constant from x_i to x_{i+1}, then jump to y_{i+1}.
+// Used for piecewise-constant series like BRNDMD vs load.
+const buildStep=(arr,xKey,yKey,syFn)=>{
+  if(arr.length===0) return '';
+  let d=`M${sx(arr[0][xKey]).toFixed(1)},${syFn(arr[0][yKey]).toFixed(1)}`;
+  for(let i=1;i<arr.length;i++){
+    d+=` L${sx(arr[i][xKey]).toFixed(1)},${syFn(arr[i-1][yKey]).toFixed(1)}`;
+    d+=` L${sx(arr[i][xKey]).toFixed(1)},${syFn(arr[i][yKey]).toFixed(1)}`;
+  }
+  return d;
+};
+const pts = step
+  ? buildStep(data,xK,yK,sy)
+  : data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy(d[yK]).toFixed(1)}`).join(' ');let y2n,y2x,sy2,pts2;if(y2K){const y2s=data.map(d=>d[y2K]);let y2n_=Math.min(...y2s),y2x_=Math.max(...y2s);if(y2n_===y2x_){y2n_-=1;y2x_+=1;}y2n=y2n_-(y2x_-y2n_)*0.05;y2x=y2x_+(y2x_-y2n_)*0.05;if(y2n_>=0&&y2n<0)y2n=0;sy2=v=>p.t+H-(v-y2n)/(y2x-y2n||1)*H;pts2=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy2(d[y2K]).toFixed(1)}`).join(' ');}const nY=5,nX=6;const yTk=Array.from({length:nY+1},(_,i)=>yn+(yx-yn)*i/nY);const xTk=Array.from({length:nX+1},(_,i)=>xn+(xx-xn)*i/nX);const fmt=v=>Math.abs(v)>=1e4?(v/1e3).toFixed(0)+'k':Math.abs(v)>=100?v.toFixed(0):Math.abs(v)>=1?v.toFixed(1):v.toFixed(3);const gid=`g${yK}${color.replace('#','')}${Math.random().toString(36).slice(2,6)}`;return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}><defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".2"/><stop offset="100%" stopColor={color} stopOpacity=".01"/></linearGradient></defs>{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmt(v)}</text></g>)}<path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/><path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={markerColor||C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="4" fill={markerColor||C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={markerColor||C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
 function HBar({data,w=540,h=180}){if(!data)return null;const entries=Object.entries(data).filter(([_,v])=>v>0.05).sort((a,b)=>b[1]-a[1]);if(!entries.length)return null;const pa={t:6,r:78,b:6,l:48};const bH=Math.min(22,(h-pa.t-pa.b)/entries.length-3);const mx=Math.max(...entries.map(e=>e[1]));const W=w-pa.l-pa.r;const clr={CO2:C.warm,H2O:C.accent,N2:C.accent3,O2:"#38BDF8",Ar:"#64748B",CH4:C.accent2,C2H6:C.orange,C3H8:"#F59E0B",H2:C.good,CO:"#FB923C",NO:C.strong,OH:C.violet,H:"#FDE68A",O:"#FCA5A5"};return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}>{entries.map(([sp,val],i)=>{const y=pa.t+i*(bH+3);const bw=val/mx*W;return(<g key={sp}><text x={pa.l-4} y={y+bH/2+4} fill={C.txtDim} fontSize="11" textAnchor="end" fontFamily="monospace">{fmt(sp)}</text><rect x={pa.l} y={y} width={Math.max(1,bw)} height={bH} rx="2" fill={clr[sp]||"#64748B"} opacity=".85"/><text x={pa.l+bw+4} y={y+bH/2+4} fill={C.txt} fontSize="10" fontFamily="monospace">{val.toFixed(2)}%</text></g>);})}</svg>);}
 
 /* ══════════════════ UI COMPONENTS ══════════════════ */
@@ -936,6 +950,30 @@ function __bkCacheSet(key, data){
     __BK_CACHE.delete(oldest);
   }
   __bkSave();
+}
+
+// Direct cached fetch — same cache + in-flight dedup as useBackendCalc, but
+// usable from imperative code (e.g. the OperationsSummaryPanel load sweep
+// loop that calls api.calcCycle / api.calcAFT / api.calcCombustorMapping
+// in sequence). Identical {kind,args} returns instantly from the persisted
+// cache; concurrent identical requests share a single network call.
+async function bkCachedFetch(kind, args){
+  const fn = {aft:api.calcAFT, flame:api.calcFlameSpeed, combustor:api.calcCombustor,
+    exhaust:api.calcExhaust, props:api.calcProps, autoignition:api.calcAutoignition,
+    cycle:api.calcCycle, combustor_mapping:api.calcCombustorMapping}[kind];
+  if(!fn) throw new Error(`bkCachedFetch: unknown kind ${kind}`);
+  const cacheKey = `${kind}:${JSON.stringify(args||{})}`;
+  const cached = __bkCacheGet(cacheKey);
+  if(cached) return cached;
+  let promise = __BK_INFLIGHT.get(cacheKey);
+  if(!promise){
+    promise = fn(args);
+    __BK_INFLIGHT.set(cacheKey, promise);
+    promise.finally(()=>{ __BK_INFLIGHT.delete(cacheKey); });
+  }
+  const data = await promise;
+  __bkCacheSet(cacheKey, data);
+  return data;
 }
 
 function useBackendCalc(kind, args, enabled){
@@ -2517,6 +2555,9 @@ function OperationsSummaryPanel({
   // cycle sweep args
   cycleEngine, cyclePamb, cycleTamb, cycleRH, cycleLoad, cycleTcool, cycleAirFrac,
   emissionsMode,
+  // Mapping panel state — for per-load NOx15/CO15/BRNDMD in the sweep
+  mapW36w3, mapFracIP, mapFracOP, mapFracIM, mapFracOM,
+  mappingTables, emTfMults,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
@@ -2586,6 +2627,19 @@ function OperationsSummaryPanel({
   };
   const bleedOpenAtLoad=(L)=>bleedMode==="auto"?autoBleedOpenPct(L):(bleedOpenManualPct??0);
 
+  // Strip H2O from oxidizer for the mapping call; the mapping correlation
+  // expects dry-basis air (humidity is folded in via WFR). Mirrors the App-
+  // level `_oxHumid → bkMap.oxidizer` transform so per-load mapping calls
+  // produce the same FAR_stoich and per-circuit T_AFT as the live page.
+  const _oxForMap = (() => {
+    const o = {...nonzero(ox)};
+    delete o.H2O;
+    return o;
+  })();
+  // Same combustor air frac the App uses for bkMap (mapping panel internal
+  // weighting). Mirror to keep sweep ↔ live page numbers aligned.
+  const _comAirFracForMap = 0.747;
+
   const runSweep=async()=>{
     if(sweeping)return;
     setSweeping(true);setSweepErr(null);setSweepData([]);setSweepProgress(0);
@@ -2593,22 +2647,16 @@ function OperationsSummaryPanel({
     // 17 points × ~1 s per cycle+AFT pair ≈ 17-25 s of wall-clock time.
     const points=[20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100];
     const results=[];
-    // Top-level task covers the whole sweep so the global overlay shows a
-    // stable banner even between per-point subtasks.
     const endSweepBusy=beginBusy(BUSY_LABELS.load_sweep);
     try{
       for(let i=0;i<points.length;i++){
         const L=points[i];
-        // Per-point task with specific wording so the user sees exactly
-        // which load the backend is crunching right now.
-        const endPtBusy=beginBusy(`Load sweep point ${i+1}/${points.length} — ${L}% load (cycle + AFT)…`);
+        const endPtBusy=beginBusy(`Load sweep point ${i+1}/${points.length} — ${L}% load…`);
         try{
-          // Compute the bleed state that *this* load point would see given
-          // the current bleed mode + valve size. In AUTO mode open % tracks
-          // load; in MANUAL it's the fixed user setting.
           const openAtL=Math.max(0,Math.min(100,bleedOpenAtLoad(L)));
           const bleedAirFracAtL=Math.max(0,Math.min(0.50,(openAtL/100)*((bleedValveSizePct||0)/100)));
-          const c=await api.calcCycle({
+          // Cycle — cached. Identical args on a re-run hit the persisted cache instantly.
+          const c=await bkCachedFetch("cycle",{
             engine:cycleEngine,
             P_amb_bar:cyclePamb, T_amb_K:cycleTamb, RH_pct:cycleRH,
             load_pct:L,
@@ -2619,20 +2667,52 @@ function OperationsSummaryPanel({
             WFR, water_mode:waterMode, T_water_K:WFR>0?T_water:null,
             bleed_air_frac:bleedAirFracAtL,
           });
-          // T4 comes straight from the cycle result (same as Cycle panel).
-          // O2/CO2 come from a SEPARATE AFT call at the new phi = fuel /
-          // ((W3 − bleed) × FAR_stoich), HP equilibrium, dry basis.
           const T4_cycle=c.T4_K||0;
-          let O2dry=0, CO2dry=0;
-          const W3_pb = c.mdot_air_post_bleed_kg_s || c.mdot_air_kg_s || 0;
-          const FAR_stoich_sweep = 0.0600;  // atom-count stoich for pipeline NG
-          const phi_sweep = (W3_pb>0 && FAR_stoich_sweep>0)
-            ? (c.mdot_fuel_kg_s||0)/(W3_pb*FAR_stoich_sweep) : 0;
+          const W3_pb=c.mdot_air_post_bleed_kg_s||c.mdot_air_kg_s||0;
+          const m_fuel=c.mdot_fuel_kg_s||0;
+          const MW_pt=c.MW_net||0;
+          // ── Combustor mapping at THIS load point ─────────────────────
+          // BRNDMD per the App-level ladder, mapping-table phi lookup at
+          // this MW, then the same /calc/combustor_mapping call that the
+          // live page makes — driven by per-load T3, P3, MW and W3.
+          const brndmd=calcBRNDMD(MW_pt, emissionsMode);
+          const phisAtLoad=interpMappingTable(mappingTables, brndmd, MW_pt, c.T3_K);
+          const tfMult=(emTfMults && emTfMults[brndmd]) || {NOx:1.0, CO:1.0};
+          let NOx15_pt=0, CO15_pt=0, FAR_stoich_pt=0.060;
           try{
-            if(phi_sweep>0){
-              const aft=await api.calcAFT({
+            if(W3_pb>0 && m_fuel>0){
+              const m=await bkCachedFetch("combustor_mapping",{
+                fuel:nonzero(fuel),
+                oxidizer:_oxForMap,
+                T3_K:c.T3_K, P3_bar:c.P3_bar,
+                T_fuel_K:Tfuel,
+                W3_kg_s:W3_pb,
+                W36_over_W3:Math.max(0.01,Math.min(1.0,mapW36w3||0.89)),
+                com_air_frac:_comAirFracForMap,
+                frac_IP_pct:mapFracIP, frac_OP_pct:mapFracOP,
+                frac_IM_pct:mapFracIM, frac_OM_pct:mapFracOM,
+                phi_IP:Math.max(0,phisAtLoad?.IP||0),
+                phi_OP:Math.max(0,phisAtLoad?.OP||0),
+                phi_IM:Math.max(0,phisAtLoad?.IM||0),
+                m_fuel_total_kg_s:m_fuel,
+                WFR, water_mode:waterMode,
+                nox_mult:tfMult.NOx, co_mult:tfMult.CO,
+              });
+              NOx15_pt=m?.correlations?.NOx15||0;
+              CO15_pt =m?.correlations?.CO15 ||0;
+              FAR_stoich_pt=m?.FAR_stoich||0.060;
+            }
+          }catch(e){/* leave NOx/CO at 0 if mapping errors at this point */}
+          // ── O2/CO2 dry — equilibrium at phi = m_fuel / (W3_pb · FAR_stoich)
+          // Uses FAR_stoich from the mapping result above so values match the
+          // page header section (which uses bkMap.data.FAR_stoich).
+          let O2dry=0, CO2dry=0;
+          const phi_eq=(W3_pb>0 && FAR_stoich_pt>0)?(m_fuel/(W3_pb*FAR_stoich_pt)):0;
+          try{
+            if(phi_eq>0){
+              const aft=await bkCachedFetch("aft",{
                 fuel:nonzero(fuel),oxidizer:nonzero(ox),
-                phi:phi_sweep, T0:c.T3_K, P:c.P3_bar,
+                phi:phi_eq, T0:c.T3_K, P:c.P3_bar,
                 mode:"adiabatic", heat_loss_fraction:0,
                 T_fuel_K:Tfuel, T_air_K:c.T3_K,
                 WFR, water_mode:waterMode,
@@ -2647,19 +2727,17 @@ function OperationsSummaryPanel({
           const m_water=c.mdot_water_kg_s||0;
           results.push({
             load:L,
-            MW:c.MW_net||0,
-            fuel:c.mdot_fuel_kg_s||0,
-            air:(c.mdot_air_post_bleed_kg_s||c.mdot_air_kg_s||0),
+            MW:MW_pt,
+            fuel:m_fuel,
+            air:W3_pb,
             water:m_water,
             bleed:m_bleed,
-            // Bleed %-open is the physical valve actuation (0 = closed,
-            // 100 = fully open). This is what the control room dial reads.
-            // The effective fraction = %-open × valve_size is a derived
-            // cycle-input, not a physically meaningful operator control.
             bleed_open:openAtL,
             T4:T4_cycle,
             eta:(c.efficiency_LHV||0)*100,
             O2:O2dry, CO2:CO2dry,
+            NOx15:NOx15_pt, CO15:CO15_pt,
+            brndmd:brndmd,
           });
           setSweepData([...results]);
           setSweepProgress((i+1)/points.length);
@@ -2709,6 +2787,9 @@ function OperationsSummaryPanel({
     bleed_open:mOpenNow,
     O2:O2_pct_T4||null,
     CO2:CO2_pct_T4||null,
+    NOx15:NOx_15||null,
+    CO15:CO_15||null,
+    brndmd:cycleResult?calcBRNDMD(cycleResult.MW_net, emissionsMode):null,
   };
 
   // Linear interpolation helper for sweep fallback (when live value missing).
@@ -2725,7 +2806,7 @@ function OperationsSummaryPanel({
     return null;
   };
 
-  const MiniChart=({title,yKey,color,unit,transformY,currentRaw})=>{
+  const MiniChart=({title,yKey,color,unit,transformY,currentRaw,step=false})=>{
     if(!sweepData.length)return(<div style={{padding:"32px 10px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:6,color:C.txtMuted,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{title}<br/><span style={{fontSize:9.5,fontStyle:"italic"}}>Run sweep to populate</span></div>);
     const plotData=sweepData.map(d=>({load:d.load,y:transformY?transformY(d[yKey]):d[yKey]}));
     const partial=sweepData.length>0&&sweepData[sweepData.length-1].load<100;
@@ -2738,13 +2819,13 @@ function OperationsSummaryPanel({
       y:markerY,
       label:`${currentLoad.toFixed(0)}% → ${Math.abs(markerY)>=100?markerY.toFixed(0):Math.abs(markerY)>=10?markerY.toFixed(1):markerY.toFixed(2)}`
     }:null;
-    return(<div style={{background:C.bg2,border:`1px solid ${color}30`,borderRadius:6,padding:"8px 10px 4px"}}>
-      <div style={{fontSize:10,fontWeight:700,color:color,textTransform:"uppercase",letterSpacing:"0.8px",marginBottom:2,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+    return(<div style={{background:C.bg2,border:`1px solid ${color}30`,borderRadius:6,padding:"10px 12px 4px"}}>
+      <div style={{fontSize:11,fontWeight:700,color:color,textTransform:"uppercase",letterSpacing:"0.8px",marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <span>{title}</span>
-        {partial?<span style={{fontSize:8.5,fontWeight:500,color:C.warm,textTransform:"none",letterSpacing:0,fontStyle:"italic"}}>partial — re-run to reach 100%</span>:null}
+        {partial?<span style={{fontSize:9,fontWeight:500,color:C.warm,textTransform:"none",letterSpacing:0,fontStyle:"italic"}}>partial — re-run to reach 100%</span>:null}
       </div>
       {/* xMin/xMax pin the x-axis to the full 20-100% span so every chart covers the whole load envelope even if a sweep stopped early. Red marker shows current operating point. */}
-      <Chart data={plotData} xK="load" yK="y" xL="Load (%)" yL={unit} color={color} w={400} h={170} xMin={20} xMax={100} marker={marker} markerColor="#EF4444"/>
+      <Chart data={plotData} xK="load" yK="y" xL="Load (%)" yL={unit} color={color} w={680} h={240} xMin={20} xMax={100} marker={marker} markerColor="#EF4444" step={step}/>
     </div>);
   };
 
@@ -2846,53 +2927,55 @@ function OperationsSummaryPanel({
         </div>
       </div>
 
-      {/* ═══ LOAD SWEEP — plots grid ═══ */}
-      <div style={{...S.card,padding:14}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-          <div>
-            <div style={{...S.cardT,marginBottom:3}}>Load-% Sweep — Variation at Current Operating Conditions</div>
-            <div style={{fontSize:10,color:C.txtMuted,lineHeight:1.4,fontFamily:"'Barlow',sans-serif",maxWidth:620}}>
-              Runs the full cycle + Flame Temp backends at 17 points from 20 % to 100 % load (every 5 %), holding every other parameter fixed (engine, ambient, fuel, bleed, water). Useful for checking how each metric scales as the engine spools up to full power. Emissions (NOx/CO) are NOT included in the sweep — they would add minutes per run and are best obtained from the Combustor panel at the specific load of interest.
-            </div>
-          </div>
-          <button onClick={runSweep} disabled={sweeping||!accurate}
-            title={!accurate?"Requires Accurate Mode":sweeping?"Sweep in progress…":"Run a 9-point load sweep (20-100 %) at the current conditions"}
-            style={{padding:"8px 16px",fontSize:11,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",
-              color:sweeping||!accurate?C.txtMuted:C.bg,
-              background:sweeping||!accurate?"transparent":C.accent,
-              border:`1.5px solid ${sweeping||!accurate?C.border:C.accent}`,
-              borderRadius:6,cursor:sweeping||!accurate?"not-allowed":"pointer",
-              display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
-            {sweeping?<>
-              <span style={{display:"inline-block",width:11,height:11,border:`2px solid ${C.txtMuted}`,borderTopColor:"transparent",borderRadius:"50%",animation:"ctkspin 0.85s linear infinite"}}/>
-              RUNNING… {Math.round(sweepProgress*100)}%
-            </>:sweepData.length?"▶ RE-RUN SWEEP":"▶ RUN LOAD SWEEP"}
-          </button>
-        </div>
-        {sweepErr?<div style={{padding:"6px 10px",background:`${C.strong}14`,border:`1px solid ${C.strong}60`,borderRadius:4,fontSize:10.5,color:C.strong,marginBottom:10}}>Sweep error: {sweepErr}</div>:null}
-
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <MiniChart title="Net Power" yKey="MW" color={C.accent} unit={`MW`} currentRaw={mCurrent.MW}/>
-          <MiniChart title="Thermal Efficiency (LHV)" yKey="eta" color={C.good} unit="%" currentRaw={mCurrent.eta}/>
-          <MiniChart title="T₄ (firing, cycle)" yKey="T4" color={C.warm} unit={uu(units,"T")} transformY={(K)=>uv(units,"T",K)} currentRaw={mCurrent.T4}/>
-          <MiniChart title="Fuel flow" yKey="fuel" color={C.accent2} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.fuel}/>
-          <MiniChart title="Air flow (post-bleed)" yKey="air" color={C.accent3} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.air}/>
-          {WFR>0?<MiniChart title="Water inject flow" yKey="water" color={C.violet} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.water}/>:null}
-          <MiniChart title="Bleed Valve — % Open" yKey="bleed_open" color={C.orange} unit="% open" currentRaw={mCurrent.bleed_open}/>
-          <MiniChart title="O₂ dry (equilibrium)" yKey="O2" color="#38BDF8" unit="%" currentRaw={mCurrent.O2}/>
-          <MiniChart title="CO₂ dry (equilibrium)" yKey="CO2" color={C.warm} unit="%" currentRaw={mCurrent.CO2}/>
-        </div>
-      </div>
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════
-          RIGHT HALF — reserved placeholder for future content
+          RIGHT HALF — currently empty (load sweep moved below as full-width)
          ═════════════════════════════════════════════════════════════════ */}
-      <div style={{background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:10,padding:"24px",minHeight:480,color:C.txtMuted,fontSize:11,fontFamily:"monospace",display:"flex",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
-        Right panel — reserved for future content
-      </div>
+      <div/>
 
       </div>}
+
+    {/* ═══ LOAD SWEEP — full-width below the dashboards ═══ */}
+    {cycleResult&&<div style={{...S.card,padding:16,marginTop:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div>
+          <div style={{...S.cardT,marginBottom:3}}>Load-% Sweep — Variation at Current Operating Conditions</div>
+          <div style={{fontSize:10.5,color:C.txtMuted,lineHeight:1.45,fontFamily:"'Barlow',sans-serif",maxWidth:900}}>
+            Runs cycle + combustor mapping + Flame-Temp backends at 17 points from 20 % to 100 % load (every 5 %), holding every other parameter fixed (engine, ambient, fuel, bleed, water, mapping table phis, emissions multipliers). NOx<sub>15</sub>/CO<sub>15</sub> are computed by the same correlation used on the Combustor Mapping panel — phi values per circuit are looked up from the mapping table at each load's MW. BRNDMD is the burner-mode ladder evaluated at each load. Re-runs hit the persisted cache and return instantly when no parameter has changed.
+          </div>
+        </div>
+        <button onClick={runSweep} disabled={sweeping||!accurate}
+          title={!accurate?"Requires Accurate Mode":sweeping?"Sweep in progress…":"Run a 17-point load sweep (20-100 %) at the current conditions"}
+          style={{padding:"10px 18px",fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",
+            color:sweeping||!accurate?C.txtMuted:C.bg,
+            background:sweeping||!accurate?"transparent":C.accent,
+            border:`1.5px solid ${sweeping||!accurate?C.border:C.accent}`,
+            borderRadius:6,cursor:sweeping||!accurate?"not-allowed":"pointer",
+            display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
+          {sweeping?<>
+            <span style={{display:"inline-block",width:11,height:11,border:`2px solid ${C.txtMuted}`,borderTopColor:"transparent",borderRadius:"50%",animation:"ctkspin 0.85s linear infinite"}}/>
+            RUNNING… {Math.round(sweepProgress*100)}%
+          </>:sweepData.length?"▶ RE-RUN SWEEP":"▶ RUN LOAD SWEEP"}
+        </button>
+      </div>
+      {sweepErr?<div style={{padding:"6px 10px",background:`${C.strong}14`,border:`1px solid ${C.strong}60`,borderRadius:4,fontSize:10.5,color:C.strong,marginBottom:10}}>Sweep error: {sweepErr}</div>:null}
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <MiniChart title="Net Power" yKey="MW" color={C.accent} unit={`MW`} currentRaw={mCurrent.MW}/>
+        <MiniChart title="Thermal Efficiency (LHV)" yKey="eta" color={C.good} unit="%" currentRaw={mCurrent.eta}/>
+        <MiniChart title="T₄ (firing, cycle)" yKey="T4" color={C.warm} unit={uu(units,"T")} transformY={(K)=>uv(units,"T",K)} currentRaw={mCurrent.T4}/>
+        <MiniChart title="Fuel flow" yKey="fuel" color={C.accent2} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.fuel}/>
+        <MiniChart title="Air flow (post-bleed)" yKey="air" color={C.accent3} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.air}/>
+        {WFR>0?<MiniChart title="Water inject flow" yKey="water" color={C.violet} unit={units==="SI"?"kg/s":"lb/s"} transformY={(k)=>units==="SI"?k:k*2.20462} currentRaw={mCurrent.water}/>:null}
+        <MiniChart title="Bleed Valve — % Open" yKey="bleed_open" color={C.orange} unit="% open" currentRaw={mCurrent.bleed_open}/>
+        <MiniChart title="NOₓ @ 15 % O₂ (mapping)" yKey="NOx15" color={C.strong} unit="ppmvd" currentRaw={mCurrent.NOx15}/>
+        <MiniChart title="CO @ 15 % O₂ (mapping)" yKey="CO15" color={C.orange} unit="ppmvd" currentRaw={mCurrent.CO15}/>
+        <MiniChart title="O₂ dry (equilibrium, post-bleed)" yKey="O2" color="#38BDF8" unit="%" currentRaw={mCurrent.O2}/>
+        <MiniChart title="CO₂ dry (equilibrium, post-bleed)" yKey="CO2" color={C.warm} unit="%" currentRaw={mCurrent.CO2}/>
+        <MiniChart title="BRNDMD (burner mode)" yKey="brndmd" color={C.violet} unit="" currentRaw={mCurrent.brndmd} step/>
+      </div>
+    </div>}
   </div>);
 }
 
@@ -3635,6 +3718,10 @@ export default function App(){
               cycleRH={cycleRH} cycleLoad={cycleLoad} cycleTcool={cycleTcool}
               cycleAirFrac={cycleAirFrac}
               emissionsMode={emissionsMode}
+              // Mapping panel state — enables per-load NOx15/CO15/BRNDMD in the load sweep
+              mapW36w3={mapW36w3} mapFracIP={mapFracIP} mapFracOP={mapFracOP}
+              mapFracIM={mapFracIM} mapFracOM={mapFracOM}
+              mappingTables={mappingTables} emTfMults={emTfMults}
             />}
             {tab==="cycle"&&<CyclePanel
               linkT3={linkT3} setLinkT3={setLinkT3}
