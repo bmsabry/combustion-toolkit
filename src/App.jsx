@@ -2930,9 +2930,51 @@ function OperationsSummaryPanel({
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════
-          RIGHT HALF — currently empty (load sweep moved below as full-width)
+          RIGHT HALF — burner-mode visual driven by BRNDMD
+            BRNDMD=1 → BD2 (low-load fallback, only IP/OP active)
+            BRNDMD=2 → BD2
+            BRNDMD=4 → BD4
+            BRNDMD=6 → BD4 (same image — only the metric switches)
+            BRNDMD=7 → BD7
+          Images live in public/burner-modes/ → /burner-modes/BD{N}.png
+          when served. If a file is missing the <img onError> swaps in a
+          subtle placeholder so the panel never breaks.
          ═════════════════════════════════════════════════════════════════ */}
-      <div/>
+      {(() => {
+        const _br = cycleResult ? calcBRNDMD(cycleResult.MW_net, emissionsMode) : null;
+        const _imgMap = {1:"BD2", 2:"BD2", 4:"BD4", 6:"BD4", 7:"BD7"};
+        const _imgName = _br!=null ? (_imgMap[_br] || "BD2") : null;
+        const _imgSrc = _imgName ? `/burner-modes/${_imgName}.png` : null;
+        const _modeLabel = {1:"BRNDMD 1 — Sub-idle", 2:"BRNDMD 2 — Pilot only (IP+OP)", 4:"BRNDMD 4 — Pilots + Outer Main", 6:"BRNDMD 6 — Pilots + Both Mains (transitional)", 7:"BRNDMD 7 — Full ladder, all four circuits"}[_br] || "";
+        return (
+          <div style={{display:"flex",flexDirection:"column",gap:8,minWidth:0}}>
+            <div style={{fontSize:9.5,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${C.violet}30`}}>
+              Burner Mode (BRNDMD = {_br??"—"}) — Active Circuits
+            </div>
+            <div style={{background:C.bg2,border:`1px solid ${C.violet}30`,borderRadius:8,padding:14,display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
+              {_imgSrc?(
+                <img src={_imgSrc}
+                  alt={`Burner mode ${_imgName} — circuits active at BRNDMD ${_br}`}
+                  style={{maxWidth:"100%",maxHeight:480,width:"auto",height:"auto",borderRadius:6,objectFit:"contain"}}
+                  onError={(e)=>{
+                    e.currentTarget.style.display="none";
+                    if(e.currentTarget.nextElementSibling)
+                      e.currentTarget.nextElementSibling.style.display="flex";
+                  }}/>
+              ):null}
+              {/* Fallback placeholder — only visible if the image fails to load */}
+              <div style={{display:"none",padding:"40px 20px",border:`1.5px dashed ${C.warm}50`,borderRadius:6,color:C.txtDim,fontSize:11,textAlign:"center",fontFamily:"'Barlow',sans-serif",lineHeight:1.5,maxWidth:360}}>
+                <div style={{color:C.warm,fontWeight:600,marginBottom:6,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>Burner-mode image not found</div>
+                Expected at <code style={{color:C.accent,background:C.bg,padding:"1px 5px",borderRadius:3,fontFamily:"monospace",fontSize:10}}>{_imgSrc}</code>.
+                <br/>Drop <code style={{color:C.accent}}>{_imgName}.png</code> into <code style={{color:C.accent}}>public/burner-modes/</code> and re-deploy.
+              </div>
+              <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"'Barlow',sans-serif",textAlign:"center",lineHeight:1.4,fontStyle:"italic"}}>
+                {_modeLabel}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       </div>}
 
