@@ -1245,6 +1245,10 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
 function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,setTfuel,WFR=0,waterMode="liquid",psrSeed,setPsrSeed,eqConstraint,setEqConstraint,integration,setIntegration,heatLossFrac,setHeatLossFrac,mechanism,setMechanism}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
+  // Cantera PSR+PFR is the slowest backend call (~3-5 s). Off by default —
+  // user clicks the green ACTIVATE button to fire it. While inactive, the
+  // panel stays dimmed so the user knows nothing is being computed.
+  const[psrActive,setPsrActive]=useState(false);
   // Air inlet T = T0 (sidebar "Air Temperature"); fuel inlet T = Tfuel (sidebar "Fuel Temperature").
   const Tair=T0;
   // PSR reactor options are lifted to App (so exportToExcel can see them).
@@ -1255,7 +1259,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
   // If user switches to autoignition while UV/TP was selected, snap the constraint back to HP.
   useEffect(()=>{if(psrSeed==="autoignition"&&eqConstraint!=="HP")setEqConstraint("HP");},[psrSeed]);
   const localNet=useMemo(()=>calcCombustorNetwork(fuel,ox,phi,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair),[fuel,ox,phi,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair]);
-  const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60,T_fuel_K:Tfuel,T_air_K:Tair,psr_seed:psrSeed,eq_constraint:effectiveConstraint,integration,heat_loss_fraction:heatLossFrac,mechanism,WFR,water_mode:waterMode},accurate);
+  const bk=useBackendCalc("combustor",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),tau_psr_s:tau/1000,L_pfr_m:Lpfr,V_pfr_m_s:Vpfr,profile_points:60,T_fuel_K:Tfuel,T_air_K:Tair,psr_seed:psrSeed,eq_constraint:effectiveConstraint,integration,heat_loss_fraction:heatLossFrac,mechanism,WFR,water_mode:waterMode},accurate&&psrActive);
   // Canonical adiabatic flame temperature — same calc as the AFT panel, so the headline T_ad matches across panels.
   // Local: 4-reaction equilibrium (calcAFT_EQ). Accurate: Cantera full-species Gibbs equilibrium (GRI-Mech).
   const Tmix_aft=useMemo(()=>mixT(fuel,ox,phi,Tfuel,Tair),[fuel,ox,phi,Tfuel,Tair]);
@@ -1286,6 +1290,21 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
   const emSw=useMemo(()=>{const r=[];for(let p=0.4;p<=1.01;p+=0.02){const n=calcCombustorNetwork(fuel,ox,p,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair);r.push({phi:+p.toFixed(2),NO:n.NO_ppm_15O2,CO:n.CO_ppm_exit});}return r;},[fuel,ox,T0,P,tau,Lpfr,Vpfr,Tfuel,Tair]);
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <InlineBusyBanner loading={accurate&&(bk.loading||bkAFT.loading)}/>
+    {/* ── ACTIVATE button ─ Cantera PSR+PFR is the slowest call; off by default ── */}
+    <button onClick={()=>setPsrActive(v=>!v)}
+      title={psrActive?"Click to deactivate — stops firing the Cantera PSR+PFR backend on every parameter change.":"Click to activate — runs the Cantera PSR+PFR backend (~3-5 s per parameter change). Off by default to keep the app fast."}
+      style={{padding:"10px 16px",fontSize:13,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".7px",
+        color:psrActive?C.good:C.strong,
+        background:psrActive?`${C.good}18`:`${C.strong}18`,
+        border:`2px solid ${psrActive?C.good:C.strong}`,
+        borderRadius:6,cursor:"pointer",
+        display:"flex",alignItems:"center",justifyContent:"center",gap:10,
+        transition:"all .12s"}}>
+      <span style={{width:10,height:10,borderRadius:"50%",background:psrActive?C.good:C.strong,boxShadow:`0 0 8px ${psrActive?C.good:C.strong}`}}/>
+      {psrActive?"ACTIVATED — PSR+PFR running on every change":"DEACTIVATED — click to fire Cantera PSR+PFR (~3-5 s)"}
+    </button>
+    {/* Wrap the rest of the panel content in a conditional dim when inactive */}
+    <div style={{display:"flex",flexDirection:"column",gap:12,opacity:psrActive?1:0.45,pointerEvents:psrActive?"auto":"none",transition:"opacity .15s"}}>
     {!accurate&&<div style={{padding:"12px 14px",background:`${C.strong}10`,border:`1.5px solid ${C.strong}60`,borderRadius:6,fontSize:11.5,lineHeight:1.55,color:C.txtDim,fontFamily:"'Barlow',sans-serif"}}>
       <div style={{fontSize:12.5,fontWeight:700,color:C.strong,marginBottom:6,letterSpacing:".3px"}}>⚠ APPROXIMATION — CASE-SPECIFIC REDUCED-ORDER MODEL</div>
       <p style={{margin:"0 0 6px"}}>This combustor network is <strong style={{color:C.strong}}>not a full chemical-kinetics solver</strong>. It is a calibrated reduced-order model whose CO and NOx kinetics were fit to Cantera (GRI-Mech 3.0) over a <strong style={{color:C.accent2}}>narrow operating envelope</strong>: natural-gas fuel + humid air, φ = 0.4–0.8, T_inlet = 700–900 K, P = 1–30 atm, τ_PSR = 0.3–10 ms. Inside that envelope, emissions are within ±15–35% of Cantera. The temperature and equilibrium composition are rigorous; the PSR/PFR kinetics are correlations.</p>
@@ -1449,6 +1468,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
       <div style={S.card}><div style={S.cardT}>NOx & CO @ 15% O₂ (PSR → PFR)</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>All ppm values corrected to 15% O₂ dry (regulatory reporting basis). Solid: NOx (flat across PSR, grows linearly in PFR via Zeldovich). Dashed: CO (PSR floor, first-order burnout in PFR). Vertical dashed line marks the PSR/PFR boundary.</div><Chart data={pfrDisp} xK="x" yK="NO_ppm_15O2" xL={`Position along combustor (${uu(units,"lenSmall")})`} yL="NOx @ 15% O₂ (ppmvd)" color={C.warm} y2K="CO_ppm_15O2" c2={C.accent2} y2L="CO @ 15% O₂ (ppmvd)" vline={uv(units,"lenSmall",net.L_psr_cm)}/></div>
     </div>
     <div style={S.card}><div style={S.cardT}>Emissions vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Classic NOx-CO tradeoff: lean mixtures reduce NOx but increase CO. Lean premixed combustors operate at φ ≈ 0.5–0.6 for low emissions.</div><Chart data={emSw} xK="phi" yK="NO" xL="Equivalence Ratio (φ)" yL="NOx @ 15% O₂ (ppm)" color={C.warm} y2K="CO" c2={C.accent2} y2L="CO (ppm)" w={700} h={270}/></div>
+    </div>
   </div>);}
 
 function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,combMode,setCombMode}){
@@ -3074,7 +3094,7 @@ export default function App(){
     7:{NOx:1.00,CO:1.00},
     6:{NOx:1.25,CO:0.90},
     4:{NOx:1.50,CO:0.85},
-    2:{NOx:0.50,CO:0.60},
+    2:{NOx:0.50,CO:0.25},
   };
   const[emTfMults,setEmTfMults]=useState(()=>{
     try{
