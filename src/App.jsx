@@ -856,6 +856,35 @@ function BusyGuardedExportButton({onExport}){
   </button>);
 }
 
+// Module-level LRU cache for useBackendCalc. Identical {kind,args} requests
+// (same JSON.stringify of the args object) return the previously-fetched result
+// without hitting the backend. Same panel re-mounted, user toggling between
+// values, two panels asking the same question — all served from cache.
+//
+// Keyed on `${kind}:${JSON.stringify(args)}`. TTL guards against stale data
+// on long-lived sessions; cap on entries keeps memory bounded. In-flight
+// dedup (`__BK_INFLIGHT`) ensures two concurrent identical requests share
+// a single network call instead of racing.
+const __BK_CACHE = new Map();           // key -> {data, ts}
+const __BK_INFLIGHT = new Map();        // key -> Promise<data>
+const __BK_TTL_MS = 10 * 60 * 1000;     // 10 min
+const __BK_MAX = 100;
+function __bkCacheGet(key){
+  const e = __BK_CACHE.get(key);
+  if(!e) return null;
+  if(Date.now() - e.ts > __BK_TTL_MS){ __BK_CACHE.delete(key); return null; }
+  // touch for LRU
+  __BK_CACHE.delete(key); __BK_CACHE.set(key, e);
+  return e.data;
+}
+function __bkCacheSet(key, data){
+  __BK_CACHE.set(key, {data, ts: Date.now()});
+  if(__BK_CACHE.size > __BK_MAX){
+    const oldest = __BK_CACHE.keys().next().value;
+    __BK_CACHE.delete(oldest);
+  }
+}
+
 function useBackendCalc(kind, args, enabled){
   const [data,setData]=useState(null);const[loading,setLoading]=useState(false);const[err,setErr]=useState(null);
   const {begin}=useContext(BusyCtx);
@@ -864,6 +893,10 @@ function useBackendCalc(kind, args, enabled){
     if(!enabled){setData(null);setErr(null);setLoading(false);return;}
     const fn={aft:api.calcAFT,flame:api.calcFlameSpeed,combustor:api.calcCombustor,exhaust:api.calcExhaust,props:api.calcProps,autoignition:api.calcAutoignition,cycle:api.calcCycle,combustor_mapping:api.calcCombustorMapping}[kind];
     if(!fn){return;}
+    const cacheKey = `${kind}:${key}`;
+    // ── Cache hit: serve immediately, no network call, no busy spinner ──
+    const cached = __bkCacheGet(cacheKey);
+    if(cached){ setData(cached); setLoading(false); setErr(null); return; }
     let cancelled=false;setLoading(true);setErr(null);
     const endBusy=begin(BUSY_LABELS[kind]||kind);
     let ended=false;const safeEnd=()=>{if(!ended){ended=true;endBusy();}};
@@ -875,8 +908,15 @@ function useBackendCalc(kind, args, enabled){
       }
       safeEnd();
     },BACKEND_CALC_TIMEOUT_MS);
-    fn(args).then(d=>{clearTimeout(timeoutId);if(!cancelled){setData(d);setLoading(false);}safeEnd();})
-            .catch(e=>{clearTimeout(timeoutId);if(!cancelled){setErr(e.message||String(e));setLoading(false);setData(null);}safeEnd();});
+    // In-flight dedup: if an identical request is already pending, wait on it.
+    let promise = __BK_INFLIGHT.get(cacheKey);
+    if(!promise){
+      promise = fn(args);
+      __BK_INFLIGHT.set(cacheKey, promise);
+      promise.finally(()=>{ __BK_INFLIGHT.delete(cacheKey); });
+    }
+    promise.then(d=>{clearTimeout(timeoutId);__bkCacheSet(cacheKey,d);if(!cancelled){setData(d);setLoading(false);}safeEnd();})
+           .catch(e=>{clearTimeout(timeoutId);if(!cancelled){setErr(e.message||String(e));setLoading(false);setData(null);}safeEnd();});
     return()=>{cancelled=true;clearTimeout(timeoutId);safeEnd();};
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[enabled,key,kind]);
