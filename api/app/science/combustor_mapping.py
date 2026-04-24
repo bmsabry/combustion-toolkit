@@ -68,7 +68,7 @@ _DERIV = {
     "C3":      {"NOx15":  0.75,  "CO15": -8.7,   "PX36_SEL":  0.04,   "PX36_SEL_HI":  0.0266},
     "Phi_OP":  {"NOx15":  17.5,  "CO15": -100.0, "PX36_SEL": -1.5,    "PX36_SEL_HI": -0.15},
     "Tflame":  {"NOx15":  0.12,  "CO15": -1.5,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
-    "T3":      {"NOx15":  0.065, "CO15": -0.65,  "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
+    "T3":      {"NOx15":  0.065, "CO15":  0.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
 }
 
 # P3 scaling exponents: Y_final = Y_mult × (P3 / P3_ref)^exponent
