@@ -1960,16 +1960,10 @@ function CombustorMappingPanel({
   const activeTable = mappingTables?.[tableKey] || mappingTables?.[2];
   const tableLookup = activeTable ? interpMappingTable(activeTable, T3_F_cycle) : null;
 
-  // Auto-fill the three φ inputs when the lookup result changes (table edits,
-  // T3 changes, or BRNDMD changes). Manual bumps on the + / − buttons stick
-  // until the next lookup update, then get overwritten.
-  useEffect(() => {
-    if(!tableLookup) return;
-    setPhiIP(tableLookup.IP);
-    setPhiOP(tableLookup.OP);
-    setPhiIM(tableLookup.IM);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tableLookup?.IP, tableLookup?.OP, tableLookup?.IM]);
+  // The auto-fill useEffect was moved to App level so it fires on any
+  // cycle/parameter change regardless of which tab is active. The local
+  // lookup computation above is kept just for this panel's "Active lookup"
+  // summary display and active-row highlighting.
 
   // Active BRNDMD tab for the Mapping Tables card (default to current lookup)
   const [tblTab, setTblTab] = useState(7);
@@ -3072,6 +3066,12 @@ export default function App(){
     return JSON.parse(JSON.stringify(DEFAULT_MAPPING_TABLES));
   });
   useEffect(()=>{try{localStorage.setItem("ctk.mappingTables.v1",JSON.stringify(mappingTables));}catch(e){}},[mappingTables]);
+
+  // ── Mapping-table auto-fill (App-level so it fires on ANY cycle change,
+  //    not just when the Mapping panel is mounted). The panel itself shows
+  //    its own "Active lookup" summary from the same data. This keeps Card 1
+  //    circuit φ inputs, bkMap, and Ops Summary NOx/CO all in sync as the
+  //    user tweaks sidebar parameters from any tab. ───────────────────────
   const[measO2,setMeasO2]=useState(14.0);const[measCO2,setMeasCO2]=useState(3.0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
@@ -3176,6 +3176,23 @@ export default function App(){
     bleed_air_frac:bleedAirFrac,
   },accurate&&hasOnline);
   const cycleResult=bkCycle.data;
+
+  // ── App-level mapping-table lookup + auto-fill. Runs whenever cycleResult,
+  // emissionsMode, or the tables change — regardless of active tab. Pushes
+  // the three circuit φ values into state so bkMap and Ops Summary always
+  // see fresh values without having to visit the Mapping panel first.
+  const _T3_F_app = cycleResult?.T3_K ? (cycleResult.T3_K - 273.15) * 9/5 + 32 : 0;
+  const _brndmd_app = calcBRNDMD(cycleResult?.MW_net || 0, emissionsMode);
+  const _tblKey_app = _brndmd_app >= 2 ? _brndmd_app : 2;
+  const _tbl_app = mappingTables?.[_tblKey_app] || mappingTables?.[2];
+  const _tblLookup_app = _tbl_app ? interpMappingTable(_tbl_app, _T3_F_app) : null;
+  useEffect(() => {
+    if(!_tblLookup_app) return;
+    setMapPhiIP(_tblLookup_app.IP);
+    setMapPhiOP(_tblLookup_app.OP);
+    setMapPhiIM(_tblLookup_app.IM);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [_tblLookup_app?.IP, _tblLookup_app?.OP, _tblLookup_app?.IM]);
 
   // ── Shared /calc/combustor_mapping — drives the Mapping panel AND the
   // Operations Summary emissions + dynamics display. State lifted above.
