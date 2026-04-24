@@ -69,7 +69,11 @@ _DERIV = {
     "C3":      {"NOx15":  0.75,  "CO15": -8.7,   "PX36_SEL":  0.04,   "PX36_SEL_HI":  0.0266},
     "Phi_OP":  {"NOx15":  17.5,  "CO15": -100.0, "PX36_SEL": -1.5,    "PX36_SEL_HI": -0.15},
     "Phi_IP":  {"NOx15":  15.0,  "CO15": -100.0, "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
-    "Tflame":  {"NOx15":  0.12,  "CO15": -1.5,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
+    # NOx15 ∂/∂Tflame is piecewise in Tflame and handled by
+    # _nox15_tflame_contribution() below — the entry here is 0 to avoid
+    # double-counting in the generic linear loop. CO15 ∂/∂Tflame stays
+    # as a single slope of −1.0 ppm/°F.
+    "Tflame":  {"NOx15":  0.0,   "CO15": -1.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "T3":      {"NOx15":  0.065, "CO15":  0.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
 }
 
@@ -89,6 +93,37 @@ _P3_EXP = {
 
 def _K_to_F(T_K: float) -> float:
     return (float(T_K) - 273.15) * 9.0 / 5.0 + 32.0
+
+
+def _nox15_tflame_contribution(Tflame_F: float,
+                                Tref_F: float = 3035.0,
+                                brk_hi_F: float = 2850.0,
+                                brk_lo_F: float = 2750.0,
+                                slope_hi: float = 0.12,
+                                slope_mid: float = 0.04,
+                                slope_lo: float = 0.0) -> float:
+    """Piecewise-integrated NOx15 contribution from Tflame.
+
+    The ∂NOx15/∂Tflame is a step function of Tflame:
+        Tflame ≥ 2850 °F       → slope = 0.12   ppm/°F
+        2750 ≤ Tflame < 2850   → slope = 0.04   ppm/°F
+        Tflame < 2750 °F       → slope = 0.0    ppm/°F  (frozen)
+
+    This function returns the running integral of that slope from the
+    reference temperature (3035 °F) down to `Tflame_F`, so the final
+    contribution is continuous at every breakpoint — no jumps as Tflame
+    crosses 2850 or 2750.
+    """
+    T = float(Tflame_F)
+    # High regime — single linear segment
+    if T >= brk_hi_F:
+        return slope_hi * (T - Tref_F)
+    # Middle regime — 0.12 all the way down to 2850, then 0.04 below
+    if T >= brk_lo_F:
+        return slope_hi * (brk_hi_F - Tref_F) + slope_mid * (T - brk_hi_F)
+    # Low regime — frozen at the running total at 2750
+    return slope_hi * (brk_hi_F - Tref_F) + slope_mid * (brk_lo_F - brk_hi_F) \
+           + slope_lo * (T - brk_lo_F)
 
 
 def _phi_OP_multiplier(phi_OP: float) -> float:
@@ -230,6 +265,10 @@ def run(
         y = _REF[name]
         for key in ("DT_Main", "N2", "C3", "Phi_OP", "Phi_IP", "Tflame", "T3"):
             y += _DERIV[key][name] * deltas[key]
+        # NOx15 gets a piecewise-integrated Tflame contribution on top of the
+        # generic linear step (which contributes 0 for NOx15, intentionally).
+        if name == "NOx15":
+            y += _nox15_tflame_contribution(Tflame_F)
         y_lin[name] = y
 
         # Step 2: Phi_OP multiplier (ONLY for PX36_SEL_HI)
