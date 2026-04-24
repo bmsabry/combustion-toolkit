@@ -60,16 +60,21 @@ _REFPT = {
 }
 
 # Linear derivatives (d output / d input-variable). 0 means no sensitivity.
-# Phi_OP row is "per +0.1 change" in the table; stored here already
-# converted to "per unit phi" by pre-multiplying by 10.
+# Phi_OP / Phi_IP rows are "per +0.1 change" in the source table; stored here
+# already converted to "per unit phi" by pre-multiplying by 10.
+# Phi_IP applies only above 0.25 (one-sided ramp). See _phi_ip_delta below.
 _DERIV = {
     "DT_Main": {"NOx15": 0.0375, "CO15":  0.424, "PX36_SEL": -0.004,  "PX36_SEL_HI": -0.0004},
     "N2":      {"NOx15": -0.25,  "CO15":  2.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "C3":      {"NOx15":  0.75,  "CO15": -8.7,   "PX36_SEL":  0.04,   "PX36_SEL_HI":  0.0266},
     "Phi_OP":  {"NOx15":  17.5,  "CO15": -100.0, "PX36_SEL": -1.5,    "PX36_SEL_HI": -0.15},
+    "Phi_IP":  {"NOx15":  15.0,  "CO15": -100.0, "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "Tflame":  {"NOx15":  0.12,  "CO15": -1.5,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "T3":      {"NOx15":  0.065, "CO15":  0.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
 }
+
+# Phi_IP activation threshold. Below this the IP derivative contributes 0.
+_PHI_IP_FLOOR = 0.25
 
 # P3 scaling exponents: Y_final = Y_mult × (P3 / P3_ref)^exponent
 _P3_EXP = {
@@ -198,11 +203,18 @@ def run(
     N2_pct   = float(fuel_pct.get("N2",   0.0))
 
     # --- correlation chain ---------------------------------------------------
+    # Phi_IP contribution is one-sided: only the portion of phi_IP ABOVE
+    # _PHI_IP_FLOOR (= 0.25) contributes. For phi_IP ≤ 0.25 the IP derivative
+    # contributes zero — physically this means a lean pilot at or below 0.25
+    # is not hot enough to drive emissions above the baseline already captured
+    # by the other terms.
+    phi_IP_delta_positive = max(0.0, float(phi_IP) - _PHI_IP_FLOOR)
     deltas = {
         "DT_Main": DT_Main_F - _REFPT["DT_Main_F"],
         "N2":      N2_pct    - _REFPT["N2_pct"],
         "C3":      C3_eff    - _REFPT["C3_pct"],
         "Phi_OP":  float(phi_OP) - _REFPT["Phi_OP"],
+        "Phi_IP":  phi_IP_delta_positive,
         "Tflame":  Tflame_F  - _REFPT["Tflame_F"],
         "T3":      T3_F      - _REFPT["T3_F"],
     }
@@ -216,7 +228,7 @@ def run(
     for name in ("NOx15", "CO15", "PX36_SEL", "PX36_SEL_HI"):
         # Step 1: linear corrections
         y = _REF[name]
-        for key in ("DT_Main", "N2", "C3", "Phi_OP", "Tflame", "T3"):
+        for key in ("DT_Main", "N2", "C3", "Phi_OP", "Phi_IP", "Tflame", "T3"):
             y += _DERIV[key][name] * deltas[key]
         y_lin[name] = y
 
