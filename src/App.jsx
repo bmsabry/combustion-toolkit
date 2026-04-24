@@ -35,14 +35,16 @@ function uvI(units,key,disp){return UC[units][key].to(disp);}  // display units 
 function uu(units,key){return UC[units][key].u;}
 
 // Burner mode lookup — piecewise-constant function of net shaft power (MW).
-// Table:   MW ≤ 10 → 1,  ≤ 45 → 2,  ≤ 65 → 4,  ≤ 75 → 6,  > 75 → 7.
-// Used across the app wherever the burner-mode class is needed (Operations
-// Summary display, future Mapping-panel gating, reports, …).
-function calcBRNDMD(MW_net){
+// When emissionsMode is true (default): the full ladder
+//   MW ≤ 10 → 1,  ≤ 45 → 2,  ≤ 65 → 4,  ≤ 75 → 6,  > 75 → 7.
+// When emissionsMode is false: the ladder caps at 4 — BRNDMD holds at 4
+// once it steps up from 2 to 4 and never progresses to 6 or 7.
+function calcBRNDMD(MW_net, emissionsMode=true){
   const mw=Number(MW_net);
   if(!Number.isFinite(mw)||mw<=0)return 0;
   if(mw<=10)return 1;
   if(mw<=45)return 2;
+  if(!emissionsMode)return 4;  // disabled: hold at 4 for all MW > 45
   if(mw<=65)return 4;
   if(mw<=75)return 6;
   return 7;
@@ -2184,6 +2186,7 @@ function OperationsSummaryPanel({
   bleedMode, bleedOpenPct, bleedOpenManualPct, bleedValveSizePct,
   // cycle sweep args
   cycleEngine, cyclePamb, cycleTamb, cycleRH, cycleLoad, cycleTcool, cycleAirFrac,
+  emissionsMode,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
@@ -2465,8 +2468,8 @@ function OperationsSummaryPanel({
           tip="Fuel heat input per unit electrical output. Lower is better."/>
         <Hero flex={0} small label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
           tip="Bleed valve position — 0 % = closed, 100 % = fully open. Auto schedule: 100 % below 75 % load, 0 % above 95 %, linear between. Effective air dumped = valve % × Max Bleed split %."/>
-        <Hero flex={0} small label="BRNDMD" value={String(calcBRNDMD(cycleResult.MW_net))} unit="" color={C.violet}
-          tip="Burner mode — piecewise-constant function of net shaft power (MW). Breakpoints: ≤10 MW → 1, ≤45 → 2, ≤65 → 4, ≤75 → 6, >75 → 7."/>
+        <Hero flex={0} small label="BRNDMD" value={String(calcBRNDMD(cycleResult.MW_net, emissionsMode))} unit="" color={C.violet}
+          tip={`Burner mode — piecewise-constant function of net shaft power (MW). Emissions Mode is currently ${emissionsMode?"ENABLED — full ladder 1/2/4/6/7":"DISABLED — holds at 4 for MW > 45"}. Breakpoints (emissions ON): ≤10 → 1, ≤45 → 2, ≤65 → 4, ≤75 → 6, >75 → 7.`}/>
       </div>
 
       {/* ═══ MASS FLOWS ═══ */}
@@ -2569,6 +2572,7 @@ function EngineAmbientSidebar({
   bleedMode,setBleedMode,bleedOpenPct,bleedOpenManualPct,setBleedOpenManualPct,
   bleedValveSizePct,setBleedValveSizePct,bleedAirFrac,
   bleedStepPct,setBleedStepPct,
+  emissionsMode,setEmissionsMode,
   accurate,
 }){
   const units=useContext(UnitCtx);
@@ -2598,6 +2602,22 @@ function EngineAmbientSidebar({
           <option value="LMS100PB+">LMS100PB+ DLE IC</option>
         </select>
       </div>
+      {/* ── EMISSIONS MODE — toggle button (affects BRNDMD ladder) ───── */}
+      <div>
+        <label style={lbl} title="When enabled, the full BRNDMD ladder is active (1 → 2 → 4 → 6 → 7). When disabled, BRNDMD holds at 4 for MW > 45 — combustor stays in a simpler low-load mode rather than progressing to high-load modes.">Emissions Mode</label>
+        <button onClick={()=>setEmissionsMode(!emissionsMode)}
+          style={{width:"100%",padding:"7px 12px",fontSize:11.5,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",
+            color:emissionsMode?C.good:C.strong,
+            background:emissionsMode?`${C.good}18`:`${C.strong}18`,
+            border:`1.5px solid ${emissionsMode?C.good:C.strong}`,
+            borderRadius:5,cursor:"pointer",
+            display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+            transition:"all .12s"}}>
+          <span style={{width:8,height:8,borderRadius:"50%",background:emissionsMode?C.good:C.strong,boxShadow:`0 0 6px ${emissionsMode?C.good:C.strong}`}}/>
+          {emissionsMode?"ENABLED":"DISABLED"}
+        </button>
+      </div>
+
       {/* ── LOAD — hero control (most frequently varied parameter) ───── */}
       <div style={{background:`${C.accent}0F`,border:`1px solid ${C.accent}60`,borderRadius:6,padding:"8px 10px",marginTop:2}}>
         <div style={{fontSize:9.5,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:".6px",marginBottom:4,lineHeight:1.25}}>Input or vary the gas turbine load</div>
@@ -2770,6 +2790,11 @@ export default function App(){
   const[cycleTamb,setCycleTamb]=useState(288.706);     // K (60 F)
   const[cycleRH,setCycleRH]=useState(60.0);            // %
   const[cycleLoad,setCycleLoad]=useState(100.0);       // %
+  // Emissions Mode — when enabled (default) the full BRNDMD ladder is
+  // active (1→2→4→6→7). When disabled, BRNDMD holds at 4 for MW > 45
+  // (combustor stays in a simpler mode rather than progressing to high-
+  // load modes). Referenced by calcBRNDMD() and displayed in Ops Summary.
+  const[emissionsMode,setEmissionsMode]=useState(true);
   const[cycleTcool,setCycleTcool]=useState(288.15);    // K (15 C) — LMS100 IC supply
   // Combustor-air fraction is the FLAME-ZONE share of combustor airflow
   // (m_flame / m_comb_air). It is a pure intra-combustor split and does NOT
@@ -3074,6 +3099,7 @@ export default function App(){
               bleedValveSizePct={bleedValveSizePct} setBleedValveSizePct={setBleedValveSizePct}
               bleedStepPct={bleedStepPct} setBleedStepPct={setBleedStepPct}
               bleedAirFrac={bleedAirFrac}
+              emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
               accurate={accurate&&hasOnline}
             />
             {/* Water / steam injection — kept right under Engine & Ambient per spec.
@@ -3195,6 +3221,7 @@ export default function App(){
               cycleEngine={cycleEngine} cyclePamb={cyclePamb} cycleTamb={cycleTamb}
               cycleRH={cycleRH} cycleLoad={cycleLoad} cycleTcool={cycleTcool}
               cycleAirFrac={cycleAirFrac}
+              emissionsMode={emissionsMode}
             />}
             {tab==="cycle"&&<CyclePanel
               linkT3={linkT3} setLinkT3={setLinkT3}
