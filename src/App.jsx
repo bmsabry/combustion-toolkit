@@ -2846,9 +2846,14 @@ function OperationsSummaryPanel({
       :<div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:16,alignItems:"start"}}>
       <div style={{display:"flex",flexDirection:"column",gap:12,minWidth:0}}>
 
-      {/* ═══ ROW 1 — Power + Load + T3 + P3 (intrinsic widths, tight) ═══ */}
-      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-        <div style={{flex:"0 0 auto",padding:"14px 18px",
+      {/* ═══ ROW 1 — TWO BIG HEROES (Power + Fuel Flow) ═══
+          The two metrics the operator cares about most. Equal width, big
+          fonts, captions underneath. Everything else below this row uses
+          the uniform `Hero small` treatment to make clear they're
+          consequences of the cycle, not primary control variables. */}
+      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+        {/* Net Shaft Power */}
+        <div style={{flex:"1 1 0",minWidth:240,padding:"14px 18px",
           background:`linear-gradient(135deg,${C.accent}22,${C.accent}06)`,
           border:`1.5px solid ${C.accent}70`,borderRadius:10,
           boxShadow:`inset 0 0 0 1px ${C.accent}12`}}>
@@ -2861,36 +2866,48 @@ function OperationsSummaryPanel({
             GE {cycleResult.engine}. max on day {cycleResult.MW_max_ambient.toFixed(1)} MW
           </div>
         </div>
-        <Hero flex={0} label="Load" value={cycleResult.load_pct.toFixed(0)} unit="%" color={C.accent2}
-          tip="Percent of max-on-day power at current ambient conditions. Set in sidebar."/>
-        <Hero flex={0} label="T₃ (comb inlet)" value={uv(units,"T",cycleResult.T3_K).toFixed(0)} unit={uu(units,"T")} color={C.warm}
-          tip="Compressor-exit / combustor-inlet temperature. Anchored to 700 °F at 100 % load and 660 °F at 75 % load for LMS100; linearly interpolated between / outside."/>
-        <Hero flex={0} label="P₃" value={units==="SI"?(cycleResult.P3_bar).toFixed(1):(cycleResult.P3_bar*14.5038).toFixed(0)} unit={units==="SI"?"bar":"psia"} color={C.accent3}
-          tip="Compressor-exit / combustor-inlet pressure. Drives the pressure-ratio scaling of NOx, CO, and PX36 dynamics via the (P3/638)^exp terms in the correlation."/>
+        {/* Fuel Flow Rate — primary mass flow that the operator dials */}
+        <div style={{flex:"1 1 0",minWidth:240,padding:"14px 18px",
+          background:`linear-gradient(135deg,${C.accent2}22,${C.accent2}06)`,
+          border:`1.5px solid ${C.accent2}70`,borderRadius:10,
+          boxShadow:`inset 0 0 0 1px ${C.accent2}12`}}>
+          <div style={{fontSize:10.5,fontWeight:700,color:C.accent2,textTransform:"uppercase",letterSpacing:"2px",marginBottom:6}}>Fuel Flow Rate</div>
+          <div style={{fontSize:44,fontWeight:800,color:C.accent2,fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1,letterSpacing:"-1.5px"}}>
+            {units==="SI"?cycleResult.mdot_fuel_kg_s.toFixed(3):(cycleResult.mdot_fuel_kg_s*2.20462).toFixed(2)}
+            <span style={{fontSize:18,fontWeight:500,color:C.txtDim,marginLeft:6,letterSpacing:0,fontFamily:"'Barlow',sans-serif"}}>{units==="SI"?"kg/s":"lb/s"}</span>
+          </div>
+          <div style={{fontSize:10,color:C.txtMuted,marginTop:4,fontFamily:"monospace"}}>
+            {units==="SI"?(cycleResult.mdot_fuel_kg_s*3600).toFixed(0):(cycleResult.mdot_fuel_kg_s*2.20462*3600).toFixed(0)} {units==="SI"?"kg/hr":"lb/hr"} · post-WFR fuel bump
+          </div>
+        </div>
       </div>
 
-      {/* ═══ ROW 2 — T4 + η + HR + Bleed Valve + BRNDMD (tight, small) ═══ */}
+      {/* ═══ OPERATING POINT — uniform small Hero tier ═══
+          Load, T3, P3, T4, η, HR, BRNDMD, Bleed Valve. All same size, same
+          padding. Consequences of the cycle solution, not primary inputs. */}
       <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <Hero flex={0} small label="Load" value={cycleResult.load_pct.toFixed(0)} unit="%" color={C.accent2}
+          tip="Percent of max-on-day power at current ambient conditions. Set in sidebar."/>
+        <Hero flex={0} small label="T₃ (comb inlet)" value={uv(units,"T",cycleResult.T3_K).toFixed(0)} unit={uu(units,"T")} color={C.warm}
+          tip="Compressor-exit / combustor-inlet temperature. Anchored to 700 °F at 100 % load and 660 °F at 75 % load for LMS100; linearly interpolated between / outside."/>
+        <Hero flex={0} small label="P₃" value={units==="SI"?(cycleResult.P3_bar).toFixed(1):(cycleResult.P3_bar*14.5038).toFixed(0)} unit={units==="SI"?"bar":"psia"} color={C.accent3}
+          tip="Compressor-exit / combustor-inlet pressure. Drives the pressure-ratio scaling of NOx, CO, and PX36 dynamics via the (P3/638)^exp terms in the correlation."/>
         <Hero flex={0} small label="T₄ (firing)" value={fmtT(T4_fromCycle).split(" ")[0]} unit={uu(units,"T")} color={C.warm}
           tip="Combustor-exit firing temperature from the cycle result — identical to T4 shown on the Cycle panel. Independent from the O2/CO2 calculation below, which uses a separate equilibrium at φ_new = fuel / ((W3 − bleed) × FAR_stoich)."/>
         <Hero flex={0} small label="Thermal Efficiency (LHV)" value={(cycleResult.efficiency_LHV*100).toFixed(2)} unit="%" color={C.good}
           tip="Net shaft power divided by fuel LHV thermal input. Equivalent to 1 / HR in consistent units."/>
         <Hero flex={0} small label="Heat Rate" value={cycleResult.heat_rate_kJ_per_kWh.toFixed(0)} unit="kJ/kWh" color={C.accent3}
           tip="Fuel heat input per unit electrical output. Lower is better."/>
-        <Hero flex={0} small label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
-          tip="Bleed valve position — 0 % = closed, 100 % = fully open. Auto schedule: 100 % below 75 % load, 0 % above 95 %, linear between. Effective air dumped = valve % × Max Bleed split %."/>
         <Hero flex={0} small label="BRNDMD" value={String(calcBRNDMD(cycleResult.MW_net, emissionsMode))} unit="" color={C.violet}
           tip={`Burner mode — piecewise-constant function of net shaft power (MW). Emissions Mode is currently ${emissionsMode?"ENABLED — full ladder 1/2/4/6/7":"DISABLED — holds at 4 for MW > 45"}. Breakpoints (emissions ON): ≤10 → 1, ≤45 → 2, ≤65 → 4, ≤75 → 6, >75 → 7.`}/>
+        <Hero flex={0} small label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
+          tip="Bleed valve position — 0 % = closed, 100 % = fully open. Auto schedule: 100 % below 75 % load, 0 % above 95 %, linear between. Effective air dumped = valve % × Max Bleed split %."/>
       </div>
 
-      {/* ═══ MASS FLOWS ═══ */}
+      {/* ═══ MASS FLOWS — fuel removed (now hero); air, bleed, water ═══ */}
       <div>
         <div style={{fontSize:9.5,fontWeight:700,color:C.accent3,textTransform:"uppercase",letterSpacing:"1.2px",margin:"2px 0 6px",paddingBottom:3,borderBottom:`1px solid ${C.accent3}30`}}>Mass Flows</div>
         <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-          <Hero small label="Fuel" value={units==="SI"?cycleResult.mdot_fuel_kg_s.toFixed(3):(cycleResult.mdot_fuel_kg_s*2.20462).toFixed(2)} unit={units==="SI"?"kg/s":"lb/s"} color={C.accent2}
-            tip="Fuel mass flow to the combustor after the water-injection fuel bump (if WFR > 0)."/>
-          <Hero small label="Fuel (hourly)" value={units==="SI"?(cycleResult.mdot_fuel_kg_s*3600).toFixed(0):(cycleResult.mdot_fuel_kg_s*2.20462*3600).toFixed(0)} unit={units==="SI"?"kg/hr":"lb/hr"} color={C.accent2}
-            tip="Fuel flow per hour — same value, easier to compare with metered fuel-gas logs."/>
           <Hero small label="Air (compressor inlet)" value={units==="SI"?cycleResult.mdot_air_kg_s.toFixed(1):(cycleResult.mdot_air_kg_s*2.20462).toFixed(0)} unit={units==="SI"?"kg/s":"lb/s"} color={C.accent}
             tip="Total humid-air mass flow into the compressor."/>
           {(cycleResult.bleed_air_frac||0)>0?
