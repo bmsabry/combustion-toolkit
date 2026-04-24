@@ -2405,35 +2405,39 @@ function OperationsSummaryPanel({
       :<div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:16,alignItems:"start"}}>
       <div style={{display:"flex",flexDirection:"column",gap:12,minWidth:0}}>
 
-      {/* ═══ HEADLINE ROW — Power + Load as hero ═══ */}
-      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-        <div style={{flex:"2 1 300px",minWidth:250,padding:"18px 22px",
+      {/* ═══ ROW 1 — Power + Load + T3 + P3 (intrinsic widths, tight) ═══ */}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <div style={{flex:"0 0 auto",padding:"14px 18px",
           background:`linear-gradient(135deg,${C.accent}22,${C.accent}06)`,
           border:`1.5px solid ${C.accent}70`,borderRadius:10,
           boxShadow:`inset 0 0 0 1px ${C.accent}12`}}>
           <div style={{fontSize:10.5,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"2px",marginBottom:6}}>Net Shaft Power</div>
-          <div style={{fontSize:52,fontWeight:800,color:C.accent,fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1,letterSpacing:"-1.5px"}}>
+          <div style={{fontSize:44,fontWeight:800,color:C.accent,fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1,letterSpacing:"-1.5px"}}>
             {cycleResult.MW_net.toFixed(1)}
-            <span style={{fontSize:20,fontWeight:500,color:C.txtDim,marginLeft:8,letterSpacing:0,fontFamily:"'Barlow',sans-serif"}}>MW</span>
+            <span style={{fontSize:18,fontWeight:500,color:C.txtDim,marginLeft:6,letterSpacing:0,fontFamily:"'Barlow',sans-serif"}}>MW</span>
           </div>
           <div style={{fontSize:10,color:C.txtMuted,marginTop:4,fontFamily:"monospace"}}>
-            GE {cycleResult.engine}{cycleResult.intercooled?" intercooled":""}. max on day {cycleResult.MW_max_ambient.toFixed(1)} MW
+            GE {cycleResult.engine}. max on day {cycleResult.MW_max_ambient.toFixed(1)} MW
           </div>
         </div>
-        <Hero flex={1.1} label="Load" value={cycleResult.load_pct.toFixed(0)} unit="%" color={C.accent2}
+        <Hero flex={0} label="Load" value={cycleResult.load_pct.toFixed(0)} unit="%" color={C.accent2}
           tip="Percent of max-on-day power at current ambient conditions. Set in sidebar."/>
-        <Hero flex={1} label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
-          tip="Bleed valve position — 0 % = closed, 100 % = fully open. Auto schedule: 100 % below 75 % load, 0 % above 95 %, linear between. Effective air dumped = valve % × Max Bleed split %."/>
+        <Hero flex={0} label="T₃ (comb inlet)" value={uv(units,"T",cycleResult.T3_K).toFixed(0)} unit={uu(units,"T")} color={C.warm}
+          tip="Compressor-exit / combustor-inlet temperature. Anchored to 700 °F at 100 % load and 660 °F at 75 % load for LMS100; linearly interpolated between / outside."/>
+        <Hero flex={0} label="P₃" value={units==="SI"?(cycleResult.P3_bar).toFixed(1):(cycleResult.P3_bar*14.5038).toFixed(0)} unit={units==="SI"?"bar":"psia"} color={C.accent3}
+          tip="Compressor-exit / combustor-inlet pressure. Drives the pressure-ratio scaling of NOx, CO, and PX36 dynamics via the (P3/638)^exp terms in the correlation."/>
       </div>
 
-      {/* ═══ FLAME STATE — T4, η ═══ */}
-      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-        <Hero label="T₄ — Complete Combustion" value={fmtT(T4_complete).split(" ")[0]} unit={uu(units,"T")} color={C.warm}
-          tip="Combustor-exit firing temperature computed under the complete-combustion assumption (no dissociation) at the cycle's φ₄. This is the physically meaningful value for diluted-exit conditions. Pulled from the Flame Temp backend."/>
-        <Hero label="Thermal Efficiency (LHV)" value={(cycleResult.efficiency_LHV*100).toFixed(2)} unit="%" color={C.good}
-          tip="Net shaft power divided by fuel LHV thermal input. Equivalent to 1 / HR (with HR in consistent units)."/>
-        <Hero label="Heat Rate" value={cycleResult.heat_rate_kJ_per_kWh.toFixed(0)} unit="kJ/kWh" color={C.accent3}
-          tip="Fuel heat input per unit electrical output. Lower is better — canonical gas-turbine efficiency metric."/>
+      {/* ═══ ROW 2 — T4 + η + HR + Bleed Valve (tight) ═══ */}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <Hero flex={0} label="T₄ — Complete Combustion" value={fmtT(T4_complete).split(" ")[0]} unit={uu(units,"T")} color={C.warm}
+          tip="Combustor-exit firing temperature computed under the complete-combustion assumption (no dissociation) at the cycle's φ₄. Pulled from the Flame Temp backend."/>
+        <Hero flex={0} label="Thermal Efficiency (LHV)" value={(cycleResult.efficiency_LHV*100).toFixed(2)} unit="%" color={C.good}
+          tip="Net shaft power divided by fuel LHV thermal input. Equivalent to 1 / HR in consistent units."/>
+        <Hero flex={0} label="Heat Rate" value={cycleResult.heat_rate_kJ_per_kWh.toFixed(0)} unit="kJ/kWh" color={C.accent3}
+          tip="Fuel heat input per unit electrical output. Lower is better."/>
+        <Hero flex={0} label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
+          tip="Bleed valve position — 0 % = closed, 100 % = fully open. Auto schedule: 100 % below 75 % load, 0 % above 95 %, linear between. Effective air dumped = valve % × Max Bleed split %."/>
       </div>
 
       {/* ═══ MASS FLOWS ═══ */}
