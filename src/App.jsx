@@ -2417,7 +2417,7 @@ function OperationsSummaryPanel({
             <span style={{fontSize:20,fontWeight:500,color:C.txtDim,marginLeft:8,letterSpacing:0,fontFamily:"'Barlow',sans-serif"}}>MW</span>
           </div>
           <div style={{fontSize:10,color:C.txtMuted,marginTop:4,fontFamily:"monospace"}}>
-            {cycleResult.engine_label||cycleResult.engine} · max on day {cycleResult.MW_max_ambient.toFixed(1)} MW
+            GE {cycleResult.engine}{cycleResult.intercooled?" intercooled":""}. max on day {cycleResult.MW_max_ambient.toFixed(1)} MW
           </div>
         </div>
         <Hero flex={1.1} label="Load" value={cycleResult.load_pct.toFixed(0)} unit="%" color={C.accent2}
