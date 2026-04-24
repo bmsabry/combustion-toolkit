@@ -607,6 +607,10 @@ class CombustorMappingRequest(BaseModel):
     # Water injection (distributed ∝ fuel; currently only affects T_AFT solve)
     WFR: float = Field(default=0.0, ge=0.0, le=2.0)
     water_mode: str = Field(default="liquid", pattern="^(liquid|steam)$")
+    # Emissions Transfer Function — BRNDMD-dependent post-multipliers on
+    # the final NOx15 / CO15 correlation result. Default 1.0 (no scaling).
+    nox_mult: float = Field(default=1.0, gt=0.0, le=10.0)
+    co_mult: float  = Field(default=1.0, gt=0.0, le=10.0)
 
 
 class CombustorMapCircuit(BaseModel):

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef, createContext, useContext } from "react";
+import { Fragment, useState, useMemo, useCallback, useEffect, useRef, createContext, useContext } from "react";
 import * as XLSX from "xlsx";
 import { useAuth, AuthModal } from "./auth.jsx";
 import { AccountPanel } from "./AccountPanel.jsx";
@@ -3066,6 +3066,24 @@ export default function App(){
     return JSON.parse(JSON.stringify(DEFAULT_MAPPING_TABLES));
   });
   useEffect(()=>{try{localStorage.setItem("ctk.mappingTables.v1",JSON.stringify(mappingTables));}catch(e){}},[mappingTables]);
+  // ── Emissions Transfer Function — per-BRNDMD output multipliers for
+  // NOx15 and CO15. Applied as a final post-multiplier on the correlation
+  // result (after linear corrections, Phi_OP mult, and P3 scaling). User-
+  // editable in the sidebar; persisted to localStorage.
+  const DEFAULT_EM_TF={
+    7:{NOx:1.00,CO:1.00},
+    6:{NOx:1.25,CO:0.90},
+    4:{NOx:1.50,CO:0.85},
+    2:{NOx:0.50,CO:0.60},
+  };
+  const[emTfMults,setEmTfMults]=useState(()=>{
+    try{
+      const s=localStorage.getItem("ctk.emTfMults.v1");
+      if(s){const p=JSON.parse(s);if(p&&p[7]&&p[6]&&p[4]&&p[2])return p;}
+    }catch(e){}
+    return JSON.parse(JSON.stringify(DEFAULT_EM_TF));
+  });
+  useEffect(()=>{try{localStorage.setItem("ctk.emTfMults.v1",JSON.stringify(emTfMults));}catch(e){}},[emTfMults]);
 
   // ── Mapping-table auto-fill (App-level so it fires on ANY cycle change,
   //    not just when the Mapping panel is mounted). The panel itself shows
@@ -3200,6 +3218,10 @@ export default function App(){
   const _m_air_post_bleed=cycleResult?.mdot_air_post_bleed_kg_s||cycleResult?.mdot_air_kg_s||0;
   const _m_fuel_total=cycleResult?.mdot_fuel_kg_s||0;
   const _comAirFrac=cycleResult?.combustor_air_frac||0.89;
+  // Pick the BRNDMD-specific NOx / CO post-multipliers from the Emissions
+  // Transfer Function table. Falls back to BRNDMD=2 when BRNDMD ≤ 1.
+  const _noxMult = emTfMults?.[_brndmd_app>=2?_brndmd_app:2]?.NOx ?? 1.0;
+  const _coMult  = emTfMults?.[_brndmd_app>=2?_brndmd_app:2]?.CO  ?? 1.0;
   const bkMap=useBackendCalc(
     "combustor_mapping",
     {
@@ -3215,6 +3237,7 @@ export default function App(){
       phi_IP:Math.max(0,mapPhiIP), phi_OP:Math.max(0,mapPhiOP), phi_IM:Math.max(0,mapPhiIM),
       m_fuel_total_kg_s:_m_fuel_total,
       WFR, water_mode:waterMode,
+      nox_mult:_noxMult, co_mult:_coMult,
     },
     !!(accurate && _oxHumid && _m_air_post_bleed > 0 && _m_fuel_total > 0)
   );
@@ -3421,6 +3444,30 @@ export default function App(){
                 {accurate&&hasOnline&&linkP3&&<LinkChip onBreak={()=>setLinkP3(false)} label="Linked to Cycle P3"/>}
               </div>
               {/* Water/steam injection (WFR) is now lifted to the dedicated card directly under Engine & Ambient at the top of the sidebar — it drives every Accurate Mode panel from a single source. */}
+            </div>
+
+            {/* ── EMISSIONS TRANSFER FUNCTION — bottom of the sidebar ──── */}
+            <div style={{background:C.bg2,border:`1px solid ${C.violet}30`,borderRadius:8,padding:12,marginTop:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:8}}>Emissions Transfer Function</div>
+              <div style={{display:"grid",gridTemplateColumns:"55px 1fr 1fr",gap:5,alignItems:"center",fontSize:10,fontFamily:"monospace"}}>
+                <div></div>
+                <div style={{color:C.strong,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".4px"}}>NOx ×</div>
+                <div style={{color:C.orange,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".4px"}}>CO ×</div>
+                {[7,6,4,2].map(k=>(
+                  <Fragment key={k}>
+                    <div style={{color:C.violet,fontWeight:700,fontSize:10}}>BR={k}</div>
+                    <NumField value={emTfMults?.[k]?.NOx??1.0} decimals={2}
+                      onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),NOx:Math.max(0,+v)}}))}
+                      style={{width:"100%",padding:"3px 5px",fontSize:11,fontFamily:"monospace",color:C.strong,fontWeight:600,background:C.bg,border:`1px solid ${C.strong}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                    <NumField value={emTfMults?.[k]?.CO??1.0} decimals={2}
+                      onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),CO:Math.max(0,+v)}}))}
+                      style={{width:"100%",padding:"3px 5px",fontSize:11,fontFamily:"monospace",color:C.orange,fontWeight:600,background:C.bg,border:`1px solid ${C.orange}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                  </Fragment>
+                ))}
+              </div>
+              <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic",marginTop:6,lineHeight:1.3}}>
+                Multipliers applied to NOx15 / CO15 correlation output based on current BRNDMD. Persists across reloads.
+              </div>
             </div>
           </div>}
 

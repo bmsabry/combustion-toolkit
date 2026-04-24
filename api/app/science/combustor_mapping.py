@@ -176,6 +176,8 @@ def run(
     m_fuel_total_kg_s: float,
     WFR: float = 0.0,
     water_mode: str = "liquid",
+    nox_mult: float = 1.0,
+    co_mult: float = 1.0,
 ) -> dict:
     """Run the 4-circuit correlation-based mapping for any operating point."""
 
@@ -278,6 +280,14 @@ def run(
         # Step 3: P3 power-law scaling
         y_f = y_m * (pressure_ratio ** _P3_EXP[name])
         y_final[name] = y_f
+
+    # Step 4: Emissions Transfer Function — BRNDMD-dependent post-multipliers
+    # on NOx15 and CO15. Applied at all three output stages so the panel's
+    # "linear / 100% / final" diagnostic numbers stay consistent.
+    nm = max(0.0, float(nox_mult))
+    cm = max(0.0, float(co_mult))
+    y_lin["NOx15"]   *= nm; y_100pct["NOx15"]   *= nm; y_final["NOx15"]   *= nm
+    y_lin["CO15"]    *= cm; y_100pct["CO15"]    *= cm; y_final["CO15"]    *= cm
 
     # --- response -----------------------------------------------------------
     return {

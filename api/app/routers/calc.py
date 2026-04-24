@@ -193,6 +193,8 @@ def calc_combustor_mapping(
         body.m_fuel_total_kg_s,
         body.WFR,
         body.water_mode,
+        body.nox_mult,
+        body.co_mult,
     )
     return CombustorMappingResponse(**result)
 
