@@ -2736,7 +2736,7 @@ export default function App(){
   // is driven from the latest cycle result and displayed with a lock badge. "Break link"
   // turns the toggle off and returns manual control. Links default ON because the cycle
   // panel is the first tab and its outputs are the *intent* of most subsequent analyses.
-  const[cycleEngine,setCycleEngine]=useState("LM6000PF");
+  const[cycleEngine,setCycleEngine]=useState("LMS100PB+");
   const[cyclePamb,setCyclePamb]=useState(1.01325);     // bar
   const[cycleTamb,setCycleTamb]=useState(288.706);     // K (60 F)
   const[cycleRH,setCycleRH]=useState(60.0);            // %
