@@ -856,23 +856,75 @@ function BusyGuardedExportButton({onExport}){
   </button>);
 }
 
-// Module-level LRU cache for useBackendCalc. Identical {kind,args} requests
-// (same JSON.stringify of the args object) return the previously-fetched result
-// without hitting the backend. Same panel re-mounted, user toggling between
-// values, two panels asking the same question — all served from cache.
+// Module-level LRU cache for useBackendCalc, persisted to localStorage and
+// keyed by build SHA. Identical {kind,args} requests served instantly from
+// cache; persistence survives tab close, browser restart, and machine reboot.
 //
-// Keyed on `${kind}:${JSON.stringify(args)}`. TTL guards against stale data
-// on long-lived sessions; cap on entries keeps memory bounded. In-flight
-// dedup (`__BK_INFLIGHT`) ensures two concurrent identical requests share
-// a single network call instead of racing.
-const __BK_CACHE = new Map();           // key -> {data, ts}
-const __BK_INFLIGHT = new Map();        // key -> Promise<data>
-const __BK_TTL_MS = 10 * 60 * 1000;     // 10 min
+// Build-hash keying: every entry is namespaced by the current build's git
+// SHA (injected at build time via vite.config.js → __BUILD_SHA__). When a
+// new build ships, the localStorage key changes — old caches become
+// unreachable and are pruned on next load. Users never see stale science
+// from before a backend or frontend deploy.
+//
+// Defensive against:
+//   - localStorage quota exceeded (try/catch around writes)
+//   - localStorage disabled (private browsing) — falls back to in-memory
+//   - git failure at build (vite.config.js falls back to timestamp)
+//   - two-tab concurrent writes (last-write-wins; minor entry loss)
+//   - errors are NEVER cached (only the .then path stores)
+const __BK_BUILD = (typeof __BUILD_SHA__ !== "undefined") ? __BUILD_SHA__ : "dev";
+const __BK_LS_KEY = `ctk_bk_cache_${__BK_BUILD}`;
+const __BK_TTL_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
 const __BK_MAX = 100;
+const __BK_INFLIGHT = new Map();        // key -> Promise<data>
+
+// Load persisted cache on module init. Also prune any other ctk_bk_cache_*
+// keys from previous builds (atomic invalidation on deploy).
+function __bkLoad(){
+  const m = new Map();
+  try {
+    // Prune stale-build entries
+    const stale = [];
+    for(let i = 0; i < localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(k && k.startsWith("ctk_bk_cache_") && k !== __BK_LS_KEY) stale.push(k);
+    }
+    stale.forEach(k => { try { localStorage.removeItem(k); } catch {} });
+    // Load current-build cache
+    const raw = localStorage.getItem(__BK_LS_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      const now = Date.now();
+      for(const [k, e] of parsed){
+        if(e && (now - e.ts) <= __BK_TTL_MS) m.set(k, e);
+      }
+    }
+  } catch {}
+  return m;
+}
+const __BK_CACHE = __bkLoad();
+
+// Debounced flush to localStorage. Each set() schedules one timer; the
+// timer serializes the WHOLE map (so multiple rapid writes coalesce into
+// one localStorage write). On quota error, silently fall back to memory-only.
+let __bkSaveTimer = null;
+function __bkSave(){
+  if(__bkSaveTimer) clearTimeout(__bkSaveTimer);
+  __bkSaveTimer = setTimeout(() => {
+    __bkSaveTimer = null;
+    try {
+      localStorage.setItem(__BK_LS_KEY, JSON.stringify([...__BK_CACHE]));
+    } catch {
+      // Quota exceeded or localStorage disabled — drop persistence silently.
+      // The in-memory cache still works for the rest of this session.
+    }
+  }, 1000);
+}
+
 function __bkCacheGet(key){
   const e = __BK_CACHE.get(key);
   if(!e) return null;
-  if(Date.now() - e.ts > __BK_TTL_MS){ __BK_CACHE.delete(key); return null; }
+  if(Date.now() - e.ts > __BK_TTL_MS){ __BK_CACHE.delete(key); __bkSave(); return null; }
   // touch for LRU
   __BK_CACHE.delete(key); __BK_CACHE.set(key, e);
   return e.data;
@@ -883,6 +935,7 @@ function __bkCacheSet(key, data){
     const oldest = __BK_CACHE.keys().next().value;
     __BK_CACHE.delete(oldest);
   }
+  __bkSave();
 }
 
 function useBackendCalc(kind, args, enabled){
