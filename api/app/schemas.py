@@ -598,9 +598,11 @@ class CombustorMappingRequest(BaseModel):
     frac_IM_pct: float = Field(ge=0, le=100)
     frac_OM_pct: float = Field(ge=0, le=100)
     # User-set phi for IP/OP/IM. OM is back-solved from total-fuel mass balance.
-    phi_IP: float = Field(ge=0, le=5.0)
-    phi_OP: float = Field(ge=0, le=5.0)
-    phi_IM: float = Field(ge=0, le=5.0)
+    # Upper bound loose enough to accommodate the BRNDMD=2 table's
+    # deliberately-rich φ_IP (5.3) and any future rich-pilot configurations.
+    phi_IP: float = Field(ge=0, le=20.0)
+    phi_OP: float = Field(ge=0, le=20.0)
+    phi_IM: float = Field(ge=0, le=20.0)
     m_fuel_total_kg_s: float = Field(gt=0, description="Total combustor fuel (from cycle)")
     # Water injection (distributed ∝ fuel; currently only affects T_AFT solve)
     WFR: float = Field(default=0.0, ge=0.0, le=2.0)

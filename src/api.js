@@ -81,7 +81,24 @@ async function request(path, { method = "GET", body = null, auth = false, retry 
   let data = null;
   try { data = await res.json(); } catch {}
   if (!res.ok) {
-    const err = new Error((data && (data.detail || data.message)) || `${res.status} ${res.statusText}`);
+    // FastAPI returns 422 validation errors as { detail: [{loc, msg, type, ...}, ...] }.
+    // Flatten that array into a readable string; otherwise fall back to detail/message
+    // / status text. Without this the Error ends up with `[object Object]` message.
+    let msg = null;
+    const d = data && data.detail;
+    if (Array.isArray(d)) {
+      msg = d.map(e => {
+        const loc = Array.isArray(e.loc) ? e.loc.slice(1).join(".") : "";
+        return loc ? `${loc}: ${e.msg}` : (e.msg || String(e));
+      }).join("; ");
+    } else if (typeof d === "string") {
+      msg = d;
+    } else if (d) {
+      msg = JSON.stringify(d);
+    } else if (data && typeof data.message === "string") {
+      msg = data.message;
+    }
+    const err = new Error(msg || `${res.status} ${res.statusText}`);
     err.status = res.status;
     err.data = data;
     throw err;
