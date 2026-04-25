@@ -952,6 +952,24 @@ function __bkCacheSet(key, data){
   __bkSave();
 }
 
+// Wipe the in-memory cache + the persisted localStorage entry for this
+// build. Use when the user wants to force every backend call to re-fire
+// from scratch (e.g. after a backend deploy that changed correlation
+// internals but kept the same /calc/* signature).
+function bkClearCache(){
+  __BK_CACHE.clear();
+  __BK_INFLIGHT.clear();
+  try {
+    // Sweep all build-versioned keys, not just the current one.
+    const stale = [];
+    for(let i = 0; i < localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(k && k.startsWith("ctk_bk_cache_")) stale.push(k);
+    }
+    stale.forEach(k => { try { localStorage.removeItem(k); } catch {} });
+  } catch {}
+}
+
 // Direct cached fetch — same cache + in-flight dedup as useBackendCalc, but
 // usable from imperative code (e.g. the OperationsSummaryPanel load sweep
 // loop that calls api.calcCycle / api.calcAFT / api.calcCombustorMapping
@@ -3383,6 +3401,8 @@ export default function App(){
   const[showPricing,setShowPricing]=useState(false);
   const[authModal,setAuthModal]=useState(null); // null | "login" | "signup"
   const[accurate,setAccurate]=useState(false);
+  // Clear-cache button feedback — briefly flips to "✓ CLEARED" after a click.
+  const[cacheCleared,setCacheCleared]=useState(false);
   // PSR reactor options (lifted from CombustorPanel so they can be captured in Excel export).
   const[psrSeed,setPsrSeed]=useState("cold_ignited");
   const[eqConstraint,setEqConstraint]=useState("HP");
@@ -3591,6 +3611,26 @@ export default function App(){
                 {accurate?"ACCURATE: ON":"ACCURATE: OFF"}
               </button>
             )}
+            {/* Cache clear — wipes in-memory + persisted backend response cache.
+                Use after a backend deploy that changed correlation internals
+                without bumping the frontend build SHA, or anytime you want
+                the next call to be a fresh fetch. */}
+            <button onClick={()=>{
+              bkClearCache();
+              setCacheCleared(true);
+              setTimeout(()=>setCacheCleared(false), 1800);
+            }}
+              title="Clear the backend response cache. Next /calc/* call will fetch fresh."
+              style={{padding:"6px 10px",fontSize:11,fontWeight:700,
+                color:cacheCleared?C.bg:C.txtDim,
+                background:cacheCleared?C.good:"transparent",
+                border:`1px solid ${cacheCleared?C.good:C.border}`,
+                borderRadius:6,cursor:"pointer",
+                fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",
+                display:"flex",alignItems:"center",gap:5,
+                transition:"all .15s"}}>
+              {cacheCleared?"✓ CLEARED":"⟲ CLEAR CACHE"}
+            </button>
             {auth.isAuthenticated?(
               <button onClick={()=>setTab("account")} title="Account & Billing" style={{padding:"6px 10px",fontSize:11,fontWeight:700,color:C.accent,background:`${C.accent}15`,border:`1px solid ${C.accent}40`,borderRadius:6,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",display:"flex",alignItems:"center",gap:6,maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                 <span style={{width:18,height:18,borderRadius:"50%",background:C.accent,color:C.bg,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800}}>{(auth.user?.email||"?").charAt(0).toUpperCase()}</span>
