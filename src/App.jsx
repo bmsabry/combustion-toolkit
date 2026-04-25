@@ -2260,6 +2260,10 @@ function CombustorMappingPanel({
   const fmtMdot = k => units==="SI" ? k.toFixed(4) : (k*2.20462).toFixed(3);
   const mdotU   = units==="SI" ? "kg/s" : "lb/s";
   const fmtT    = K => uv(units,"T",K).toFixed(0);
+  // PX36 dynamics — backend returns psi. SI users want mbar (1 psi ≈ 68.9476 mbar).
+  // Helper returns a {value, unit} object so headers and values stay consistent.
+  const fmtPx   = v => units==="SI" ? (v*68.9476).toFixed(1) : v.toFixed(3);
+  const pxUnit  = units==="SI" ? "mbar" : "psi";
 
   // ── Validation banners ───────────────────────────────────────────────────
   const sumOff       = Math.abs(sumFrac-100) > 0.05;
@@ -2335,8 +2339,8 @@ function CombustorMappingPanel({
                   <th style={{padding:"7px 10px",textAlign:"left",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Circuit</th>
                   <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Air flow ({mdotU})</th>
                   <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>φ</th>
-                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,borderLeft:`2px solid ${C.warm}45`,color:C.warm}}>Acoustics — PX36_SEL</th>
-                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,color:C.violet}}>Acoustics — PX36_SEL_HI</th>
+                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,borderLeft:`2px solid ${C.warm}45`,color:C.warm}}>Acoustics — PX36_SEL ({pxUnit})</th>
+                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,color:C.violet}}>Acoustics — PX36_SEL_HI ({pxUnit})</th>
                   <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,borderLeft:`2px solid ${C.accent}45`,color:C.accent}}>Emissions — NOx@15</th>
                   <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,color:C.accent2,borderRight:`2px solid ${C.border}`}}>Emissions — CO@15</th>
                   <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>M_Fuel ({mdotU})</th>
@@ -2364,12 +2368,12 @@ function CombustorMappingPanel({
                     {/* Acoustics + Emissions: SYSTEM-WIDE, rendered once spanning all 4 rows */}
                     {idx===0&&(<>
                       <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",borderLeft:`2px solid ${C.warm}45`,background:`${C.warm}08`}}>
-                        <div style={{fontSize:18,color:C.warm,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr?corr.PX36_SEL.toFixed(3):"—"}</div>
-                        <div style={{fontSize:9,color:C.txtMuted,marginTop:2}}>low-freq</div>
+                        <div style={{fontSize:18,color:C.warm,fontFamily:"monospace",fontWeight:700,lineHeight:1,fontVariantNumeric:"tabular-nums"}}>{corr?fmtPx(corr.PX36_SEL):"—"}</div>
+                        <div style={{fontSize:9.5,color:C.txtMuted,marginTop:3}}>low-freq · {pxUnit}</div>
                       </td>
                       <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",background:`${C.violet}08`}}>
-                        <div style={{fontSize:18,color:C.violet,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr?corr.PX36_SEL_HI.toFixed(3):"—"}</div>
-                        <div style={{fontSize:9,color:C.txtMuted,marginTop:2}}>high-freq</div>
+                        <div style={{fontSize:18,color:C.violet,fontFamily:"monospace",fontWeight:700,lineHeight:1,fontVariantNumeric:"tabular-nums"}}>{corr?fmtPx(corr.PX36_SEL_HI):"—"}</div>
+                        <div style={{fontSize:9.5,color:C.txtMuted,marginTop:3}}>high-freq · {pxUnit}</div>
                       </td>
                       <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",borderLeft:`2px solid ${C.accent}45`,background:`${C.accent}08`}}>
                         <div style={{fontSize:18,color:C.accent,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr?corr.NOx15.toFixed(2):"—"}</div>
@@ -2664,7 +2668,7 @@ function CombustorMappingPanel({
             </div>
             <div style={{marginTop:6,padding:"4px 8px",background:C.bg,borderRadius:4,fontSize:10,color:C.txtDim,fontFamily:"monospace",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
               <span>Pressure ratio (P3/638): <strong style={{color:C.accent}}>{derived.pressure_ratio.toFixed(4)}</strong> — scales all 4 outputs as (ratio)^exp</span>
-              {corr100?<span style={{color:C.txtMuted}}>@ 100% load: NOx<sub>15</sub>={corr100.NOx15.toFixed(1)} · CO<sub>15</sub>={corr100.CO15.toFixed(1)} · PX36_SEL={corr100.PX36_SEL.toFixed(2)} · PX36_SEL_HI={corr100.PX36_SEL_HI.toFixed(3)}</span>:null}
+              {corr100?<span style={{color:C.txtMuted}}>@ 100% load: NOx<sub>15</sub>={corr100.NOx15.toFixed(1)} · CO<sub>15</sub>={corr100.CO15.toFixed(1)} · PX36_SEL={fmtPx(corr100.PX36_SEL)} {pxUnit} · PX36_SEL_HI={fmtPx(corr100.PX36_SEL_HI)} {pxUnit}</span>:null}
             </div>
           </div>
         </>:null}
