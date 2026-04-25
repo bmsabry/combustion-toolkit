@@ -2627,18 +2627,16 @@ function OperationsSummaryPanel({
   };
   const bleedOpenAtLoad=(L)=>bleedMode==="auto"?autoBleedOpenPct(L):(bleedOpenManualPct??0);
 
-  // Strip H2O from oxidizer for the mapping call; the mapping correlation
-  // expects dry-basis air (humidity is folded in via WFR). Mirrors the App-
-  // level `_oxHumid → bkMap.oxidizer` transform so per-load mapping calls
-  // produce the same FAR_stoich and per-circuit T_AFT as the live page.
-  const _oxForMap = (() => {
-    const o = {...nonzero(ox)};
-    delete o.H2O;
-    return o;
-  })();
-  // Same combustor air frac the App uses for bkMap (mapping panel internal
-  // weighting). Mirror to keep sweep ↔ live page numbers aligned.
-  const _comAirFracForMap = 0.747;
+  // ── Mirror the live App-level bkMap call exactly ─────────────────────
+  // Two args were drifting and producing curves that disagreed with the
+  // header marker:
+  //   1. oxidizer — live uses cycleResult.oxidizer_humid_mol_pct (HUMID,
+  //      from the cycle's own RH-aware humidification). My old code stripped
+  //      H2O from the sidebar oxidizer thinking the mapping wanted dry air —
+  //      wrong. Use each per-load cycle's humid oxidizer.
+  //   2. com_air_frac — live uses cycleResult.combustor_air_frac (typically
+  //      0.89 for LMS100). My old code hardcoded 0.747. Use the prop.
+  // Both are already on the per-load cycle result `c` and the sweep props.
 
   const runSweep=async()=>{
     if(sweeping)return;
@@ -2687,17 +2685,23 @@ function OperationsSummaryPanel({
           const T3_F    = (c.T3_K - 273.15) * 9/5 + 32;
           const phisAtLoad = tbl ? interpMappingTable(tbl, T3_F) : null;
           const tfMult  = (emTfMults && emTfMults[tblKey]) || {NOx:1.0, CO:1.0};
+          // Use the same humid oxidizer + combustor_air_frac the live App
+          // bkMap call uses. Per-load cycle result c carries both — they don't
+          // change with load (RH and air_frac are inputs), but pulling from c
+          // keeps everything self-consistent if cycle.py ever modifies them.
+          const _oxHumidPt = c.oxidizer_humid_mol_pct;
+          const _comAirFracPt = c.combustor_air_frac;
           let NOx15_pt=0, CO15_pt=0, FAR_stoich_pt=0.060;
           try{
-            if(W3_pb>0 && m_fuel>0){
+            if(W3_pb>0 && m_fuel>0 && _oxHumidPt){
               const m=await bkCachedFetch("combustor_mapping",{
                 fuel:nonzero(fuel),
-                oxidizer:_oxForMap,
+                oxidizer:nonzero(_oxHumidPt),
                 T3_K:c.T3_K, P3_bar:c.P3_bar,
                 T_fuel_K:Tfuel,
                 W3_kg_s:W3_pb,
                 W36_over_W3:Math.max(0.01,Math.min(1.0,mapW36w3||0.89)),
-                com_air_frac:_comAirFracForMap,
+                com_air_frac:Math.max(0.01,Math.min(1.0,_comAirFracPt||0.89)),
                 frac_IP_pct:mapFracIP, frac_OP_pct:mapFracOP,
                 frac_IM_pct:mapFracIM, frac_OM_pct:mapFracOM,
                 phi_IP:Math.max(0,phisAtLoad?.IP||0),
