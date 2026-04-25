@@ -2248,10 +2248,13 @@ function CombustorMappingPanel({
       :<>
 
       {/* ═════════════════════════════════════════════════════════════════
-          1. CONTROLS
+          1 · OPERATING SNAPSHOT — per-circuit dashboard
+            Columns (left → right): Air flow · φ (editable) · Acoustics
+            (PX36_SEL + PX36_SEL_HI, system-wide, merged across rows) ·
+            Emissions (NOx15 + CO15, system-wide, merged) · M_Fuel · T_AFT
          ═════════════════════════════════════════════════════════════════ */}
       <div style={S.card}>
-        <div style={S.cardT}>1 · Combustor Inlet & Controls</div>
+        <div style={S.cardT}>1 · Operating Snapshot</div>
 
         {/* Inlet state chips (read-only from cycle) */}
         <div style={{display:"flex",gap:8,flexWrap:"wrap",fontFamily:"monospace",fontSize:11,marginBottom:10}}>
@@ -2264,7 +2267,83 @@ function CombustorMappingPanel({
           {WFR>0?<div style={{padding:"5px 9px",background:C.bg2,borderRadius:5,border:`1px solid ${C.violet}40`}}><span style={{color:C.txtDim}}>WFR:</span> <strong style={{color:C.violet}}>{WFR.toFixed(3)}</strong> <span style={{color:C.txtMuted,fontSize:10}}>({waterMode})</span></div>:null}
         </div>
 
-        {/* W36/W3 knob (full width) */}
+        {!R&&accurate
+          ? <div style={{padding:"18px",textAlign:"center",color:C.txtDim,fontSize:11,fontStyle:"italic"}}>{bkMap.loading?"Calculating per-circuit values…":bkMap.err?`Error: ${bkMap.err}`:"Waiting for inputs…"}</div>
+          : (
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11.5,fontFamily:"monospace"}}>
+              <thead>
+                <tr style={{background:C.bg2,color:C.txtDim}}>
+                  <th style={{padding:"7px 10px",textAlign:"left",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Circuit</th>
+                  <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Air flow ({mdotU})</th>
+                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>φ</th>
+                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,borderLeft:`2px solid ${C.warm}45`,color:C.warm}}>Acoustics — PX36_SEL</th>
+                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,color:C.violet}}>Acoustics — PX36_SEL_HI</th>
+                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,borderLeft:`2px solid ${C.accent}45`,color:C.accent}}>Emissions — NOx@15</th>
+                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,color:C.accent2,borderRight:`2px solid ${C.border}`}}>Emissions — CO@15</th>
+                  <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>M_Fuel ({mdotU})</th>
+                  <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>T_AFT ({uu(units,"T")})</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ["Inner Pilot","IP",C.strong,"centerbody pilot",C_IP,phiIP,setPhiIP,0.05,true],
+                  ["Outer Pilot","OP",C.orange,"annular pilot",C_OP,phiOP,setPhiOP,0.05,true],
+                  ["Inner Main","IM",C.accent,"inner premix",C_IM,phiIM,setPhiIM,0.01,true],
+                  ["Outer Main","OM",C.accent2,"float circuit",C_OM,phi_OM,null,0,false],
+                ].map(([label,key,color,sub,row,phiV,setPhi,step,editable],idx)=>(
+                  <tr key={key} style={{background:`${color}08`}}>
+                    <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}40`,minWidth:140}}>
+                      <div style={{fontSize:11.5,fontWeight:700,color,letterSpacing:".3px"}}>{label} <span style={{color:C.txtMuted,fontWeight:400,fontSize:9.5}}>({key})</span></div>
+                      <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic"}}>{sub}</div>
+                    </td>
+                    <td style={{padding:"8px 10px",textAlign:"right",color:C.txt,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{row?fmtMdot(row.m_air_kg_s):fmtMdot([m_air_IP,m_air_OP,m_air_IM,m_air_OM][idx])}</td>
+                    <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`}}>
+                      {editable
+                        ? <PhiEditor val={phiV} setVal={setPhi} step={step} color={color}/>
+                        : <div style={{display:"inline-block",padding:"3px 8px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:`${color}18`,border:`1px dashed ${color}80`,borderRadius:4,minWidth:78,textAlign:"center"}}>{(phiV||0).toFixed(4)}</div>}
+                    </td>
+                    {/* Acoustics + Emissions: SYSTEM-WIDE, rendered once spanning all 4 rows */}
+                    {idx===0&&(<>
+                      <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",borderLeft:`2px solid ${C.warm}45`,background:`${C.warm}08`}}>
+                        <div style={{fontSize:18,color:C.warm,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr?corr.PX36_SEL.toFixed(3):"—"}</div>
+                        <div style={{fontSize:9,color:C.txtMuted,marginTop:2}}>low-freq</div>
+                      </td>
+                      <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",background:`${C.violet}08`}}>
+                        <div style={{fontSize:18,color:C.violet,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr?corr.PX36_SEL_HI.toFixed(3):"—"}</div>
+                        <div style={{fontSize:9,color:C.txtMuted,marginTop:2}}>high-freq</div>
+                      </td>
+                      <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",borderLeft:`2px solid ${C.accent}45`,background:`${C.accent}08`}}>
+                        <div style={{fontSize:18,color:C.accent,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr?corr.NOx15.toFixed(2):"—"}</div>
+                        <div style={{fontSize:9,color:C.txtMuted,marginTop:2}}>ppm</div>
+                      </td>
+                      <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",background:`${C.accent2}08`,borderRight:`2px solid ${C.border}`}}>
+                        <div style={{fontSize:18,color:C.accent2,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr?corr.CO15.toFixed(2):"—"}</div>
+                        <div style={{fontSize:9,color:C.txtMuted,marginTop:2}}>ppm</div>
+                      </td>
+                    </>)}
+                    <td style={{padding:"8px 10px",textAlign:"right",color:C.accent2,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{row?fmtMdot(row.m_fuel_kg_s):"—"}</td>
+                    <td style={{padding:"8px 10px",textAlign:"right",color:C.orange,fontWeight:700,borderBottom:`1px solid ${C.border}40`}}>{row?fmtT(row.T_AFT_complete_K):"—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          )}
+        {derived?<div style={{marginTop:8,padding:"5px 10px",background:`${C.warm}10`,border:`1px solid ${C.warm}45`,borderRadius:5,fontSize:11,fontFamily:"monospace",color:C.txtDim,display:"inline-block"}}>
+          <strong style={{color:C.warm}}>DT_Main</strong> (OM − IM) = <strong style={{color:C.warm,fontSize:13}}>{derived.DT_Main_F.toFixed(1)} °F</strong>
+        </div>:null}
+      </div>
+
+      {/* ═════════════════════════════════════════════════════════════════
+          2 · USER INPUTS — Air Fraction (editable) + φ (editable) +
+          M_Air (derived) + M_Fuel (derived). Compact 4-column per-circuit
+          table. W36/W3 knob lives at the top since it's also a user input.
+         ═════════════════════════════════════════════════════════════════ */}
+      <div style={S.card}>
+        <div style={S.cardT}>2 · User Inputs (Air Split & Equivalence Ratio)</div>
+
+        {/* W36/W3 knob */}
         <div style={{padding:"9px 11px",background:`${C.accent}0A`,border:`1px solid ${C.accent}45`,borderRadius:6,marginBottom:10,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
           <div style={{minWidth:160}}>
             <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px"}}>W36 / W3</div>
@@ -2279,36 +2358,41 @@ function CombustorMappingPanel({
           <div style={{fontSize:11,color:C.txtDim,fontFamily:"monospace"}}>W36 = {fmtMdot(m_air_W36)} {mdotU}</div>
         </div>
 
-        {/* Per-circuit controls (air split % and φ) */}
+        {/* Per-circuit input grid */}
         <div style={{border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>
-          <div style={{display:"grid",gridTemplateColumns:"170px 1fr 1fr 1fr",gap:0,background:C.bg2,padding:"6px 10px",fontSize:9.5,color:C.txtDim,fontFamily:"monospace",textTransform:"uppercase",letterSpacing:".6px"}}>
-            <div>Circuit</div><div>Air frac (% of flame air)</div><div>Air flow ({mdotU})</div><div>φ</div>
+          <div style={{display:"grid",gridTemplateColumns:"180px 1fr 1fr 1fr 1fr",gap:0,background:C.bg2,padding:"6px 10px",fontSize:9.5,color:C.txtDim,fontFamily:"monospace",textTransform:"uppercase",letterSpacing:".6px"}}>
+            <div>Circuit</div>
+            <div style={{textAlign:"center"}}>Air Fraction (% of flame air)</div>
+            <div style={{textAlign:"center"}}>φ</div>
+            <div style={{textAlign:"right"}}>M_Air ({mdotU})</div>
+            <div style={{textAlign:"right"}}>M_Fuel ({mdotU})</div>
           </div>
           {[
-            ["Inner Pilot (IP)","centerbody pilot",C.strong,fracIP,setFracIP,m_air_IP,phiIP,setPhiIP,0.05,true],
-            ["Outer Pilot (OP)","annular pilot",C.orange,fracOP,setFracOP,m_air_OP,phiOP,setPhiOP,0.05,true],
-            ["Inner Main (IM)","inner premix",C.accent,fracIM,setFracIM,m_air_IM,phiIM,setPhiIM,0.01,true],
-            ["Outer Main (OM)","float circuit",C.accent2,fracOM,setFracOM,m_air_OM,phi_OM,null,0,false],
-          ].map(([name,sub,color,frac,setFrac,mAir,phiV,setPhi,step,editable])=>(
-            <div key={name} style={{display:"grid",gridTemplateColumns:"170px 1fr 1fr 1fr",gap:0,alignItems:"center",padding:"8px 10px",borderTop:`1px solid ${C.border}`,background:`${color}08`}}>
+            ["Inner Pilot (IP)","centerbody pilot",C.strong,fracIP,setFracIP,m_air_IP,phiIP,setPhiIP,0.05,m_fuel_IP_bk,true],
+            ["Outer Pilot (OP)","annular pilot",C.orange,fracOP,setFracOP,m_air_OP,phiOP,setPhiOP,0.05,m_fuel_OP_bk,true],
+            ["Inner Main (IM)","inner premix",C.accent,fracIM,setFracIM,m_air_IM,phiIM,setPhiIM,0.01,m_fuel_IM_bk,true],
+            ["Outer Main (OM)","float circuit",C.accent2,fracOM,setFracOM,m_air_OM,phi_OM,null,0,m_fuel_OM,false],
+          ].map(([name,sub,color,frac,setFrac,mAir,phiV,setPhi,step,mFuel,editable])=>(
+            <div key={name} style={{display:"grid",gridTemplateColumns:"180px 1fr 1fr 1fr 1fr",gap:0,alignItems:"center",padding:"8px 10px",borderTop:`1px solid ${C.border}`,background:`${color}08`}}>
               <div>
                 <div style={{fontSize:11.5,fontWeight:700,color,letterSpacing:".3px"}}>{name}</div>
                 <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic"}}>{sub}</div>
               </div>
-              <div>
+              <div style={{textAlign:"center"}}>
                 <NumField value={frac} decimals={2} onCommit={v=>setFrac(Math.max(0,Math.min(100,+v)))}
-                  style={{width:72,padding:"3px 6px",fontSize:11.5,color,fontFamily:"monospace",fontWeight:600,background:C.bg,border:`1px solid ${color}40`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+                  style={{width:78,padding:"4px 6px",fontSize:12,color,fontFamily:"monospace",fontWeight:600,background:C.bg,border:`1px solid ${color}40`,borderRadius:4,textAlign:"center",outline:"none"}}/>
               </div>
-              <div style={{fontSize:12,fontFamily:"monospace",color:C.txt,fontWeight:600}}>{fmtMdot(mAir)}</div>
-              <div>
+              <div style={{textAlign:"center"}}>
                 {editable
                   ? <PhiEditor val={phiV} setVal={setPhi} step={step} color={color}/>
-                  : <div style={{width:88,padding:"3px 6px",fontFamily:"monospace",color,fontSize:13,fontWeight:700,background:`${color}18`,border:`1px dashed ${color}80`,borderRadius:4,textAlign:"center"}}>{(phiV||0).toFixed(4)}</div>}
+                  : <div style={{display:"inline-block",width:88,padding:"4px 6px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:`${color}18`,border:`1px dashed ${color}80`,borderRadius:4,textAlign:"center"}}>{(phiV||0).toFixed(4)}</div>}
               </div>
+              <div style={{fontSize:12,fontFamily:"monospace",color:C.txt,fontWeight:600,textAlign:"right"}}>{fmtMdot(mAir)}</div>
+              <div style={{fontSize:12,fontFamily:"monospace",color:C.accent2,fontWeight:600,textAlign:"right"}}>{fmtMdot(mFuel)}</div>
             </div>
           ))}
           <div style={{padding:"6px 10px",background:C.bg2,borderTop:`1px solid ${C.border}`,fontSize:10,color:C.txtMuted,fontFamily:"monospace",display:"flex",justifyContent:"space-between"}}>
-            <span>Outer Main φ is back-solved from the total-fuel mass balance.</span>
+            <span>Outer Main φ + M_Fuel are back-solved from the total-fuel mass balance.</span>
             <span>Air frac sum: <strong style={{color:Math.abs(sumFrac-100)<0.05?C.accent:C.warm}}>{sumFrac.toFixed(2)} %</strong></span>
           </div>
         </div>
@@ -2319,114 +2403,10 @@ function CombustorMappingPanel({
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════
-          2. EMISSIONS & DYNAMICS — headline card (correlation model)
-         ═════════════════════════════════════════════════════════════════ */}
-      <div style={{...S.card,border:`2px solid ${C.accent}`,background:`linear-gradient(180deg, ${C.accent}08 0%, ${C.bg} 60%)`}}>
-        <div style={{...S.cardT,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style={{color:C.accent,fontSize:12}}>★ 2 · Emissions & Dynamics (correlation @ current operating point)</span>
-          <span style={{fontSize:9.5,fontWeight:500,color:C.txtMuted,fontFamily:"monospace",letterSpacing:0,textTransform:"none"}}>linear + Phi_OP mult (HI only) + (P3/638)^exp</span>
-        </div>
-
-        {!corr
-          ? <div style={{padding:"18px",textAlign:"center",color:C.txtDim,fontSize:11,fontStyle:"italic"}}>{bkMap.loading?"Calculating...":bkMap.err?`Error: ${bkMap.err}`:"Waiting for inputs…"}</div>
-          : <>
-            {/* 4 big numbers */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10,marginBottom:10}}>
-              <div style={{padding:"12px 14px",background:C.bg2,border:`1px solid ${C.accent}40`,borderRadius:8,textAlign:"center"}}>
-                <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:3}}>NOx @ 15% O₂</div>
-                <div style={{fontSize:24,color:C.accent,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr.NOx15.toFixed(2)}</div>
-                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>ppm</div>
-              </div>
-              <div style={{padding:"12px 14px",background:C.bg2,border:`1px solid ${C.accent2}40`,borderRadius:8,textAlign:"center"}}>
-                <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:3}}>CO @ 15% O₂</div>
-                <div style={{fontSize:24,color:C.accent2,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr.CO15.toFixed(2)}</div>
-                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>ppm</div>
-              </div>
-              <div style={{padding:"12px 14px",background:C.bg2,border:`1px solid ${C.warm}40`,borderRadius:8,textAlign:"center"}}>
-                <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:3}}>PX36_SEL</div>
-                <div style={{fontSize:24,color:C.warm,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr.PX36_SEL.toFixed(3)}</div>
-                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>low-freq dynamics</div>
-              </div>
-              <div style={{padding:"12px 14px",background:C.bg2,border:`1px solid ${C.violet}40`,borderRadius:8,textAlign:"center"}}>
-                <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginBottom:3}}>PX36_SEL_HI</div>
-                <div style={{fontSize:24,color:C.violet,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr.PX36_SEL_HI.toFixed(3)}</div>
-                <div style={{fontSize:10,color:C.txtMuted,marginTop:3,fontFamily:"monospace"}}>high-freq dynamics</div>
-              </div>
-            </div>
-
-            {/* Live inputs to the correlation */}
-            <div style={{padding:"8px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}>
-              <div style={{fontSize:9.5,color:C.txtDim,textTransform:"uppercase",letterSpacing:".5px",marginBottom:5}}>Correlation inputs · reference → live · Δ</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4, 1fr)",gap:6,fontSize:10.5,fontFamily:"monospace"}}>
-                <div><span style={{color:C.txtDim}}>DT_Main:</span> <strong style={{color:C.warm}}>{derived.DT_Main_F.toFixed(1)} °F</strong> <span style={{color:C.txtMuted}}>(ref 450)</span></div>
-                <div><span style={{color:C.txtDim}}>Tflame (mass-wt avg):</span> <strong style={{color:C.warm}}>{derived.Tflame_F.toFixed(0)} °F</strong> <span style={{color:C.txtMuted}}>(ref 3035)</span></div>
-                <div><span style={{color:C.txtDim}}>T3:</span> <strong style={{color:C.accent}}>{derived.T3_F.toFixed(0)} °F</strong> <span style={{color:C.txtMuted}}>(ref 700)</span></div>
-                <div><span style={{color:C.txtDim}}>P3:</span> <strong style={{color:C.accent}}>{derived.P3_psia.toFixed(1)} psia</strong> <span style={{color:C.txtMuted}}>(ref 638)</span></div>
-                <div><span style={{color:C.txtDim}}>C3_eff:</span> <strong style={{color:C.accent2}}>{derived.C3_effective_pct.toFixed(2)} %</strong> <span style={{color:C.txtMuted}}>(ref 7.5)</span></div>
-                <div><span style={{color:C.txtDim}}>N2 (fuel):</span> <strong style={{color:C.accent2}}>{derived.N2_pct.toFixed(2)} %</strong> <span style={{color:C.txtMuted}}>(ref 0.5)</span></div>
-                <div><span style={{color:C.txtDim}}>Phi_OP:</span> <strong style={{color:C.orange}}>{phiOP.toFixed(3)}</strong> <span style={{color:C.txtMuted}}>(ref 0.65)</span></div>
-                <div><span style={{color:C.txtDim}}>Phi_OP mult (HI):</span> <strong style={{color:derived.phi_OP_mult<1?C.warm:C.accent}}>{derived.phi_OP_mult.toFixed(3)}</strong> <span style={{color:C.txtMuted}}>(1 if ≥0.55)</span></div>
-              </div>
-              <div style={{marginTop:6,padding:"4px 8px",background:C.bg,borderRadius:4,fontSize:10,color:C.txtDim,fontFamily:"monospace",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <span>Pressure ratio (P3/638): <strong style={{color:C.accent}}>{derived.pressure_ratio.toFixed(4)}</strong> — scales all 4 outputs as (ratio)^exp; exp = 0.467 / −1.0 / 0.44 / 0.44</span>
-                <span style={{color:C.txtMuted}}>@ 100% load: {corr100.NOx15.toFixed(1)} / {corr100.CO15.toFixed(1)} / {corr100.PX36_SEL.toFixed(2)} / {corr100.PX36_SEL_HI.toFixed(3)}</span>
-              </div>
-            </div>
-          </>}
-      </div>
-
-      {/* ═════════════════════════════════════════════════════════════════
-          3. DT_Main (single-line callout) + per-circuit T_AFT table
+          3 · AIR ACCOUNTING & FUEL BALANCE (sanity check)
          ═════════════════════════════════════════════════════════════════ */}
       <div style={S.card}>
-        <div style={{...S.cardT,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span>3 · Per-Circuit Flame Temperatures</span>
-          {derived?<div style={{padding:"4px 10px",background:`${C.warm}14`,border:`1px solid ${C.warm}55`,borderRadius:5,fontSize:11,fontFamily:"monospace",color:C.txtDim,fontWeight:500,textTransform:"none",letterSpacing:0}}>
-            <strong style={{color:C.warm}}>DT_Main</strong> (OM − IM) = <strong style={{color:C.warm,fontSize:13}}>{derived.DT_Main_F.toFixed(1)} °F</strong>
-          </div>:null}
-        </div>
-        <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"monospace"}}>
-            <thead>
-              <tr style={{background:C.bg2,color:C.txtDim}}>
-                <th style={{padding:"6px 8px",textAlign:"left",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>Circuit</th>
-                <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>φ</th>
-                <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>m_air ({mdotU})</th>
-                <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>m_fuel ({mdotU})</th>
-                <th style={{padding:"6px 8px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:600,textTransform:"uppercase",letterSpacing:".5px",fontSize:9.5}}>T_AFT ({uu(units,"T")})</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                ["Inner Pilot","IP",C.strong,C_IP,true],
-                ["Outer Pilot","OP",C.orange,C_OP,true],
-                ["Inner Main","IM",C.accent,C_IM,false],
-                ["Outer Main","OM",C.accent2,C_OM,false],
-              ].map(([label,key,color,row,isPilot])=>(
-                <tr key={key} style={{background:row?`${color}06`:"transparent"}}>
-                  <td style={{padding:"6px 8px",color,fontWeight:700,borderBottom:`1px solid ${C.border}40`}}>
-                    {label} <span style={{color:C.txtMuted,fontWeight:400,fontSize:9.5}}>({key})</span>
-                    {isPilot?<span style={{marginLeft:6,padding:"1px 5px",fontSize:8.5,color:C.warm,background:`${C.warm}15`,border:`1px solid ${C.warm}40`,borderRadius:3,textTransform:"uppercase",letterSpacing:".4px"}}>pilot</span>:null}
-                  </td>
-                  <td style={{padding:"6px 8px",textAlign:"right",color,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{row?row.phi.toFixed(4):"—"}</td>
-                  <td style={{padding:"6px 8px",textAlign:"right",color:C.txt,borderBottom:`1px solid ${C.border}40`}}>{row?fmtMdot(row.m_air_kg_s):"—"}</td>
-                  <td style={{padding:"6px 8px",textAlign:"right",color:C.accent2,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{row?fmtMdot(row.m_fuel_kg_s):"—"}</td>
-                  <td style={{padding:"6px 8px",textAlign:"right",color:C.orange,fontWeight:700,borderBottom:`1px solid ${C.border}40`}}>{row?fmtT(row.T_AFT_complete_K):"—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div style={{marginTop:6,fontSize:10,color:C.txtMuted,fontFamily:"monospace"}}>
-          T_AFT = complete-combustion adiabatic flame temperature (no dissociation). DT_Main = T_AFT(OM) − T_AFT(IM) in °F drives the emissions &amp; dynamics correlation.
-        </div>
-      </div>
-
-      {/* ═════════════════════════════════════════════════════════════════
-          4. AIR ACCOUNTING & FUEL BALANCE (sanity check)
-         ═════════════════════════════════════════════════════════════════ */}
-      <div style={S.card}>
-        <div style={S.cardT}>4 · Air Accounting & Fuel Balance</div>
+        <div style={S.cardT}>3 · Air Accounting & Fuel Balance</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
           <div>
             <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:".5px",marginBottom:4}}>Air ({mdotU})</div>
@@ -2454,10 +2434,10 @@ function CombustorMappingPanel({
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════
-          5 · MAPPING TABLES — editable φ(T3) by BRNDMD; auto-fill circuits
+          4 · MAPPING TABLES — editable φ(T3) by BRNDMD; auto-fill circuits
          ═════════════════════════════════════════════════════════════════ */}
       <div style={S.card}>
-        <div style={S.cardT}>5 · Mapping Tables (φ lookup by T₃ × BRNDMD)</div>
+        <div style={S.cardT}>4 · Mapping Tables (φ lookup by T₃ × BRNDMD)</div>
 
         {/* Current-lookup summary */}
         <div style={{padding:"8px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`,marginBottom:10,fontSize:11,fontFamily:"monospace"}}>
@@ -2531,11 +2511,68 @@ function CombustorMappingPanel({
         </div>
 
         <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10,color:C.txtMuted,fontFamily:"monospace",gap:10}}>
-          <span>Edits persist across page reloads (localStorage). Card 1 φ inputs auto-fill from the active lookup; linear interpolation between rows.</span>
+          <span>Edits persist across page reloads (localStorage). Card 2 φ inputs auto-fill from the active lookup; linear interpolation between rows.</span>
           <button onClick={resetTables} style={{padding:"4px 10px",fontSize:10,fontWeight:600,color:C.warm,background:"transparent",border:`1px solid ${C.warm}80`,borderRadius:4,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
             ↺ RESET TO DEFAULTS
           </button>
         </div>
+      </div>
+
+      {/* ═════════════════════════════════════════════════════════════════
+          REFERENCE & METHODOLOGY — explanatory text, reference conditions,
+          live correlation deltas, ratio scaling. Moved here from the old
+          Card 2 inline block so the dashboard above stays clean.
+         ═════════════════════════════════════════════════════════════════ */}
+      <div style={{padding:"14px 16px",background:`${C.bg2}80`,border:`1px solid ${C.border}`,borderRadius:8,marginTop:4}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8,paddingBottom:5,borderBottom:`1px solid ${C.accent}25`}}>
+          Reference Conditions & Correlation Methodology
+        </div>
+
+        <p style={{fontSize:11,color:C.txtDim,lineHeight:1.55,fontFamily:"'Barlow',sans-serif",margin:"0 0 10px"}}>
+          The emissions and dynamics shown in <strong style={{color:C.txt}}>Card 1</strong> come from an
+          <strong style={{color:C.accent}}> anchored linear correlation</strong> calibrated at the
+          LMS100 design point. The correction chain is: <strong>(1)</strong> linear corrections for
+          DT_Main, Phi_OP, C3, N2, Tflame, T3 deltas from the reference; <strong>(2)</strong> a Phi_OP
+          multiplier that drops from 1.0 to 0.8 linearly between φ_OP = 0.55 and 0.45 — applied
+          <strong> only</strong> to PX36_SEL_HI; <strong>(3)</strong> a P3 power-law scaling
+          <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace",margin:"0 2px"}}>(P3/638)^exp</code>
+          with exponents <strong>0.467 / −1.0 / 0.44 / 0.44</strong> for NOx<sub>15</sub> / CO<sub>15</sub> /
+          PX36_SEL / PX36_SEL_HI respectively. The Tflame contribution to NOx<sub>15</sub> is
+          piecewise-integrated (slope 0.12 ppm/°F above 2850 °F, 0.04 between 2750–2850 °F, frozen below).
+        </p>
+
+        <p style={{fontSize:11,color:C.txtDim,lineHeight:1.55,fontFamily:"'Barlow',sans-serif",margin:"0 0 10px"}}>
+          <strong>T_AFT</strong> = complete-combustion adiabatic flame temperature (no dissociation). Mass-flow-weighted across
+          the four circuits gives the <strong>Tflame</strong> input to the correlation. <strong>DT_Main</strong> = T_AFT(OM) −
+          T_AFT(IM) in °F drives the dome-mixing term.
+        </p>
+
+        {derived?<>
+          <div style={{padding:"8px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`,marginBottom:8}}>
+            <div style={{fontSize:9.5,color:C.txtDim,textTransform:"uppercase",letterSpacing:".5px",marginBottom:6}}>Live correlation inputs · reference → live · Δ</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4, 1fr)",gap:6,fontSize:10.5,fontFamily:"monospace"}}>
+              <div><span style={{color:C.txtDim}}>DT_Main:</span> <strong style={{color:C.warm}}>{derived.DT_Main_F.toFixed(1)} °F</strong> <span style={{color:C.txtMuted}}>(ref 450)</span></div>
+              <div><span style={{color:C.txtDim}}>Tflame (mass-wt avg):</span> <strong style={{color:C.warm}}>{derived.Tflame_F.toFixed(0)} °F</strong> <span style={{color:C.txtMuted}}>(ref 3035)</span></div>
+              <div><span style={{color:C.txtDim}}>T3:</span> <strong style={{color:C.accent}}>{derived.T3_F.toFixed(0)} °F</strong> <span style={{color:C.txtMuted}}>(ref 700)</span></div>
+              <div><span style={{color:C.txtDim}}>P3:</span> <strong style={{color:C.accent}}>{derived.P3_psia.toFixed(1)} psia</strong> <span style={{color:C.txtMuted}}>(ref 638)</span></div>
+              <div><span style={{color:C.txtDim}}>C3_eff:</span> <strong style={{color:C.accent2}}>{derived.C3_effective_pct.toFixed(2)} %</strong> <span style={{color:C.txtMuted}}>(ref 7.5)</span></div>
+              <div><span style={{color:C.txtDim}}>N2 (fuel):</span> <strong style={{color:C.accent2}}>{derived.N2_pct.toFixed(2)} %</strong> <span style={{color:C.txtMuted}}>(ref 0.5)</span></div>
+              <div><span style={{color:C.txtDim}}>Phi_OP:</span> <strong style={{color:C.orange}}>{phiOP.toFixed(3)}</strong> <span style={{color:C.txtMuted}}>(ref 0.65)</span></div>
+              <div><span style={{color:C.txtDim}}>Phi_OP mult (HI):</span> <strong style={{color:derived.phi_OP_mult<1?C.warm:C.accent}}>{derived.phi_OP_mult.toFixed(3)}</strong> <span style={{color:C.txtMuted}}>(1 if ≥0.55)</span></div>
+            </div>
+            <div style={{marginTop:6,padding:"4px 8px",background:C.bg,borderRadius:4,fontSize:10,color:C.txtDim,fontFamily:"monospace",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+              <span>Pressure ratio (P3/638): <strong style={{color:C.accent}}>{derived.pressure_ratio.toFixed(4)}</strong> — scales all 4 outputs as (ratio)^exp</span>
+              {corr100?<span style={{color:C.txtMuted}}>@ 100% load: NOx<sub>15</sub>={corr100.NOx15.toFixed(1)} · CO<sub>15</sub>={corr100.CO15.toFixed(1)} · PX36_SEL={corr100.PX36_SEL.toFixed(2)} · PX36_SEL_HI={corr100.PX36_SEL_HI.toFixed(3)}</span>:null}
+            </div>
+          </div>
+        </>:null}
+
+        <p style={{fontSize:10.5,color:C.txtMuted,lineHeight:1.5,fontFamily:"'Barlow',sans-serif",margin:0,fontStyle:"italic"}}>
+          Air flow: <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 = W3 × (W36/W3)</code> enters the dome.
+          Flame air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × com.Air Frac</code> (split across the 4 circuits).
+          Effusion / cooling air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × (1 − com.Air Frac)</code>.
+          Outer Main is the <strong style={{color:C.accent2}}>float</strong> circuit: fuel = total − IP − OP − IM, φ back-solved.
+        </p>
       </div>
       </>}
   </div>);
