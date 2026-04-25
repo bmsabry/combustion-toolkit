@@ -1196,71 +1196,107 @@ function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setC
     </div></div>);}
 
 function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",velocity,setVelocity,Lchar,setLchar,Dfh,setDfh,Lpremix,setLpremix,Vpremix,setVpremix}){
+  // ─── HOOKS ─────────────────────────────────────────────────────────────
+  // ALL hooks live above the activate-guard early return. Each does a
+  // FULL no-op (returns a safe default, fires no backend call) when
+  // !flameActive, so the panel is truly inert until the user opts in.
+  // Same lesson learned the hard way on the PSR-PFR gate: it's not enough
+  // to gate the backend — local useMemo sweeps and useState calls must
+  // also short-circuit, and the JSX must not render result cards either.
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
-  const Tair=T0;
-  // Effective unburnt-mixture temperature = adiabatic mix of fuel+air at current phi.
-  const Tmix=useMemo(()=>mixT(fuel,ox,phi,Tfuel,Tair),[fuel,ox,phi,Tfuel,Tair]);
-  const localSL=calcSL(fuel,phi,Tmix,P)*100;
-  const bk=useBackendCalc("flame",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate);
-  // Autoignition delay (Cantera 0D). Only fetched in accurate mode.
-  const bkIgn=useBackendCalc("autoignition",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),max_time_s:10.0,T_fuel_K:Tfuel,T_air_K:Tair,mechanism:"gri30",WFR,water_mode:waterMode},accurate);
-  const SL=accurate&&bk.data?bk.data.SL*100:localSL;  // bk.data.SL is m/s → cm/s
-  // In accurate mode the headline SL comes from Cantera but the sweeps are always JS correlation. Anchor the
-  // JS curves to the Cantera value at the current phi so the marker lies ON the curve and τ_chem / Da /
-  // blowoff velocity are consistent with the displayed SL. Shape = JS correlation, magnitude = Cantera at
-  // the current operating point. Da ∝ SL² → scale by SL_scale² for Da and blowoff_velocity.
-  const SL_scale=(accurate&&bk.data&&localSL>1e-6)?SL/localSL:1;
-  const SL_scale2=SL_scale*SL_scale;
-  const mk={x:phi,y:uv(units,"SL",SL),label:`${uv(units,"SL",SL).toFixed(1)} ${uu(units,"SL")}`};
-  // ───── Cantera-backed sweep curves (button-triggered only, Accurate mode) ─────
-  // Running a 1D FreeFlame per point is 5–15 s. 12 φ + 10 T + 7 P ≈ 30 points → ~3 min.
-  // We do NOT auto-fire this on every parameter change — the user explicitly clicks to refresh.
-  // Cached results are considered fresh only while the input hash (fuel/ox/phi/T0/P/Tfuel)
-  // matches the current inputs; otherwise the scaled-correlation trend is shown.
   const {begin:beginBusy}=useContext(BusyCtx);
+  const Tair=T0;
+  // Cantera 1D FreeFlame is ~10–15 s per call; the autoignition reactor is
+  // another 2–5 s. Off by default — the user clicks ACTIVATE to opt in.
+  const [flameActive,setFlameActive]=useState(false);
   const [canteraSweeps,setCanteraSweeps]=useState(null);  // {hash, phi:[...], T:[...], P:[...]}
   const [sweepErr,setSweepErr]=useState(null);
   const [sweepRunning,setSweepRunning]=useState(false);
+  // useMemo / useBackendCalc — short-circuit when !flameActive
+  const Tmix=useMemo(()=>flameActive?mixT(fuel,ox,phi,Tfuel,Tair):0,[flameActive,fuel,ox,phi,Tfuel,Tair]);
+  const bk=useBackendCalc("flame",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate&&flameActive);
+  const bkIgn=useBackendCalc("autoignition",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),max_time_s:10.0,T_fuel_K:Tfuel,T_air_K:Tair,mechanism:"gri30",WFR,water_mode:waterMode},accurate&&flameActive);
+  // sweepHash and sweepIsFresh are cheap; safe to compute always.
   const sweepHash=useMemo(()=>JSON.stringify({fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),Tfuel,Tair}),[fuel,ox,phi,T0,P,Tfuel,Tair]);
-  const sweepIsFresh=accurate&&canteraSweeps&&canteraSweeps.hash===sweepHash;
+  const sweepIsFresh=flameActive&&accurate&&canteraSweeps&&canteraSweeps.hash===sweepHash;
   const runCanteraSweeps=useCallback(async()=>{
-    if(sweepRunning)return;
+    if(sweepRunning||!flameActive)return;
     setSweepRunning(true);setSweepErr(null);
     const endBusy=beginBusy(BUSY_LABELS.flame_sweep);
     const base={fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode};
-    // Equispaced points between min/max for each sweep axis. Each sweep
-    // finishes in ~2 min worst-case at ~25 s/point.
-    //   phi: 5 points linearly spaced 0.4 → 2.0
-    //   T:   4 points linearly spaced 300 → 800 K
-    //   P:   5 points linearly spaced 0.5 → 40 atm (converted to bar for backend)
     const phiVals=Array.from({length:5},(_,i)=>+(0.4+(2.0-0.4)*i/4).toFixed(3));
     const TVals=Array.from({length:4},(_,i)=>+(300+(800-300)*i/3).toFixed(1));
     const PVals_bar=Array.from({length:5},(_,i)=>+(0.5+(40-0.5)*i/4).toFixed(3)).map(atmToBar);
     try{
-      // Run sweeps SEQUENTIALLY. Backend solver pool has max_workers=1 (Cantera is
-      // not thread-safe), so Promise.all just serializes them anyway *and* leaks
-      // the 300 s HTTP timeout budget: later requests wait in the pool queue and
-      // time out before the worker ever reaches them. Sequential execution gives
-      // each sweep its own uncontested 300 s window.
+      // Sequential — backend solver pool is single-threaded (Cantera is not
+      // thread-safe). Promise.all would queue them anyway and burn the
+      // 300 s HTTP timeout. Sequential gives each sweep its own window.
       const PRes=await api.calcFlameSpeedSweep({...base,sweep_var:"P",sweep_values:PVals_bar});
       const TRes=await api.calcFlameSpeedSweep({...base,sweep_var:"T",sweep_values:TVals});
       const phiRes=await api.calcFlameSpeedSweep({...base,sweep_var:"phi",sweep_values:phiVals});
       setCanteraSweeps({hash:sweepHash,phi:phiRes.points,T:TRes.points,P:PRes.points});
     }catch(e){setSweepErr(e.message||String(e));}
     finally{setSweepRunning(false);endBusy();}
-  },[sweepRunning,beginBusy,fuel,ox,phi,T0,P,Tfuel,Tair,sweepHash]);
-  // phi sweep recomputes T_mixed at each phi (Z depends on phi).
-  const jsPhiSweep=useMemo(()=>{const r=[];for(let p=0.4;p<=1.01;p+=0.02){const Tm=mixT(fuel,ox,p,Tfuel,Tair);r.push({phi:+p.toFixed(2),SL:uv(units,"SL",calcSL(fuel,p,Tm,P)*100*SL_scale)});}return r;},[fuel,ox,Tfuel,Tair,P,units,SL_scale]);
-  const jsPSw=useMemo(()=>[0.5,1,2,5,10,20,40].map(p=>({P:uv(units,"P",p),SL:uv(units,"SL",calcSL(fuel,phi,Tmix,p)*100*SL_scale)})),[fuel,phi,Tmix,P,units,SL_scale]);
-  const jsTSw=useMemo(()=>{const r=[];for(let t=250;t<=800;t+=25)r.push({T:uv(units,"T",t),SL:uv(units,"SL",calcSL(fuel,phi,t,P)*100*SL_scale)});return r;},[fuel,phi,P,units,SL_scale]);
-  // Charts pick Cantera data when the cached sweep matches current inputs. SL from backend is
-  // in m/s → ×100 → cm/s → uv() for display units. Points that failed to converge are dropped.
+  },[sweepRunning,flameActive,beginBusy,fuel,ox,phi,T0,P,Tfuel,Tair,sweepHash,WFR,waterMode]);
+  // SL_scale needs to be computed before the heavy sweeps that use it.
+  // Both depend on bk.data (which is null when !flameActive), so they're
+  // already implicitly off in the deactivated state.
+  const localSLForScale=flameActive?calcSL(fuel,phi,Tmix,P)*100:0;
+  const SLForScale=accurate&&bk.data?bk.data.SL*100:localSLForScale;
+  const SL_scale=(accurate&&bk.data&&localSLForScale>1e-6)?SLForScale/localSLForScale:1;
+  const SL_scale2=SL_scale*SL_scale;
+  // Heavy sweeps — every one short-circuits when !flameActive.
+  const jsPhiSweep=useMemo(()=>{if(!flameActive)return[];const r=[];for(let p=0.4;p<=1.01;p+=0.02){const Tm=mixT(fuel,ox,p,Tfuel,Tair);r.push({phi:+p.toFixed(2),SL:uv(units,"SL",calcSL(fuel,p,Tm,P)*100*SL_scale)});}return r;},[flameActive,fuel,ox,Tfuel,Tair,P,units,SL_scale]);
+  const jsPSw=useMemo(()=>flameActive?[0.5,1,2,5,10,20,40].map(p=>({P:uv(units,"P",p),SL:uv(units,"SL",calcSL(fuel,phi,Tmix,p)*100*SL_scale)})):[],[flameActive,fuel,phi,Tmix,units,SL_scale]);
+  const jsTSw=useMemo(()=>{if(!flameActive)return[];const r=[];for(let t=250;t<=800;t+=25)r.push({T:uv(units,"T",t),SL:uv(units,"SL",calcSL(fuel,phi,t,P)*100*SL_scale)});return r;},[flameActive,fuel,phi,P,units,SL_scale]);
   const sweep=useMemo(()=>sweepIsFresh?canteraSweeps.phi.filter(p=>p.converged).map(p=>({phi:+p.x.toFixed(3),SL:uv(units,"SL",p.SL*100)})):jsPhiSweep,[sweepIsFresh,canteraSweeps,units,jsPhiSweep]);
   const pSw=useMemo(()=>sweepIsFresh?canteraSweeps.P.filter(p=>p.converged).map(p=>({P:uv(units,"P",p.x/1.01325),SL:uv(units,"SL",p.SL*100)})):jsPSw,[sweepIsFresh,canteraSweeps,units,jsPSw]);
   const tSw=useMemo(()=>sweepIsFresh?canteraSweeps.T.filter(p=>p.converged).map(p=>({T:uv(units,"T",p.x),SL:uv(units,"SL",p.SL*100)})):jsTSw,[sweepIsFresh,canteraSweeps,units,jsTSw]);
-  const bo=useMemo(()=>{const b=calcBlowoff(fuel,phi,Tmix,P,velocity,Lchar);const Da=b.Da*SL_scale2;return{SL:b.SL*SL_scale,tau_chem:b.tau_chem/SL_scale2,tau_flow:b.tau_flow,Da,blowoff_velocity:b.blowoff_velocity*SL_scale2,stable:Da>1};},[fuel,phi,Tmix,P,velocity,Lchar,SL_scale,SL_scale2]);
-  const daSw=useMemo(()=>{const r=[];for(let v=1;v<=200;v+=2){const b=calcBlowoff(fuel,phi,Tmix,P,v,Lchar);r.push({V:uv(units,"vel",v),Da:Math.min(b.Da*SL_scale2,100)});}return r;},[fuel,phi,Tmix,P,Lchar,units,SL_scale2]);
+  const bo=useMemo(()=>{
+    if(!flameActive)return{SL:0,tau_chem:0,tau_flow:0,Da:0,blowoff_velocity:0,stable:false};
+    const b=calcBlowoff(fuel,phi,Tmix,P,velocity,Lchar);const Da=b.Da*SL_scale2;
+    return{SL:b.SL*SL_scale,tau_chem:b.tau_chem/SL_scale2,tau_flow:b.tau_flow,Da,blowoff_velocity:b.blowoff_velocity*SL_scale2,stable:Da>1};
+  },[flameActive,fuel,phi,Tmix,P,velocity,Lchar,SL_scale,SL_scale2]);
+  const daSw=useMemo(()=>{
+    if(!flameActive)return[];
+    const r=[];for(let v=1;v<=200;v+=2){const b=calcBlowoff(fuel,phi,Tmix,P,v,Lchar);r.push({V:uv(units,"vel",v),Da:Math.min(b.Da*SL_scale2,100)});}return r;
+  },[flameActive,fuel,phi,Tmix,P,Lchar,units,SL_scale2]);
+
+  // ─── EARLY RETURN: deactivated panel ──────────────────────────────────
+  // Hooks above all ran (and short-circuited). Below this line: nothing
+  // computes, nothing renders, nothing fires until flameActive=true.
+  if(!flameActive){
+    return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <InlineBusyBanner loading={false}/>
+      <button onClick={()=>setFlameActive(true)}
+        title="Click to activate — runs Cantera 1D FreeFlame (~10-15 s) and 0D autoignition (~2-5 s) on every parameter change. Off by default to keep the app fast."
+        style={{padding:"10px 16px",fontSize:13,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".7px",
+          color:C.strong,background:`${C.strong}18`,border:`2px solid ${C.strong}`,
+          borderRadius:6,cursor:"pointer",
+          display:"flex",alignItems:"center",justifyContent:"center",gap:10,
+          transition:"all .12s"}}>
+        <span style={{width:10,height:10,borderRadius:"50%",background:C.strong,boxShadow:`0 0 8px ${C.strong}`}}/>
+        DEACTIVATED — click to fire Cantera Flame Speed + Autoignition (~12-20 s)
+      </button>
+      <div style={{padding:"40px 24px",background:C.bg2,border:`1.5px dashed ${C.strong}60`,borderRadius:8,textAlign:"center",fontFamily:"'Barlow',sans-serif"}}>
+        <div style={{fontSize:14,fontWeight:700,color:C.strong,letterSpacing:".5px",marginBottom:8,fontFamily:"'Barlow Condensed',sans-serif"}}>FLAME SPEED PANEL DEACTIVATED</div>
+        <div style={{fontSize:12,color:C.txtDim,lineHeight:1.55,maxWidth:600,margin:"0 auto"}}>
+          Cantera 1D FreeFlame (~10–15 s) and 0D const-P autoignition (~2–5 s) are off by default to keep the rest of the app responsive.
+          <br/><br/>
+          Click <strong style={{color:C.good}}>ACTIVATE</strong> above to mount the panel. While deactivated, no calculations run — even the local correlation-based sweeps and blowoff scans are paused.
+        </div>
+      </div>
+    </div>);
+  }
+
+  // ─── ACTIVE RENDER ────────────────────────────────────────────────────
+  // Everything below assumes flameActive=true. Real Tmix, real bk/bkIgn,
+  // real sweeps. Scalar derivations don't need to be hooks — they just
+  // recompute every render in this branch, which is cheap and safe.
+  const localSL=calcSL(fuel,phi,Tmix,P)*100;
+  const SL=accurate&&bk.data?bk.data.SL*100:localSL;
+  const mk={x:phi,y:uv(units,"SL",SL),label:`${uv(units,"SL",SL).toFixed(1)} ${uu(units,"SL")}`};
   // ───── Premixer stability metrics ─────
   // SL in m/s for these formulas (SL state variable is cm/s).
   const SL_ms=SL/100;
@@ -1310,6 +1346,19 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
                  :(!core_flashback_safe?"FLASHBACK RISK":"PREMIXER SAFE"));
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <InlineBusyBanner loading={accurate&&(bk.loading||(bkIgn&&bkIgn.loading))}/>
+    {/* DEACTIVATE button — same pattern as the PSR-PFR panel. Clicking it
+        flips flameActive=false, which short-circuits every useMemo above
+        and bails out into the placeholder JSX. */}
+    <button onClick={()=>setFlameActive(false)}
+      title="Click to deactivate — stops firing the Cantera Flame Speed and Autoignition backends and pauses every local sweep."
+      style={{padding:"10px 16px",fontSize:13,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".7px",
+        color:C.good,background:`${C.good}18`,border:`2px solid ${C.good}`,
+        borderRadius:6,cursor:"pointer",
+        display:"flex",alignItems:"center",justifyContent:"center",gap:10,
+        transition:"all .12s"}}>
+      <span style={{width:10,height:10,borderRadius:"50%",background:C.good,boxShadow:`0 0 8px ${C.good}`}}/>
+      ACTIVATED — Cantera Flame Speed + Autoignition running on every change
+    </button>
     <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works"><p style={{margin:"0 0 6px"}}><span style={hs.em}>Laminar Flame Speed (S_L)</span> is computed using Gülder/Metghalchi-Keck empirical correlations: S_L = S_L0 · f(φ) · (T_u/T_0)^α · (P/P_0)^β. For mixtures, species contributions are mole-fraction-weighted.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Blowoff Analysis:</span> τ_chem = α_th / S_L² (chemical timescale), τ_flow = L_char / V (flow timescale). The <span style={hs.em}>Damköhler number Da = τ_flow / τ_chem</span>. When Da &lt; 1, the flame cannot sustain itself and blows off.</p><p style={{margin:0}}><span style={hs.warn}>V_ref</span> is your reference approach velocity. <span style={hs.warn}>L_char</span> is the characteristic recirculation length (typically flameholder diameter or step height).</p></HelpBox>
     <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}</div>
       <div style={{...S.row,gap:8,marginBottom:10}}>
