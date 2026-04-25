@@ -2673,11 +2673,20 @@ function OperationsSummaryPanel({
           const MW_pt=c.MW_net||0;
           // ── Combustor mapping at THIS load point ─────────────────────
           // BRNDMD per the App-level ladder, mapping-table phi lookup at
-          // this MW, then the same /calc/combustor_mapping call that the
-          // live page makes — driven by per-load T3, P3, MW and W3.
-          const brndmd=calcBRNDMD(MW_pt, emissionsMode);
-          const phisAtLoad=interpMappingTable(mappingTables, brndmd, MW_pt, c.T3_K);
-          const tfMult=(emTfMults && emTfMults[brndmd]) || {NOx:1.0, CO:1.0};
+          // this load's T3, then the same /calc/combustor_mapping call
+          // that the live page makes — driven by per-load T3, P3, MW, W3.
+          //
+          // Mirror the App-level fallback (App.jsx ~3478, ~3497) so the
+          // sweep matches the page exactly:
+          //   _tblKey = max(brndmd, 2)  — table only has rows for {2,4,6,7}
+          //   tfMult  = emTfMults[_tblKey]  (NOT emTfMults[brndmd])
+          const brndmd  = calcBRNDMD(MW_pt, emissionsMode);
+          const tblKey  = brndmd >= 2 ? brndmd : 2;
+          const tbl     = mappingTables?.[tblKey];
+          // interpMappingTable expects T3 in °F (table rows are stored in °F).
+          const T3_F    = (c.T3_K - 273.15) * 9/5 + 32;
+          const phisAtLoad = tbl ? interpMappingTable(tbl, T3_F) : null;
+          const tfMult  = (emTfMults && emTfMults[tblKey]) || {NOx:1.0, CO:1.0};
           let NOx15_pt=0, CO15_pt=0, FAR_stoich_pt=0.060;
           try{
             if(W3_pb>0 && m_fuel>0){
