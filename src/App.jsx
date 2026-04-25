@@ -2217,18 +2217,27 @@ function CombustorMappingPanel({
   const OMnegFuel    = fuel_residual < -1e-6 || (R && m_fuel_OM<=0 && (m_fuel_IP_bk+m_fuel_OP_bk+m_fuel_IM_bk)>m_fuel_total*1.001);
   const OMphiExtreme = phi_OM>0 && (phi_OM<0.05 || phi_OM>1.5);
 
-  // ── Inline φ editor (used 3× in the controls card) ───────────────────────
+  // ── Inline φ editor (used in Cards 1 and 2) ─────────────────────────────
+  // inline-flex so it shrinks to its content and centers properly when the
+  // parent cell uses textAlign:center. Fixed width (104 px) so all three
+  // editors line up vertically and match the OM disabled-value pill below.
   const PhiEditor = ({val,setVal,step,color})=>(
-    <div style={{display:"flex",alignItems:"center",gap:3}}>
+    <div style={{display:"inline-flex",alignItems:"center",gap:3,width:104,justifyContent:"center"}}>
       <button onClick={()=>setVal(Math.max(0,+(val-step).toFixed(4)))}
         title={`Decrease φ by ${step}`}
-        style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>−</button>
+        style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1,flex:"0 0 auto"}}>−</button>
       <NumField value={val} decimals={4} onCommit={v=>setVal(Math.max(0,+v))}
-        style={{width:62,padding:"3px 6px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${color}40`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+        style={{width:60,padding:"3px 4px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${color}40`,borderRadius:4,textAlign:"center",outline:"none",flex:"0 0 auto"}}/>
       <button onClick={()=>setVal(+(val+step).toFixed(4))}
         title={`Increase φ by ${step}`}
-        style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>+</button>
+        style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1,flex:"0 0 auto"}}>+</button>
     </div>
+  );
+  // Disabled φ pill for Outer Main — same width as PhiEditor (104 px) and
+  // same vertical footprint so OM's row reads as a peer of IP/OP/IM, not
+  // a misaligned outlier.
+  const PhiDisabled = ({val,color})=>(
+    <div style={{display:"inline-block",width:104,padding:"4px 6px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:`${color}18`,border:`1px dashed ${color}80`,borderRadius:4,textAlign:"center",boxSizing:"border-box"}}>{(val||0).toFixed(4)}</div>
   );
 
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
@@ -2301,7 +2310,7 @@ function CombustorMappingPanel({
                     <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`}}>
                       {editable
                         ? <PhiEditor val={phiV} setVal={setPhi} step={step} color={color}/>
-                        : <div style={{display:"inline-block",padding:"3px 8px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:`${color}18`,border:`1px dashed ${color}80`,borderRadius:4,minWidth:78,textAlign:"center"}}>{(phiV||0).toFixed(4)}</div>}
+                        : <PhiDisabled val={phiV} color={color}/>}
                     </td>
                     {/* Acoustics + Emissions: SYSTEM-WIDE, rendered once spanning all 4 rows */}
                     {idx===0&&(<>
@@ -2358,11 +2367,18 @@ function CombustorMappingPanel({
           <div style={{fontSize:11,color:C.txtDim,fontFamily:"monospace"}}>W36 = {fmtMdot(m_air_W36)} {mdotU}</div>
         </div>
 
-        {/* Per-circuit input grid */}
+        {/* Per-circuit input grid — fixed-width control columns + flexible
+            number columns so the inputs hug their headers and there's no
+            empty stripe in the Air-Fraction column. */}
+        {(() => {
+          // Single source of truth for the column template; header + every
+          // row use the SAME string so columns line up to the pixel.
+          const cols = "minmax(180px, 1.4fr) 150px 130px 1fr 1fr";
+          return (
         <div style={{border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>
-          <div style={{display:"grid",gridTemplateColumns:"180px 1fr 1fr 1fr 1fr",gap:0,background:C.bg2,padding:"6px 10px",fontSize:9.5,color:C.txtDim,fontFamily:"monospace",textTransform:"uppercase",letterSpacing:".6px"}}>
+          <div style={{display:"grid",gridTemplateColumns:cols,columnGap:14,background:C.bg2,padding:"7px 12px",fontSize:9.5,color:C.txtDim,fontFamily:"monospace",textTransform:"uppercase",letterSpacing:".6px",alignItems:"center"}}>
             <div>Circuit</div>
-            <div style={{textAlign:"center"}}>Air Fraction (% of flame air)</div>
+            <div style={{textAlign:"center"}}>Air Fraction&nbsp;<span style={{color:C.txtMuted,textTransform:"none",letterSpacing:0}}>(% flame air)</span></div>
             <div style={{textAlign:"center"}}>φ</div>
             <div style={{textAlign:"right"}}>M_Air ({mdotU})</div>
             <div style={{textAlign:"right"}}>M_Fuel ({mdotU})</div>
@@ -2373,29 +2389,31 @@ function CombustorMappingPanel({
             ["Inner Main (IM)","inner premix",C.accent,fracIM,setFracIM,m_air_IM,phiIM,setPhiIM,0.01,m_fuel_IM_bk,true],
             ["Outer Main (OM)","float circuit",C.accent2,fracOM,setFracOM,m_air_OM,phi_OM,null,0,m_fuel_OM,false],
           ].map(([name,sub,color,frac,setFrac,mAir,phiV,setPhi,step,mFuel,editable])=>(
-            <div key={name} style={{display:"grid",gridTemplateColumns:"180px 1fr 1fr 1fr 1fr",gap:0,alignItems:"center",padding:"8px 10px",borderTop:`1px solid ${C.border}`,background:`${color}08`}}>
+            <div key={name} style={{display:"grid",gridTemplateColumns:cols,columnGap:14,alignItems:"center",padding:"9px 12px",borderTop:`1px solid ${C.border}`,background:`${color}08`}}>
               <div>
-                <div style={{fontSize:11.5,fontWeight:700,color,letterSpacing:".3px"}}>{name}</div>
-                <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic"}}>{sub}</div>
+                <div style={{fontSize:12,fontWeight:700,color,letterSpacing:".3px"}}>{name}</div>
+                <div style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic"}}>{sub}</div>
               </div>
               <div style={{textAlign:"center"}}>
                 <NumField value={frac} decimals={2} onCommit={v=>setFrac(Math.max(0,Math.min(100,+v)))}
-                  style={{width:78,padding:"4px 6px",fontSize:12,color,fontFamily:"monospace",fontWeight:600,background:C.bg,border:`1px solid ${color}40`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+                  style={{width:90,padding:"5px 8px",fontSize:13,color,fontFamily:"monospace",fontWeight:700,background:C.bg,border:`1px solid ${color}40`,borderRadius:4,textAlign:"center",outline:"none"}}/>
               </div>
               <div style={{textAlign:"center"}}>
                 {editable
                   ? <PhiEditor val={phiV} setVal={setPhi} step={step} color={color}/>
-                  : <div style={{display:"inline-block",width:88,padding:"4px 6px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:`${color}18`,border:`1px dashed ${color}80`,borderRadius:4,textAlign:"center"}}>{(phiV||0).toFixed(4)}</div>}
+                  : <PhiDisabled val={phiV} color={color}/>}
               </div>
-              <div style={{fontSize:12,fontFamily:"monospace",color:C.txt,fontWeight:600,textAlign:"right"}}>{fmtMdot(mAir)}</div>
-              <div style={{fontSize:12,fontFamily:"monospace",color:C.accent2,fontWeight:600,textAlign:"right"}}>{fmtMdot(mFuel)}</div>
+              <div style={{fontSize:13,fontFamily:"monospace",color:C.txt,fontWeight:600,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{fmtMdot(mAir)}</div>
+              <div style={{fontSize:13,fontFamily:"monospace",color:C.accent2,fontWeight:600,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{fmtMdot(mFuel)}</div>
             </div>
           ))}
-          <div style={{padding:"6px 10px",background:C.bg2,borderTop:`1px solid ${C.border}`,fontSize:10,color:C.txtMuted,fontFamily:"monospace",display:"flex",justifyContent:"space-between"}}>
+          <div style={{padding:"7px 12px",background:C.bg2,borderTop:`1px solid ${C.border}`,fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <span>Outer Main φ + M_Fuel are back-solved from the total-fuel mass balance.</span>
             <span>Air frac sum: <strong style={{color:Math.abs(sumFrac-100)<0.05?C.accent:C.warm}}>{sumFrac.toFixed(2)} %</strong></span>
           </div>
         </div>
+          );
+        })()}
 
         {sumOff?<div style={{marginTop:8,padding:"6px 10px",background:`${C.warm}14`,border:`1px solid ${C.warm}80`,borderRadius:6,fontSize:11,color:C.warm}}>⚠ Air fractions sum to {sumFrac.toFixed(2)} % — should equal 100 %.</div>:null}
         {OMnegFuel?<div style={{marginTop:8,padding:"6px 10px",background:`${C.strong}14`,border:`1px solid ${C.strong}80`,borderRadius:6,fontSize:11,color:C.strong}}>⚠ IP + OP + IM fuel exceeds cycle total — Outer Main went to zero. Reduce pilot/main φ.</div>:null}
@@ -2407,30 +2425,65 @@ function CombustorMappingPanel({
          ═════════════════════════════════════════════════════════════════ */}
       <div style={S.card}>
         <div style={S.cardT}>3 · Air Accounting & Fuel Balance</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <div>
-            <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:".5px",marginBottom:4}}>Air ({mdotU})</div>
-            <div style={{display:"flex",flexDirection:"column",gap:3,fontFamily:"monospace",fontSize:11}}>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:C.bg2,borderRadius:4}}><span style={{color:C.txtDim}}>W3 (post-bleed):</span><strong style={{color:C.txt}}>{fmtMdot(m_air_post_bleed)}</strong></div>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:`${C.accent}0C`,borderRadius:4}}><span style={{color:C.txtDim}}>W36 (dome):</span><strong style={{color:C.accent}}>{fmtMdot(m_air_W36)}</strong></div>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:`${C.warm}0C`,borderRadius:4}}><span style={{color:C.txtDim}}>Flame air ({(comAirFrac*100).toFixed(1)} %):</span><strong style={{color:C.warm}}>{fmtMdot(m_air_flame)}</strong></div>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:`${C.violet}0C`,borderRadius:4}}><span style={{color:C.txtDim}}>Effusion cooling:</span><strong style={{color:C.violet}}>{fmtMdot(m_air_cooling)}</strong></div>
+        {(() => {
+          // Reusable definition row with a dotted leader filling the gap
+          // between label and value. Classic typographic technique — turns
+          // empty whitespace into intentional pacing.
+          const Row = ({label, value, valueColor=C.txt, accentBg, isWarn=false}) => (
+            <div style={{
+              display:"grid",
+              gridTemplateColumns:"auto 1fr auto",
+              alignItems:"baseline",
+              columnGap:8,
+              padding:"5px 10px",
+              background:accentBg||C.bg2,
+              borderRadius:4,
+              fontFamily:"monospace",
+              fontSize:11.5,
+            }}>
+              <span style={{color:C.txtDim,whiteSpace:"nowrap"}}>{label}</span>
+              <span style={{
+                borderBottom:`1px dotted ${isWarn?C.warm+"60":C.border}`,
+                height:0,
+                alignSelf:"end",
+                marginBottom:4,
+              }}/>
+              <strong style={{color:valueColor,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>{value}</strong>
             </div>
-          </div>
-          <div>
-            <div style={{fontSize:10,color:C.txtDim,textTransform:"uppercase",letterSpacing:".5px",marginBottom:4}}>Fuel ({mdotU})</div>
-            <div style={{display:"flex",flexDirection:"column",gap:3,fontFamily:"monospace",fontSize:11}}>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:C.bg2,borderRadius:4}}><span style={{color:C.txtDim}}>IP + OP + IM:</span><strong style={{color:C.txt}}>{fmtMdot(m_fuel_IP_bk+m_fuel_OP_bk+m_fuel_IM_bk)}</strong></div>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:`${C.accent2}0C`,borderRadius:4}}><span style={{color:C.txtDim}}>OM (float):</span><strong style={{color:C.accent2}}>{fmtMdot(m_fuel_OM)}</strong></div>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:`${C.accent}0C`,borderRadius:4}}><span style={{color:C.txtDim}}>Sum (all 4):</span><strong style={{color:C.accent}}>{fmtMdot(m_fuel_IP_bk+m_fuel_OP_bk+m_fuel_IM_bk+m_fuel_OM)}</strong></div>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:`${C.accent2}0C`,borderRadius:4}}><span style={{color:C.txtDim}}>Cycle total:</span><strong style={{color:C.accent2}}>{fmtMdot(m_fuel_total)}</strong></div>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"3px 8px",background:Math.abs(fuel_residual)<1e-6?`${C.accent}0C`:`${C.warm}18`,borderRadius:4}}>
-                <span style={{color:C.txtDim}}>Residual:</span>
-                <strong style={{color:Math.abs(fuel_residual)<1e-6?C.accent:C.warm}}>{fmtMdot(fuel_residual)}</strong>
+          );
+          const SectionHeader = ({label, color}) => (
+            <div style={{
+              fontSize:10,fontWeight:700,color,textTransform:"uppercase",letterSpacing:"1px",
+              marginBottom:6,paddingBottom:4,borderBottom:`1px solid ${color}40`,
+            }}>{label}</div>
+          );
+          return (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+              <div>
+                <SectionHeader label={`Air (${mdotU})`} color={C.accent}/>
+                <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                  <Row label="W3 (post-bleed)" value={fmtMdot(m_air_post_bleed)} valueColor={C.txt}/>
+                  <Row label="W36 (dome)" value={fmtMdot(m_air_W36)} valueColor={C.accent} accentBg={`${C.accent}0C`}/>
+                  <Row label={`Flame air (${(comAirFrac*100).toFixed(1)} %)`} value={fmtMdot(m_air_flame)} valueColor={C.warm} accentBg={`${C.warm}0C`}/>
+                  <Row label="Effusion cooling" value={fmtMdot(m_air_cooling)} valueColor={C.violet} accentBg={`${C.violet}0C`}/>
+                </div>
+              </div>
+              <div>
+                <SectionHeader label={`Fuel (${mdotU})`} color={C.accent2}/>
+                <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                  <Row label="IP + OP + IM" value={fmtMdot(m_fuel_IP_bk+m_fuel_OP_bk+m_fuel_IM_bk)} valueColor={C.txt}/>
+                  <Row label="OM (float)" value={fmtMdot(m_fuel_OM)} valueColor={C.accent2} accentBg={`${C.accent2}0C`}/>
+                  <Row label="Sum (all 4)" value={fmtMdot(m_fuel_IP_bk+m_fuel_OP_bk+m_fuel_IM_bk+m_fuel_OM)} valueColor={C.accent} accentBg={`${C.accent}0C`}/>
+                  <Row label="Cycle total" value={fmtMdot(m_fuel_total)} valueColor={C.accent2} accentBg={`${C.accent2}0C`}/>
+                  <Row label="Residual" value={fmtMdot(fuel_residual)}
+                    valueColor={Math.abs(fuel_residual)<1e-6?C.accent:C.warm}
+                    accentBg={Math.abs(fuel_residual)<1e-6?`${C.accent}0C`:`${C.warm}18`}
+                    isWarn={Math.abs(fuel_residual)>=1e-6}/>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          );
+        })()}
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════
