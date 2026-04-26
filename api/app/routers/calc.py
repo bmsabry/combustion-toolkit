@@ -195,6 +195,7 @@ def calc_combustor_mapping(
         body.water_mode,
         body.nox_mult,
         body.co_mult,
+        body.px36_mult,
     )
     return CombustorMappingResponse(**result)
 

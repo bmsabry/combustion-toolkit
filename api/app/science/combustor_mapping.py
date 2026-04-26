@@ -179,6 +179,7 @@ def run(
     water_mode: str = "liquid",
     nox_mult: float = 1.0,
     co_mult: float = 1.0,
+    px36_mult: float = 1.0,
 ) -> dict:
     """Run the 4-circuit correlation-based mapping for any operating point."""
 
@@ -303,12 +304,16 @@ def run(
         y_final[name] = y_f
 
     # Step 4: Emissions Transfer Function — BRNDMD-dependent post-multipliers
-    # on NOx15 and CO15. Applied at all three output stages so the panel's
-    # "linear / 100% / final" diagnostic numbers stay consistent.
+    # on NOx15, CO15 and PX36_SEL. Applied at all three output stages so
+    # the panel's "linear / 100% / final" diagnostic numbers stay consistent.
+    # PX36_SEL_HI does not get a post-multiplier (its tuning lives in the
+    # Phi_OP-multiplier branch; adding another knob would double-count).
     nm = max(0.0, float(nox_mult))
     cm = max(0.0, float(co_mult))
-    y_lin["NOx15"]   *= nm; y_100pct["NOx15"]   *= nm; y_final["NOx15"]   *= nm
-    y_lin["CO15"]    *= cm; y_100pct["CO15"]    *= cm; y_final["CO15"]    *= cm
+    pm = max(0.0, float(px36_mult))
+    y_lin["NOx15"]    *= nm; y_100pct["NOx15"]    *= nm; y_final["NOx15"]    *= nm
+    y_lin["CO15"]     *= cm; y_100pct["CO15"]     *= cm; y_final["CO15"]     *= cm
+    y_lin["PX36_SEL"] *= pm; y_100pct["PX36_SEL"] *= pm; y_final["PX36_SEL"] *= pm
 
     # --- response -----------------------------------------------------------
     return {

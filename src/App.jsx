@@ -3215,7 +3215,7 @@ function OperationsSummaryPanel({
           // interpMappingTable expects T3 in °F (table rows are stored in °F).
           const T3_F    = (c.T3_K - 273.15) * 9/5 + 32;
           const phisAtLoad = tbl ? interpMappingTable(tbl, T3_F) : null;
-          const tfMult  = (emTfMults && emTfMults[tblKey]) || {NOx:1.0, CO:1.0};
+          const tfMult  = (emTfMults && emTfMults[tblKey]) || {NOx:1.0, CO:1.0, PX36:1.0};
           // Use the same humid oxidizer + combustor_air_frac the live App
           // bkMap call uses. Per-load cycle result c carries both — they don't
           // change with load (RH and air_frac are inputs), but pulling from c
@@ -3240,7 +3240,7 @@ function OperationsSummaryPanel({
                 phi_IM:Math.max(0,phisAtLoad?.IM||0),
                 m_fuel_total_kg_s:m_fuel,
                 WFR, water_mode:waterMode,
-                nox_mult:tfMult.NOx, co_mult:tfMult.CO,
+                nox_mult:tfMult.NOx, co_mult:tfMult.CO, px36_mult:tfMult.PX36??1.0,
               });
               NOx15_pt=m?.correlations?.NOx15||0;
               CO15_pt =m?.correlations?.CO15 ||0;
@@ -3889,10 +3889,10 @@ export default function App(){
   // result (after linear corrections, Phi_OP mult, and P3 scaling). User-
   // editable in the sidebar; persisted to localStorage.
   const DEFAULT_EM_TF={
-    7:{NOx:1.00,CO:1.00},
-    6:{NOx:1.25,CO:0.90},
-    4:{NOx:1.50,CO:0.85},
-    2:{NOx:0.50,CO:0.25},
+    7:{NOx:1.00,CO:1.00,PX36:1.00},
+    6:{NOx:1.25,CO:0.90,PX36:1.00},
+    4:{NOx:1.50,CO:0.85,PX36:1.50},
+    2:{NOx:0.50,CO:0.25,PX36:1.00},
   };
   const[emTfMults,setEmTfMults]=useState(()=>{
     try{
@@ -4040,8 +4040,9 @@ export default function App(){
   const _comAirFrac=cycleResult?.combustor_air_frac||0.89;
   // Pick the BRNDMD-specific NOx / CO post-multipliers from the Emissions
   // Transfer Function table. Falls back to BRNDMD=2 when BRNDMD ≤ 1.
-  const _noxMult = emTfMults?.[_brndmd_app>=2?_brndmd_app:2]?.NOx ?? 1.0;
-  const _coMult  = emTfMults?.[_brndmd_app>=2?_brndmd_app:2]?.CO  ?? 1.0;
+  const _noxMult  = emTfMults?.[_brndmd_app>=2?_brndmd_app:2]?.NOx  ?? 1.0;
+  const _coMult   = emTfMults?.[_brndmd_app>=2?_brndmd_app:2]?.CO   ?? 1.0;
+  const _px36Mult = emTfMults?.[_brndmd_app>=2?_brndmd_app:2]?.PX36 ?? 1.0;
   const bkMap=useBackendCalc(
     "combustor_mapping",
     {
@@ -4057,7 +4058,7 @@ export default function App(){
       phi_IP:Math.max(0,mapPhiIP), phi_OP:Math.max(0,mapPhiOP), phi_IM:Math.max(0,mapPhiIM),
       m_fuel_total_kg_s:_m_fuel_total,
       WFR, water_mode:waterMode,
-      nox_mult:_noxMult, co_mult:_coMult,
+      nox_mult:_noxMult, co_mult:_coMult, px36_mult:_px36Mult,
     },
     !!(accurate && _oxHumid && _m_air_post_bleed > 0 && _m_fuel_total > 0)
   );
@@ -4289,24 +4290,28 @@ export default function App(){
             {/* ── EMISSIONS TRANSFER FUNCTION — bottom of the sidebar ──── */}
             <div style={{background:C.bg2,border:`1px solid ${C.violet}30`,borderRadius:8,padding:12,marginTop:10}}>
               <div style={{fontSize:10,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:8}}>Emissions Transfer Function</div>
-              <div style={{display:"grid",gridTemplateColumns:"55px 1fr 1fr",gap:5,alignItems:"center",fontSize:10,fontFamily:"monospace"}}>
+              <div style={{display:"grid",gridTemplateColumns:"50px 1fr 1fr 1fr",gap:4,alignItems:"center",fontSize:10,fontFamily:"monospace"}}>
                 <div></div>
-                <div style={{color:C.strong,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".4px"}}>NOx ×</div>
-                <div style={{color:C.orange,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".4px"}}>CO ×</div>
+                <div style={{color:C.strong,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>NOx ×</div>
+                <div style={{color:C.orange,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>CO ×</div>
+                <div style={{color:C.warm,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>PX36 ×</div>
                 {[7,6,4,2].map(k=>(
                   <Fragment key={k}>
                     <div style={{color:C.violet,fontWeight:700,fontSize:10}}>BR={k}</div>
                     <NumField value={emTfMults?.[k]?.NOx??1.0} decimals={2}
                       onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),NOx:Math.max(0,+v)}}))}
-                      style={{width:"100%",padding:"3px 5px",fontSize:11,fontFamily:"monospace",color:C.strong,fontWeight:600,background:C.bg,border:`1px solid ${C.strong}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                      style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.strong,fontWeight:600,background:C.bg,border:`1px solid ${C.strong}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
                     <NumField value={emTfMults?.[k]?.CO??1.0} decimals={2}
                       onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),CO:Math.max(0,+v)}}))}
-                      style={{width:"100%",padding:"3px 5px",fontSize:11,fontFamily:"monospace",color:C.orange,fontWeight:600,background:C.bg,border:`1px solid ${C.orange}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                      style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.orange,fontWeight:600,background:C.bg,border:`1px solid ${C.orange}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                    <NumField value={emTfMults?.[k]?.PX36??1.0} decimals={2}
+                      onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),PX36:Math.max(0,+v)}}))}
+                      style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.warm,fontWeight:600,background:C.bg,border:`1px solid ${C.warm}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
                   </Fragment>
                 ))}
               </div>
               <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic",marginTop:6,lineHeight:1.3}}>
-                Multipliers applied to NOx15 / CO15 correlation output based on current BRNDMD. Persists across reloads.
+                Multipliers applied to NOx15 / CO15 / PX36_SEL correlation output based on current BRNDMD. Persists across reloads.
               </div>
             </div>
           </div>}
