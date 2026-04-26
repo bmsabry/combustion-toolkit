@@ -2683,8 +2683,8 @@ function CombustorMappingPanel({
         // to the alarm / trip threshold lines so they stay at the right
         // physical setpoint regardless of unit mode.
         const _px = (psi) => units==="SI" ? psi * 68.9476 : psi;
-        const px36YMin = _px(1.5);
-        const px36YMax = _px(6.5);
+        const px36YMin = _px(2);
+        const px36YMax = _px(6);
         const px36HLines = [
           { y: _px(5.0), color: C.accent2, label: "ALARM" },  // amber/yellow
           { y: _px(5.5), color: C.strong,  label: "TRIP"  },  // red
