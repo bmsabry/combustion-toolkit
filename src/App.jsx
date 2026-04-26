@@ -2328,7 +2328,7 @@ function CombustorMappingPanel({
 
       // NOx15 — 20 s sine, re-roll amp at wave end
       if (now - n.NOx15.waveStart >= 20) {
-        n.NOx15.amp = (2 + Math.random() * 2.5) / 100;  // 2–4.5 %
+        n.NOx15.amp = (1 + Math.random() * 2) / 100;  // 1–3 %
         n.NOx15.waveStart = now;
       }
       const noxPhase = ((now - n.NOx15.waveStart) / 20) * 2 * Math.PI;
