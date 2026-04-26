@@ -3071,6 +3071,11 @@ function CombustorMappingPanel({
           { y: _px(5.0), color: C.accent2, label: "ALARM" },  // amber/yellow
           { y: _px(5.5), color: C.strong,  label: "TRIP"  },  // red
         ];
+        // PX36_SEL_HI threshold lines — alarm 2.3 psi yellow, trip 2.5 psi red.
+        const px36HiHLines = [
+          { y: _px(2.3), color: C.accent2, label: "ALARM" },
+          { y: _px(2.5), color: C.strong,  label: "TRIP"  },
+        ];
         // Elapsed playback time
         const elapsed = mappingStartedAt ? Math.floor(now - mappingStartedAt) : 0;
         const mm = String(Math.floor(elapsed/60)).padStart(2,"0");
@@ -3304,7 +3309,8 @@ function CombustorMappingPanel({
                   userMinDisp={_px(userRanges.PX36_SEL_HI.min)} userMaxDisp={_px(userRanges.PX36_SEL_HI.max)}
                   decimals={units==="SI"?1:2}
                   onChangeMin={v => _setRange("PX36_SEL_HI", "min", units==="SI"?v/68.9476:v)}
-                  onChangeMax={v => _setRange("PX36_SEL_HI", "max", units==="SI"?v/68.9476:v)}/>
+                  onChangeMax={v => _setRange("PX36_SEL_HI", "max", units==="SI"?v/68.9476:v)}
+                  hLines={px36HiHLines}/>
                 <TraceChart title="NOx @ 15 % O₂" color={C.accent} yKey="NOx15"    fmt={fmtNOx} unit="ppmvd"
                   userMinDisp={userRanges.NOx15.min} userMaxDisp={userRanges.NOx15.max} decimals={1}
                   onChangeMin={v => _setRange("NOx15", "min", v)}
