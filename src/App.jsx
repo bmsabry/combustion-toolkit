@@ -2303,10 +2303,38 @@ function CombustorMappingPanel({
     </HelpBox>
 
     {!cycleResult?
-      <div style={{padding:"32px 24px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.warm}50`,borderRadius:10,color:C.txtDim}}>
-        <div style={{fontSize:13,fontWeight:600,color:C.warm,marginBottom:8}}>Cycle solution required</div>
-        <div style={{fontSize:11}}>Turn on Accurate Mode. The cycle must run before the mapping can populate (needs T3, P3, humid-air composition, and total fuel flow).</div>
-      </div>
+      // Diagnostic placeholder — distinguishes the four real reasons cycleResult
+      // can be null instead of always saying "turn on Accurate Mode" (which is
+      // wrong when Accurate is already on and the user is staring at a stuck
+      // panel without knowing why).
+      (() => {
+        const _isLoading = !!(bkCycle && bkCycle.loading);
+        const _err = bkCycle && bkCycle.err;
+        let title, body, color;
+        if(!accurate){
+          color = C.warm;
+          title = "Accurate Mode is off";
+          body = "Click ACCURATE: OFF in the header to switch it on. The cycle backend needs to run before the mapping can populate (needs T3, P3, humid-air composition, total fuel flow).";
+        } else if(_err){
+          color = C.strong;
+          title = "Cycle backend error";
+          body = `The /calc/cycle call returned an error: ${_err}. Try toggling a sidebar parameter to re-fire, or click CLEAR CACHE in the header to drop any stale cached response.`;
+        } else if(_isLoading){
+          color = C.accent;
+          title = "Computing cycle solution…";
+          body = "First-call cycle solve takes 5–15 s. The mapping populates as soon as it returns. If this hangs for >30 s, click CLEAR CACHE in the header and try again.";
+        } else {
+          color = C.txtMuted;
+          title = "Waiting for cycle inputs";
+          body = "The cycle endpoint hasn't fired yet — try nudging any sidebar parameter (load %, fuel composition, ambient T) to trigger it. If this state persists after a parameter change, click CLEAR CACHE in the header.";
+        }
+        return (
+          <div style={{padding:"32px 24px",textAlign:"center",background:C.bg2,border:`1px dashed ${color}50`,borderRadius:10,color:C.txtDim}}>
+            <div style={{fontSize:13,fontWeight:700,color,marginBottom:8,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>{_isLoading?"⟳ ":""}{title}</div>
+            <div style={{fontSize:11.5,lineHeight:1.55,maxWidth:640,margin:"0 auto",fontFamily:"'Barlow',sans-serif"}}>{body}</div>
+          </div>
+        );
+      })()
       :<>
 
       {/* ═════════════════════════════════════════════════════════════════
