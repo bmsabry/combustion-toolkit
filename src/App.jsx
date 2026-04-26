@@ -2343,13 +2343,13 @@ function CombustorMappingPanel({
       const co15Val = dCO * (1 + n.CO15.amp * Math.sin(coPhase));
 
       // MWI_WIM — Wobbe meter is a noisy, fast device. Use white noise:
-      // fresh ±4 % uniform random per tick. Sine at 1 s period would alias
+      // fresh ±2.5 % uniform random per tick. Sine at 1 s period would alias
       // to flat at 1 Hz sampling (Nyquist) — every sample lands at the
       // same phase. Random per-tick gives the visibly-noisy look the
       // operator expects from a real WIM analog/digital trace.
-      const wimVal = dWIM * (1 + (Math.random() * 2 - 1) * 0.04);
-      // MWI_GC — continuous 120 s sine, ±0.5 %
-      const gcVal  = dGC  * (1 + 0.005 * Math.sin((now / 120) * 2 * Math.PI));
+      const wimVal = dWIM * (1 + (Math.random() * 2 - 1) * 0.025);
+      // MWI_GC — continuous 120 s sine, ±0.25 %
+      const gcVal  = dGC  * (1 + 0.0025 * Math.sin((now / 120) * 2 * Math.PI));
 
       bufferRef.current.push({
         t: now,
