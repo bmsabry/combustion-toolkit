@@ -2309,16 +2309,20 @@ function CombustorMappingPanel({
       // dependent amplitude. NOx15/CO15: sine with re-rolled amplitude per
       // 20 s wave. MWI: continuous sine, fixed amplitude.
       const n = noiseRef.current;
-      // PX36_SEL — band ramps with dPX36 (psi units, raw correlation scale)
+      // PX36_SEL — band ramps with dPX36 (psi units, raw correlation scale).
+      // Below 4.7 psi the dynamics are quiet and well-damped (low band).
+      // Above 4.85 the combustor is approaching its stability limit and the
+      // pressure trace gets visibly chunky (high band). Linearly interpolate
+      // both ends of the band through the 4.7–4.85 transition zone.
       if (now >= n.PX36_SEL.nextChange) {
         const x = dPX36;
         let lo, hi;
-        if (x < 4.7)        { lo = 2.5; hi = 4.5; }
+        if (x < 4.7)        { lo = 1.5; hi = 3.4; }
         else if (x > 4.85)  { lo = 6.0; hi = 9.0; }
         else {
           const u = (x - 4.7) / 0.15;
-          lo = 2.5 + u * (6.0 - 2.5);
-          hi = 4.5 + u * (9.0 - 4.5);
+          lo = 1.5 + u * (6.0 - 1.5);
+          hi = 3.4 + u * (9.0 - 3.4);
         }
         n.PX36_SEL.devPct = (lo + Math.random() * (hi - lo)) / 100;
         n.PX36_SEL.sign   = Math.random() < 0.5 ? -1 : 1;
