@@ -2267,14 +2267,22 @@ function CombustorMappingPanel({
     if (!Number.isFinite(valBase)) return;
     setUserRanges(prev => ({...prev, [key]: {...(prev[key] || {min:0,max:1}), [side]: valBase}}));
   };
-  // Per-metric mean tracker — captures the lagging "what the instrument is
-  // displaying right now" given the dead-time + smoothstep response model.
+  // Per-metric mean tracker — models a real instrument: transport delay
+  // (deadT) + first-order-style response (transT) on every step change in
+  // the input signal. `history` is a sorted list of step events
+  // [{tc, value}, …]; the displayed value at time t is found by walking
+  // back to whatever the input was at time (t − deadT), then applying a
+  // smoothstep ramp if a change happened recently. This correctly handles
+  // multiple rapid step changes (e.g. BD4 → BD6 → BD7 → BD4 …) — each
+  // input step shows up as a delayed output step, separated by the same
+  // intervals as the input. Old design only tracked ONE active transition
+  // and collapsed intermediate values.
   const meansRef = useRef({
-    PX36_SEL: { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 0,   transT: 1 },
-    NOx15:    { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 83,  transT: 7 },
-    CO15:     { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 83,  transT: 7 },
-    MWI_WIM:  { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 2,   transT: 5 },
-    MWI_GC:   { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 415, transT: 5 },
+    PX36_SEL: { deadT: 0,   transT: 1, history: [{tc:-Infinity, value:0}] },
+    NOx15:    { deadT: 83,  transT: 7, history: [{tc:-Infinity, value:0}] },
+    CO15:     { deadT: 83,  transT: 7, history: [{tc:-Infinity, value:0}] },
+    MWI_WIM:  { deadT: 2,   transT: 5, history: [{tc:-Infinity, value:0}] },
+    MWI_GC:   { deadT: 415, transT: 5, history: [{tc:-Infinity, value:0}] },
   });
   // Per-metric noise generator state.
   const noiseRef = useRef({
@@ -2384,23 +2392,39 @@ function CombustorMappingPanel({
 
   // smoothstep: 3u² − 2u³. Smooth tangent at 0 and 1, exact arrival at u=1.
   const _smoothstep = u => u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
+  // Compute the displayed mean at time `now` from the input-change history.
+  // Algorithm: find what the input was at time tEff = now − deadT (the
+  // "delayed input"). If a step change happened recently relative to tEff,
+  // smoothstep between the previous value and the new value over transT.
+  // Multiple step changes in the input each produce their own delayed step,
+  // separated by the same time intervals as the original changes.
   const _displayedMean = (now, m) => {
-    if (m.target === m.oldVal) return m.target;
-    const t = now - m.changeAt;
-    if (t < m.deadT) return m.oldVal;
-    if (t < m.deadT + m.transT) {
-      const u = (t - m.deadT) / m.transT;
-      return m.oldVal + (m.target - m.oldVal) * _smoothstep(u);
-    }
-    return m.target;
+    const h = m.history;
+    if (!h || h.length === 0) return 0;
+    const tEff = now - m.deadT;
+    // Find the most recent change at or before tEff (binary search would be
+    // overkill — history is short, walk back linearly).
+    let i = h.length - 1;
+    while (i > 0 && h[i].tc > tEff) i--;
+    const cur = h[i];
+    if (i === 0) return cur.value;  // no prior change; initial value
+    const prev = h[i - 1];
+    const dt = tEff - cur.tc;
+    if (dt >= m.transT) return cur.value;  // fully transitioned to cur.value
+    return prev.value + (cur.value - prev.value) * _smoothstep(dt / m.transT);
   };
   const _updateTarget = (now, m, newTarget) => {
-    if (Math.abs(newTarget - m.target) < 1e-9) return;
-    // Capture current displayed value as the new "old" so mid-transition
-    // restarts blend smoothly from the current point, not from the original.
-    m.oldVal = _displayedMean(now, m);
-    m.target = newTarget;
-    m.changeAt = now;
+    if (!m.history || m.history.length === 0) {
+      m.history = [{tc:-Infinity, value:newTarget}];
+      return;
+    }
+    const last = m.history[m.history.length - 1];
+    if (Math.abs(newTarget - last.value) < 1e-9) return;  // no real change
+    m.history.push({tc: now, value: newTarget});
+    // Trim entries older than the response window so memory doesn't grow.
+    // Keep an extra 60 s of pre-window context for smoothstep continuity.
+    const cutoff = now - m.deadT - m.transT - 60;
+    while (m.history.length > 1 && m.history[1].tc < cutoff) m.history.shift();
   };
 
   // ── 1 Hz tick loop ──
@@ -2506,18 +2530,19 @@ function CombustorMappingPanel({
   const startMapping = () => {
     const now = Date.now() / 1000;
     bufferRef.current = [];
-    // Seed targets with current means so the very first tick has something
-    // sensible to centre on (rather than oscillating around 0).
+    // Seed each metric's history with a single "initial" entry at -Infinity
+    // so the displayed-mean lookup returns the seed value at any time. The
+    // first real change comes in via _updateTarget on the next tick.
     const m = meansRef.current;
     const c0 = R?.correlations;
     if (c0) {
       ["PX36_SEL","NOx15","CO15"].forEach(k => {
-        m[k].displayed = m[k].target = m[k].oldVal = c0[k] || 0; m[k].changeAt = now;
+        m[k].history = [{tc:-Infinity, value: c0[k] || 0}];
       });
     }
     const mwi0 = cycleResult?.fuel_flexibility?.mwi || 0;
-    m.MWI_WIM.displayed = m.MWI_WIM.target = m.MWI_WIM.oldVal = mwi0 * 0.99; m.MWI_WIM.changeAt = now;
-    m.MWI_GC.displayed  = m.MWI_GC.target  = m.MWI_GC.oldVal  = mwi0;        m.MWI_GC.changeAt  = now;
+    m.MWI_WIM.history = [{tc:-Infinity, value: mwi0 * 0.99}];
+    m.MWI_GC.history  = [{tc:-Infinity, value: mwi0}];
     noiseRef.current.NOx15.waveStart = now;
     noiseRef.current.CO15.waveStart = now;
     noiseRef.current.PX36_SEL.nextChange = now;  // forces immediate roll
