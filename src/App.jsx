@@ -3107,10 +3107,26 @@ function CombustorMappingPanel({
                 )}
               </div>
             </div>
-            {/* Engine TRIP banner — full shutdown sequence. Replaces the
-                protection banner when active (trip overrides everything). */}
+            {/* Engine TRIP banner — full shutdown sequence with 4-hour
+                countdown. Replaces the protection banner when active.
+                Countdown re-evaluates each tick (1 Hz) via tickCount.
+                Auto-clears when timer hits zero; user can override with
+                the RESET button to bypass the lockdown. */}
             {tripBanner && (() => {
+              const LOCKOUT_SEC = 4 * 60 * 60;  // 4 hours
+              const elapsed = Math.max(0, (Date.now()/1000) - tripBanner.atSec);
+              const remain  = Math.max(0, LOCKOUT_SEC - elapsed);
+              // Auto-clear once the lockout has elapsed.
+              if (remain <= 0) {
+                // Defer state mutation out of render
+                setTimeout(_resetTrip, 0);
+              }
+              const hh = String(Math.floor(remain / 3600)).padStart(2, "0");
+              const mm = String(Math.floor((remain % 3600) / 60)).padStart(2, "0");
+              const ss = String(Math.floor(remain % 60)).padStart(2, "0");
               const tStr = (()=>{const d=new Date(tripBanner.atSec*1000);return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;})();
+              const releaseAt = new Date((tripBanner.atSec + LOCKOUT_SEC) * 1000);
+              const releaseStr = `${String(releaseAt.getHours()).padStart(2,"0")}:${String(releaseAt.getMinutes()).padStart(2,"0")}:${String(releaseAt.getSeconds()).padStart(2,"0")}`;
               const causeText = tripBanner.cause === 'phi_ip'
                 ? `phi_IP = ${tripBanner.phi.toFixed(3)} exceeded random trip ${tripBanner.thresh.toFixed(3)} at BR=7`
                 : `phi_OP = ${tripBanner.phi.toFixed(3)} exceeded random trip ${tripBanner.thresh.toFixed(3)} at BR=${tripBanner.brndmd}`;
@@ -3130,16 +3146,24 @@ function CombustorMappingPanel({
                     <div style={{fontSize:30,fontWeight:800,color:C.strong,
                       fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"1.5px",
                       lineHeight:1.05,textShadow:`0 1px 0 ${C.bg}`}}>
-                      ENGINE TRIPPED
+                      ENGINE TRIPPED — LOCK DOWN
                     </div>
-                    <div style={{fontSize:20,fontWeight:700,color:C.strong,
-                      fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"1px",
-                      lineHeight:1.1}}>
-                      LOCK DOWN FOR 4 HOURS
+                    {/* Live 4-hour countdown */}
+                    <div style={{display:"flex",alignItems:"baseline",gap:14,marginTop:2}}>
+                      <div style={{fontSize:36,fontWeight:800,color:C.strong,
+                        fontFamily:"monospace",letterSpacing:"2px",lineHeight:1,
+                        fontVariantNumeric:"tabular-nums",
+                        textShadow:`0 0 8px ${C.strong}50`}}>
+                        {hh}:{mm}:{ss}
+                      </div>
+                      <div style={{fontSize:11,color:C.txtDim,fontFamily:"'Barlow',sans-serif",
+                        letterSpacing:".5px"}}>
+                        REMAINING · auto-release at <strong style={{color:C.txt,fontFamily:"monospace"}}>{releaseStr}</strong>
+                      </div>
                     </div>
                     <div style={{fontSize:13,color:C.txt,fontFamily:"monospace",
-                      lineHeight:1.5,marginTop:3}}>
-                      {causeText} · <strong>{tStr}</strong>
+                      lineHeight:1.5,marginTop:5}}>
+                      {causeText} · tripped at <strong>{tStr}</strong>
                     </div>
                     <div style={{fontSize:12,color:C.txtMuted,fontStyle:"italic",
                       marginTop:4,fontFamily:"'Barlow',sans-serif"}}>
@@ -3147,12 +3171,12 @@ function CombustorMappingPanel({
                     </div>
                   </div>
                   <button onClick={_resetTrip}
-                    title="Reset trip — simulator only. In a real plant this would require 4-hour cooldown + provider authorisation."
+                    title="Override the 4-hour lock and reset the engine immediately. In a real plant this would require provider authorisation."
                     style={{padding:"12px 22px",fontSize:15,fontWeight:800,
                       color:C.bg,background:C.strong,border:`2px solid ${C.strong}`,borderRadius:6,
                       cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".7px",
                       whiteSpace:"nowrap",flexShrink:0,boxShadow:`0 2px 10px ${C.strong}70`}}>
-                    ⟲ RESET TRIP
+                    ⟲ OVERRIDE & RESET
                   </button>
                 </div>
               );
