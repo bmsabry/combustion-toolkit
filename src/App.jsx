@@ -2985,15 +2985,15 @@ function CombustorMappingPanel({
           // primary effective range so both series read against the same scale.
           const effY2Min = secondKey ? effMin : y2LockMin;
           const effY2Max = secondKey ? effMax : y2LockMax;
-          // Tiny editor for one bound — a NumField that calls onChange on commit.
-          const RangeInput = ({ value, onChange, hint }) => (
-            <NumField value={value} decimals={decimals}
-              onCommit={v => Number.isFinite(v) && onChange(v)}
-              title={hint}
-              style={{width:62,padding:"2px 5px",fontSize:10,fontFamily:"monospace",color,
-                background:C.bg,border:`1px solid ${color}50`,borderRadius:3,textAlign:"center",
-                outline:"none",fontWeight:600}}/>
-          );
+          // Inline shared style for the two range inputs. (Don't wrap in a
+          // sub-component — TraceChart re-creates every tick, so a nested
+          // component type would be re-defined on every render and React
+          // would unmount/remount the NumField, killing focus and any
+          // in-progress text. NumField itself is top-level and stable, so
+          // calling it directly preserves identity across renders.)
+          const _rangeInputStyle = {width:62,padding:"2px 5px",fontSize:10,fontFamily:"monospace",color,
+            background:C.bg,border:`1px solid ${color}50`,borderRadius:3,textAlign:"center",
+            outline:"none",fontWeight:600};
           // Visual cue: when the axis is auto-extended beyond the user range,
           // show a small "AUTO+" tag so the operator knows the band has stretched.
           const extended = effMin < userMinDisp || effMax > userMaxDisp;
@@ -3011,12 +3011,19 @@ function CombustorMappingPanel({
                 </span>
               ) : null}
             </div>
-            {/* Editable y-axis bounds */}
+            {/* Editable y-axis bounds — inline NumField (NOT wrapped in
+                a nested sub-component, see _rangeInputStyle comment above) */}
             <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",letterSpacing:".3px"}}>
               <span>RANGE:</span>
-              <RangeInput value={userMinDisp} onChange={onChangeMin} hint={`Set y-axis MIN. Axis still auto-extends if data drops below this.`}/>
+              <NumField value={userMinDisp} decimals={decimals}
+                onCommit={v => Number.isFinite(v) && onChangeMin(v)}
+                title="Set y-axis MIN. Axis still auto-extends if data drops below this."
+                style={_rangeInputStyle}/>
               <span>—</span>
-              <RangeInput value={userMaxDisp} onChange={onChangeMax} hint={`Set y-axis MAX. Axis still auto-extends if data rises above this.`}/>
+              <NumField value={userMaxDisp} decimals={decimals}
+                onCommit={v => Number.isFinite(v) && onChangeMax(v)}
+                title="Set y-axis MAX. Axis still auto-extends if data rises above this."
+                style={_rangeInputStyle}/>
               <span>{unit}</span>
             </div>
             <Chart
