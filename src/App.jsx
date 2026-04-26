@@ -2342,8 +2342,12 @@ function CombustorMappingPanel({
       const coPhase = ((now - n.CO15.waveStart) / 20) * 2 * Math.PI;
       const co15Val = dCO * (1 + n.CO15.amp * Math.sin(coPhase));
 
-      // MWI_WIM — continuous 1 s sine, ±4 %
-      const wimVal = dWIM * (1 + 0.04 * Math.sin((now % 1) * 2 * Math.PI));
+      // MWI_WIM — Wobbe meter is a noisy, fast device. Use white noise:
+      // fresh ±4 % uniform random per tick. Sine at 1 s period would alias
+      // to flat at 1 Hz sampling (Nyquist) — every sample lands at the
+      // same phase. Random per-tick gives the visibly-noisy look the
+      // operator expects from a real WIM analog/digital trace.
+      const wimVal = dWIM * (1 + (Math.random() * 2 - 1) * 0.04);
       // MWI_GC — continuous 120 s sine, ±0.5 %
       const gcVal  = dGC  * (1 + 0.005 * Math.sin((now / 120) * 2 * Math.PI));
 
@@ -2633,14 +2637,14 @@ function CombustorMappingPanel({
         // yLockMin/yLockMax pin the y-axis to a fixed range so the trace
         // moves visibly inside that range instead of the chart auto-rescaling
         // every tick (which makes oscillations look like flat lines).
-        const TraceChart = ({ title, color, yKey, fmt, unit, secondKey, secondColor, secondLabel, yLockMin, yLockMax, y2LockMin, y2LockMax }) => (
+        const TraceChart = ({ title, color, yKey, fmt, unit, secondKey, secondColor, secondLabel, primaryLabel, yLockMin, yLockMax, y2LockMin, y2LockMax }) => (
           <div style={{background:C.bg2,border:`1px solid ${color}30`,borderRadius:6,padding:"10px 12px 4px"}}>
-            <div style={{fontSize:11,fontWeight:700,color,textTransform:"uppercase",letterSpacing:".8px",marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span>{title}</span>
+            <div style={{fontSize:11,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:".8px",marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+              <span style={{color}}>{title}</span>
               {visible.length > 0 ? (
-                <span style={{fontSize:10,fontWeight:500,color,fontFamily:"monospace",letterSpacing:0,fontVariantNumeric:"tabular-nums"}}>
-                  {fmt(visible[visible.length-1][yKey])} {unit}
-                  {secondKey ? ` · ${secondLabel} ${fmt(visible[visible.length-1][secondKey])}` : ""}
+                <span style={{fontSize:10,fontWeight:500,fontFamily:"monospace",letterSpacing:0,fontVariantNumeric:"tabular-nums",display:"flex",gap:10,alignItems:"baseline"}}>
+                  <span style={{color}}>{primaryLabel ? `${primaryLabel} ` : ""}{fmt(visible[visible.length-1][yKey])} {unit}</span>
+                  {secondKey ? <span style={{color:secondColor}}>{secondLabel} {fmt(visible[visible.length-1][secondKey])}</span> : null}
                 </span>
               ) : null}
             </div>
@@ -2740,8 +2744,9 @@ function CombustorMappingPanel({
                   yLockMin={10} yLockMax={50}/>
                 <TraceChart title="CO @ 15 % O₂"  color={C.accent2} yKey="CO15"     fmt={fmtCO}  unit="ppmvd"
                   yLockMin={10} yLockMax={450}/>
-                <TraceChart title="MWI" color={C.violet} yKey="MWI_WIM" fmt={fmtMWI} unit="BTU/scf·√°R"
-                  secondKey="MWI_GC" secondColor={C.accent3} secondLabel="GC"
+                <TraceChart title="MWI — Wobbe Index" color={C.accent3} yKey="MWI_WIM" fmt={fmtMWI} unit="BTU/scf·√°R"
+                  primaryLabel="WIM"
+                  secondKey="MWI_GC" secondColor={C.good} secondLabel="GC"
                   yLockMin={44} yLockMax={56}
                   y2LockMin={44} y2LockMax={56}/>
               </div>
