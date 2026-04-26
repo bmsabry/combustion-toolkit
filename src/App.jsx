@@ -2249,10 +2249,12 @@ function CombustorMappingPanel({
   // sessions via localStorage.
   const [userRanges, setUserRanges] = useState(() => {
     const defaults = {
-      PX36_SEL: { min: 2,  max: 6   },  // psi (display unit-converted)
-      NOx15:    { min: 10, max: 50  },  // ppmvd
-      CO15:     { min: 10, max: 450 },  // ppmvd
-      MWI:      { min: 44, max: 56  },  // BTU/scf·√°R, shared by WIM and GC
+      PX36_SEL:    { min: 2,  max: 6   },  // psi (display unit-converted)
+      PX36_SEL_HI: { min: 1,  max: 4   },  // psi — auto-extends to capture 100 psi trip
+      NOx15:       { min: 10, max: 50  },  // ppmvd
+      CO15:        { min: 10, max: 450 },  // ppmvd
+      MWI:         { min: 44, max: 56  },  // BTU/scf·√°R, shared by WIM and GC
+      MW:          { min: 0,  max: 120 },  // MW
     };
     try {
       const saved = localStorage.getItem("ctk.userRanges.v1");
@@ -2278,18 +2280,32 @@ function CombustorMappingPanel({
   // intervals as the input. Old design only tracked ONE active transition
   // and collapsed intermediate values.
   const meansRef = useRef({
-    PX36_SEL: { deadT: 0,   transT: 1, history: [{tc:-Infinity, value:0}] },
-    NOx15:    { deadT: 83,  transT: 7, history: [{tc:-Infinity, value:0}] },
-    CO15:     { deadT: 83,  transT: 7, history: [{tc:-Infinity, value:0}] },
-    MWI_WIM:  { deadT: 2,   transT: 5, history: [{tc:-Infinity, value:0}] },
-    MWI_GC:   { deadT: 415, transT: 5, history: [{tc:-Infinity, value:0}] },
+    PX36_SEL:    { deadT: 0,   transT: 1, history: [{tc:-Infinity, value:0}] },
+    PX36_SEL_HI: { deadT: 0,   transT: 1, history: [{tc:-Infinity, value:0}] },
+    NOx15:       { deadT: 83,  transT: 7, history: [{tc:-Infinity, value:0}] },
+    CO15:        { deadT: 83,  transT: 7, history: [{tc:-Infinity, value:0}] },
+    MWI_WIM:     { deadT: 2,   transT: 5, history: [{tc:-Infinity, value:0}] },
+    MWI_GC:      { deadT: 415, transT: 5, history: [{tc:-Infinity, value:0}] },
+    MW:          { deadT: 0,   transT: 7, history: [{tc:-Infinity, value:0}] },
   });
   // Per-metric noise generator state.
   const noiseRef = useRef({
-    PX36_SEL: { devPct: 0, sign: 1, nextChange: 0 },
-    NOx15:    { amp: 0.04, waveStart: 0 },
-    CO15:     { amp: 0.06, waveStart: 0 },
+    PX36_SEL:    { devPct: 0, sign: 1, nextChange: 0 },
+    PX36_SEL_HI: { devPct: 0, sign: 1, nextChange: 0 },
+    NOx15:       { amp: 0.04, waveStart: 0 },
+    CO15:        { amp: 0.06, waveStart: 0 },
   });
+  // Trip stochastic-threshold trackers — random trip points re-rolled each
+  // time the relevant phi rises into the trip band.
+  const tripStateRef = useRef({
+    phiIp: { thresh: null, inBand: false },  // BR=7 only
+    phiOp: { thresh: null, inBand: false },  // BR=6 or 7
+    tripped: false,                           // engine shut down
+    tripAt: 0,                                // wall-clock seconds
+    tripCause: null,                          // 'phi_ip' | 'phi_op'
+  });
+  // Trip banner state for UI rendering (mirrors tripStateRef.tripped)
+  const [tripBanner, setTripBanner] = useState(null);  // null | {atSec, cause, phi}
   // Refs that snapshot the latest correlation/cycle/emissionsMode values so
   // the interval callback always reads fresh data without re-creating the
   // interval. emissionsModeRef lets the auto-stage-down trigger read the
@@ -2435,57 +2451,175 @@ function CombustorMappingPanel({
       const corrLatest = corrRef.current;
       const cycLatest = cycleRef.current;
       const m = meansRef.current;
+      const tr = tripStateRef.current;
 
-      // Update targets from latest correlation/cycle (might have changed).
-      if (corrLatest) {
+      // ─── BRNDMD 6 multiplier on PX36_SEL_HI based on phi_IP ───────────
+      // Piecewise linear lookup. Outside [0.8, 1.4] continue with the
+      // closest segment's slope (linear extrapolation per user spec).
+      const _phi_ip_hi_mult = (phiIp) => {
+        const tbl = [[0.8,1.08],[0.9,1.04],[1.0,1.00],[1.1,0.94],[1.2,0.85],[1.3,0.84],[1.4,0.83]];
+        if (phiIp <= tbl[0][0]) {
+          // extrapolate using 0.8→0.9 slope (-0.4/unit for the multiplier)
+          const slope = (tbl[1][1] - tbl[0][1]) / (tbl[1][0] - tbl[0][0]);
+          return tbl[0][1] + slope * (phiIp - tbl[0][0]);
+        }
+        if (phiIp >= tbl[tbl.length-1][0]) {
+          const a = tbl[tbl.length-2], b = tbl[tbl.length-1];
+          const slope = (b[1]-a[1])/(b[0]-a[0]);
+          return b[1] + slope * (phiIp - b[0]);
+        }
+        for (let i=0; i<tbl.length-1; i++) {
+          if (phiIp >= tbl[i][0] && phiIp <= tbl[i+1][0]) {
+            const u = (phiIp - tbl[i][0]) / (tbl[i+1][0] - tbl[i][0]);
+            return tbl[i][1] + u * (tbl[i+1][1] - tbl[i][1]);
+          }
+        }
+        return 1.0;
+      };
+      // Helper: linearly interpolate trip band edges based on load %.
+      // Clamp at the bound endpoints (no extrapolation outside).
+      const _interpBand = (loadPct, bandLo, bandHi) => {
+        // bandLo = [loadL, loL, hiL]; bandHi = [loadH, loH, hiH]
+        const [lL, ldL, hdL] = bandLo;
+        const [lH, ldH, hdH] = bandHi;
+        if (loadPct <= Math.min(lL, lH)) {
+          const which = lL < lH ? bandLo : bandHi;
+          return [which[1], which[2]];
+        }
+        if (loadPct >= Math.max(lL, lH)) {
+          const which = lL > lH ? bandLo : bandHi;
+          return [which[1], which[2]];
+        }
+        const u = (loadPct - lL) / (lH - lL);
+        return [ldL + u * (ldH - ldL), hdL + u * (hdH - hdL)];
+      };
+
+      // ─── Update target means ──────────────────────────────────────────
+      // When tripped, ALL targets go to 0 with their device-delay times.
+      // Otherwise read the latest correlation/cycle values.
+      if (tr.tripped) {
+        _updateTarget(now, m.PX36_SEL, 0);
+        _updateTarget(now, m.PX36_SEL_HI, 0);
+        _updateTarget(now, m.NOx15, 0);
+        _updateTarget(now, m.CO15,  0);
+        _updateTarget(now, m.MWI_WIM, 0);
+        _updateTarget(now, m.MWI_GC,  0);
+        _updateTarget(now, m.MW, 0);
+      } else if (corrLatest) {
         _updateTarget(now, m.PX36_SEL, corrLatest.PX36_SEL);
         _updateTarget(now, m.NOx15,    corrLatest.NOx15);
         _updateTarget(now, m.CO15,     corrLatest.CO15);
-      }
-      const mwiCycle = cycLatest?.fuel_flexibility?.mwi || 0;
-      if (mwiCycle > 0) {
-        _updateTarget(now, m.MWI_WIM, mwiCycle * 0.99);  // Wobbe-meter reads 1% low
-        _updateTarget(now, m.MWI_GC,  mwiCycle);          // GC matches cycle exactly
+        // PX36_SEL_HI gets the BRNDMD-6 phi_IP multiplier (only at BR=6).
+        const _br = brndmdOverride ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
+        const _hiMult = (_br === 6) ? _phi_ip_hi_mult(Number(phiIP) || 0) : 1.0;
+        _updateTarget(now, m.PX36_SEL_HI, corrLatest.PX36_SEL_HI * _hiMult);
+        const mwiCycle = cycLatest?.fuel_flexibility?.mwi || 0;
+        if (mwiCycle > 0) {
+          _updateTarget(now, m.MWI_WIM, mwiCycle * 0.99);
+          _updateTarget(now, m.MWI_GC,  mwiCycle);
+        }
+        const mwLive = cycLatest?.MW_net || 0;
+        _updateTarget(now, m.MW, mwLive);
       }
 
-      // Compute displayed (lagging) means.
-      const dPX36 = _displayedMean(now, m.PX36_SEL);
-      const dNOx  = _displayedMean(now, m.NOx15);
-      const dCO   = _displayedMean(now, m.CO15);
-      const dWIM  = _displayedMean(now, m.MWI_WIM);
-      const dGC   = _displayedMean(now, m.MWI_GC);
+      // ─── Stochastic phi_IP / phi_OP trips ─────────────────────────────
+      // Pick a random threshold ONCE when phi rises into the trip band;
+      // persist until phi drops back below the lower edge (then re-roll).
+      // Trip logic only runs when NOT already tripped.
+      if (!tr.tripped && cycLatest) {
+        const loadPct = cycLatest.load_pct || 100;
+        const _br = brndmdOverride ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
+        // ── phi_IP trip — only at BRNDMD 7 ──
+        if (_br === 7) {
+          const [lo, hi] = _interpBand(loadPct, [75, 0.35, 0.40], [100, 0.29, 0.35]);
+          const pIp = Number(phiIP) || 0;
+          if (pIp >= lo) {
+            if (!tr.phiIp.inBand) {
+              // First entry into the band: roll a fresh random threshold
+              tr.phiIp.inBand = true;
+              tr.phiIp.thresh = lo + Math.random() * (hi - lo);
+            }
+            if (pIp >= tr.phiIp.thresh) {
+              // TRIP fires — engine shutdown sequence begins
+              tr.tripped = true; tr.tripAt = now; tr.tripCause = 'phi_ip';
+              _updateTarget(now, m.PX36_SEL_HI, 100);  // instant spike to 100
+              setTripBanner({ atSec: now, cause: 'phi_ip', phi: pIp, thresh: tr.phiIp.thresh, brndmd: _br });
+              _resetProtection();  // cancel any in-progress protection cycle
+            }
+          } else {
+            // phi dropped out of band — clear so next entry re-rolls
+            tr.phiIp.inBand = false; tr.phiIp.thresh = null;
+          }
+        } else {
+          tr.phiIp.inBand = false; tr.phiIp.thresh = null;
+        }
+        // ── phi_OP trip — at BRNDMD 6 or 7 ──
+        if (!tr.tripped && (_br === 6 || _br === 7)) {
+          const [lo, hi] = _interpBand(loadPct, [70, 1.00, 1.20], [100, 0.95, 1.10]);
+          const pOp = Number(phiOP) || 0;
+          if (pOp >= lo) {
+            if (!tr.phiOp.inBand) {
+              tr.phiOp.inBand = true;
+              tr.phiOp.thresh = lo + Math.random() * (hi - lo);
+            }
+            if (pOp >= tr.phiOp.thresh) {
+              tr.tripped = true; tr.tripAt = now; tr.tripCause = 'phi_op';
+              _updateTarget(now, m.PX36_SEL_HI, 100);
+              setTripBanner({ atSec: now, cause: 'phi_op', phi: pOp, thresh: tr.phiOp.thresh, brndmd: _br });
+              _resetProtection();
+            }
+          } else {
+            tr.phiOp.inBand = false; tr.phiOp.thresh = null;
+          }
+        } else {
+          tr.phiOp.inBand = false; tr.phiOp.thresh = null;
+        }
+      }
 
-      // Apply per-metric noise. PX36_SEL: random step jitter, mean-band
-      // dependent amplitude. NOx15/CO15: sine with re-rolled amplitude per
-      // 20 s wave. MWI: continuous sine, fixed amplitude.
+      // ─── Compute displayed (lagging) means ──────────────────────────
+      const dPX36   = _displayedMean(now, m.PX36_SEL);
+      const dPX36HI = _displayedMean(now, m.PX36_SEL_HI);
+      const dNOx    = _displayedMean(now, m.NOx15);
+      const dCO     = _displayedMean(now, m.CO15);
+      const dWIM    = _displayedMean(now, m.MWI_WIM);
+      const dGC     = _displayedMean(now, m.MWI_GC);
+      const dMW     = _displayedMean(now, m.MW);
+
+      // ─── Per-metric noise ───────────────────────────────────────────
       const n = noiseRef.current;
-      // PX36_SEL — band ramps with dPX36 (psi units, raw correlation scale).
-      // Below 4.7 psi the dynamics are quiet and well-damped (low band).
-      // Above 4.85 the combustor is approaching its stability limit and the
-      // pressure trace gets visibly chunky (high band). Linearly interpolate
-      // both ends of the band through the 4.7–4.85 transition zone.
+      // PX36_SEL — random step, mean-band dependent amplitude.
+      // mean<4.7 → U(1.5,3.4) ; mean>4.85 → U(7,9) ; interp in between.
       if (now >= n.PX36_SEL.nextChange) {
         const x = dPX36;
         let lo, hi;
         if (x < 4.7)        { lo = 1.5; hi = 3.4; }
         else if (x > 4.85)  { lo = 7.0; hi = 9.0; }
-        else {
-          const u = (x - 4.7) / 0.15;
-          lo = 1.5 + u * (7.0 - 1.5);
-          hi = 3.4 + u * (9.0 - 3.4);
-        }
+        else { const u = (x - 4.7) / 0.15; lo = 1.5 + u * (7.0 - 1.5); hi = 3.4 + u * (9.0 - 3.4); }
         n.PX36_SEL.devPct = (lo + Math.random() * (hi - lo)) / 100;
         n.PX36_SEL.sign   = Math.random() < 0.5 ? -1 : 1;
-        n.PX36_SEL.nextChange = now + 1 + Math.random();  // 1-2 s
+        n.PX36_SEL.nextChange = now + 1 + Math.random();
       }
       const px36Val = dPX36 * (1 + n.PX36_SEL.sign * n.PX36_SEL.devPct);
+      // PX36_SEL_HI — same noise style, breakpoints at 2.1 / 2.25 psi.
+      // When tripped (target=100), suppress the % noise — the trip value
+      // should read as a clean 100 psi visual spike, not noisy.
+      if (now >= n.PX36_SEL_HI.nextChange) {
+        const x = dPX36HI;
+        let lo, hi;
+        if (x < 2.1)        { lo = 1.5; hi = 3.4; }
+        else if (x > 2.25)  { lo = 7.0; hi = 9.0; }
+        else { const u = (x - 2.1) / 0.15; lo = 1.5 + u * (7.0 - 1.5); hi = 3.4 + u * (9.0 - 3.4); }
+        n.PX36_SEL_HI.devPct = (lo + Math.random() * (hi - lo)) / 100;
+        n.PX36_SEL_HI.sign   = Math.random() < 0.5 ? -1 : 1;
+        n.PX36_SEL_HI.nextChange = now + 1 + Math.random();
+      }
+      const px36HiVal = (dPX36HI > 50)
+        ? dPX36HI  // trip — no noise, clean 100 psi spike
+        : dPX36HI * (1 + n.PX36_SEL_HI.sign * n.PX36_SEL_HI.devPct);
 
-      // ── Engine Protection Logic — auto-stage on elevated acoustics ──
-      // Triggered when PX36_SEL > 5.5 psi from any state EXCEPT 'at4'
-      // (already protecting) or 'locked' (no more auto-staging). The 'at6'
-      // and 'at7' transitions handle the user-described "immediate excursion"
-      // case — if PX36 trips during the BD6 dwell, we restart the cycle.
-      if (px36Val > 5.5
+      // ── Engine Protection Logic (NOT during trip) ──
+      if (!tr.tripped
+          && px36Val > 5.5
           && protRef.current.state !== 'at4'
           && protRef.current.state !== 'locked') {
         _triggerProtection(px36Val);
@@ -2493,39 +2627,36 @@ function CombustorMappingPanel({
 
       // NOx15 — 20 s sine, re-roll amp at wave end
       if (now - n.NOx15.waveStart >= 20) {
-        n.NOx15.amp = (1 + Math.random() * 2) / 100;  // 1–3 %
+        n.NOx15.amp = (1 + Math.random() * 2) / 100;
         n.NOx15.waveStart = now;
       }
       const noxPhase = ((now - n.NOx15.waveStart) / 20) * 2 * Math.PI;
       const nox15Val = dNOx * (1 + n.NOx15.amp * Math.sin(noxPhase));
 
-      // CO15 — 20 s sine, re-roll amp at wave end
       if (now - n.CO15.waveStart >= 20) {
-        n.CO15.amp = (5 + Math.random() * 2.5) / 100;  // 5–7.5 %
+        n.CO15.amp = (5 + Math.random() * 2.5) / 100;
         n.CO15.waveStart = now;
       }
       const coPhase = ((now - n.CO15.waveStart) / 20) * 2 * Math.PI;
       const co15Val = dCO * (1 + n.CO15.amp * Math.sin(coPhase));
 
-      // MWI_WIM — Wobbe meter is a noisy, fast device. Use white noise:
-      // fresh ±2.5 % uniform random per tick. Sine at 1 s period would alias
-      // to flat at 1 Hz sampling (Nyquist) — every sample lands at the
-      // same phase. Random per-tick gives the visibly-noisy look the
-      // operator expects from a real WIM analog/digital trace.
       const wimVal = dWIM * (1 + (Math.random() * 2 - 1) * 0.025);
-      // MWI_GC — continuous 120 s sine, ±0.25 %
       const gcVal  = dGC  * (1 + 0.0025 * Math.sin((now / 120) * 2 * Math.PI));
+      // MW — no noise, just the smoothstepped value (power output is steady)
+      const mwVal  = dMW;
 
       bufferRef.current.push({
         t: now,
-        PX36_SEL: px36Val, NOx15: nox15Val, CO15: co15Val,
+        PX36_SEL: px36Val, PX36_SEL_HI: px36HiVal,
+        NOx15: nox15Val, CO15: co15Val,
         MWI_WIM: wimVal, MWI_GC: gcVal,
+        MW: mwVal,
       });
       if (bufferRef.current.length > 600) bufferRef.current.shift();
       setTickCount(c => c + 1);
     }, 1000);
     return () => clearInterval(id);
-  }, [mappingActive]);
+  }, [mappingActive, phiIP, phiOP]);
 
   const startMapping = () => {
     const now = Date.now() / 1000;
@@ -2536,16 +2667,25 @@ function CombustorMappingPanel({
     const m = meansRef.current;
     const c0 = R?.correlations;
     if (c0) {
-      ["PX36_SEL","NOx15","CO15"].forEach(k => {
+      ["PX36_SEL","PX36_SEL_HI","NOx15","CO15"].forEach(k => {
         m[k].history = [{tc:-Infinity, value: c0[k] || 0}];
       });
     }
     const mwi0 = cycleResult?.fuel_flexibility?.mwi || 0;
     m.MWI_WIM.history = [{tc:-Infinity, value: mwi0 * 0.99}];
     m.MWI_GC.history  = [{tc:-Infinity, value: mwi0}];
+    m.MW.history      = [{tc:-Infinity, value: cycleResult?.MW_net || 0}];
     noiseRef.current.NOx15.waveStart = now;
     noiseRef.current.CO15.waveStart = now;
-    noiseRef.current.PX36_SEL.nextChange = now;  // forces immediate roll
+    noiseRef.current.PX36_SEL.nextChange = now;
+    noiseRef.current.PX36_SEL_HI.nextChange = now;
+    // Reset trip state — fresh start
+    tripStateRef.current = {
+      phiIp: { thresh: null, inBand: false },
+      phiOp: { thresh: null, inBand: false },
+      tripped: false, tripAt: 0, tripCause: null,
+    };
+    setTripBanner(null);
     setMappingStartedAt(now);
     setTickCount(0);
     setMappingActive(true);
@@ -2557,6 +2697,24 @@ function CombustorMappingPanel({
     setMappingStartedAt(null);
     setTickCount(0);
     setMappingActive(false);
+    // Clear trip state too — fresh start should clear any in-progress trip
+    tripStateRef.current = {
+      phiIp: { thresh: null, inBand: false },
+      phiOp: { thresh: null, inBand: false },
+      tripped: false, tripAt: 0, tripCause: null,
+    };
+    setTripBanner(null);
+  };
+  // Reset only the trip (operator dismisses the trip banner) — clears the
+  // tripped flag so targets resume reading from cycle/correlation. Leaves
+  // the mapping running and history intact so the user sees the recovery.
+  const _resetTrip = () => {
+    tripStateRef.current.tripped = false;
+    tripStateRef.current.tripAt = 0;
+    tripStateRef.current.tripCause = null;
+    tripStateRef.current.phiIp = { thresh: null, inBand: false };
+    tripStateRef.current.phiOp = { thresh: null, inBand: false };
+    setTripBanner(null);
   };
 
   // Edit one cell of one table and persist via setMappingTables.
@@ -2949,11 +3107,61 @@ function CombustorMappingPanel({
                 )}
               </div>
             </div>
+            {/* Engine TRIP banner — full shutdown sequence. Replaces the
+                protection banner when active (trip overrides everything). */}
+            {tripBanner && (() => {
+              const tStr = (()=>{const d=new Date(tripBanner.atSec*1000);return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;})();
+              const causeText = tripBanner.cause === 'phi_ip'
+                ? `phi_IP = ${tripBanner.phi.toFixed(3)} exceeded random trip ${tripBanner.thresh.toFixed(3)} at BR=7`
+                : `phi_OP = ${tripBanner.phi.toFixed(3)} exceeded random trip ${tripBanner.thresh.toFixed(3)} at BR=${tripBanner.brndmd}`;
+              return (
+                <div style={{
+                  marginBottom:14,padding:"22px 26px",
+                  background:`linear-gradient(135deg, ${C.strong}48 0%, ${C.strong}20 100%)`,
+                  border:`4px solid ${C.strong}`,borderRadius:8,
+                  boxShadow:`0 0 0 2px ${C.strong}30, 0 6px 24px ${C.strong}50, inset 0 0 0 1px ${C.strong}30`,
+                  display:"flex",alignItems:"center",justifyContent:"space-between",gap:20,
+                }}>
+                  <div style={{flex:"0 0 auto",fontSize:60,color:C.strong,lineHeight:1,
+                    filter:`drop-shadow(0 0 14px ${C.strong}90)`}}>
+                    🚨
+                  </div>
+                  <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:6}}>
+                    <div style={{fontSize:30,fontWeight:800,color:C.strong,
+                      fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"1.5px",
+                      lineHeight:1.05,textShadow:`0 1px 0 ${C.bg}`}}>
+                      ENGINE TRIPPED
+                    </div>
+                    <div style={{fontSize:20,fontWeight:700,color:C.strong,
+                      fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"1px",
+                      lineHeight:1.1}}>
+                      LOCK DOWN FOR 4 HOURS
+                    </div>
+                    <div style={{fontSize:13,color:C.txt,fontFamily:"monospace",
+                      lineHeight:1.5,marginTop:3}}>
+                      {causeText} · <strong>{tStr}</strong>
+                    </div>
+                    <div style={{fontSize:12,color:C.txtMuted,fontStyle:"italic",
+                      marginTop:4,fontFamily:"'Barlow',sans-serif"}}>
+                      This message will not appear on the engine GUI.
+                    </div>
+                  </div>
+                  <button onClick={_resetTrip}
+                    title="Reset trip — simulator only. In a real plant this would require 4-hour cooldown + provider authorisation."
+                    style={{padding:"12px 22px",fontSize:15,fontWeight:800,
+                      color:C.bg,background:C.strong,border:`2px solid ${C.strong}`,borderRadius:6,
+                      cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".7px",
+                      whiteSpace:"nowrap",flexShrink:0,boxShadow:`0 2px 10px ${C.strong}70`}}>
+                    ⟲ RESET TRIP
+                  </button>
+                </div>
+              );
+            })()}
             {/* Engine Protection Logic banner — fires when PX36_SEL > 5.5 psi.
                 Sized to be impossible to miss: oversized icon, large title,
                 generous padding, intense colour. The operator should read
-                this from across the room. */}
-            {protBanner && (() => {
+                this from across the room. Hidden during trip — trip wins. */}
+            {!tripBanner && protBanner && (() => {
               const isLocked = protBanner.phase === 'locked';
               const accent = isLocked ? C.strong : C.warm;
               const tStr = (()=>{const d=new Date(protBanner.atSeconds*1000);return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;})();
@@ -3037,10 +3245,14 @@ function CombustorMappingPanel({
                 <TraceChart title="PX36_SEL" color={C.warm}    yKey="PX36_SEL" fmt={fmtPx}  unit={pxUnit}
                   userMinDisp={_px(userRanges.PX36_SEL.min)} userMaxDisp={_px(userRanges.PX36_SEL.max)}
                   decimals={units==="SI"?1:2}
-                  // Convert display→base on commit. PX36 stored in psi.
                   onChangeMin={v => _setRange("PX36_SEL", "min", units==="SI"?v/68.9476:v)}
                   onChangeMax={v => _setRange("PX36_SEL", "max", units==="SI"?v/68.9476:v)}
                   hLines={px36HLines}/>
+                <TraceChart title="PX36_SEL_HI" color={C.violet} yKey="PX36_SEL_HI" fmt={fmtPx} unit={pxUnit}
+                  userMinDisp={_px(userRanges.PX36_SEL_HI.min)} userMaxDisp={_px(userRanges.PX36_SEL_HI.max)}
+                  decimals={units==="SI"?1:2}
+                  onChangeMin={v => _setRange("PX36_SEL_HI", "min", units==="SI"?v/68.9476:v)}
+                  onChangeMax={v => _setRange("PX36_SEL_HI", "max", units==="SI"?v/68.9476:v)}/>
                 <TraceChart title="NOx @ 15 % O₂" color={C.accent} yKey="NOx15"    fmt={fmtNOx} unit="ppmvd"
                   userMinDisp={userRanges.NOx15.min} userMaxDisp={userRanges.NOx15.max} decimals={1}
                   onChangeMin={v => _setRange("NOx15", "min", v)}
@@ -3055,6 +3267,10 @@ function CombustorMappingPanel({
                   userMinDisp={userRanges.MWI.min} userMaxDisp={userRanges.MWI.max} decimals={1}
                   onChangeMin={v => _setRange("MWI", "min", v)}
                   onChangeMax={v => _setRange("MWI", "max", v)}/>
+                <TraceChart title="Net Power (MW)" color={C.accent} yKey="MW" fmt={v=>v.toFixed(1)} unit="MW"
+                  userMinDisp={userRanges.MW.min} userMaxDisp={userRanges.MW.max} decimals={0}
+                  onChangeMin={v => _setRange("MW", "min", v)}
+                  onChangeMax={v => _setRange("MW", "max", v)}/>
               </div>
             )}
           </div>
