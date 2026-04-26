@@ -2343,10 +2343,10 @@ function CombustorMappingPanel({
         const x = dPX36;
         let lo, hi;
         if (x < 4.7)        { lo = 1.5; hi = 3.4; }
-        else if (x > 4.85)  { lo = 6.0; hi = 9.0; }
+        else if (x > 4.85)  { lo = 7.0; hi = 9.0; }
         else {
           const u = (x - 4.7) / 0.15;
-          lo = 1.5 + u * (6.0 - 1.5);
+          lo = 1.5 + u * (7.0 - 1.5);
           hi = 3.4 + u * (9.0 - 3.4);
         }
         n.PX36_SEL.devPct = (lo + Math.random() * (hi - lo)) / 100;
