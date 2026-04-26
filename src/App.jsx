@@ -2924,53 +2924,80 @@ function CombustorMappingPanel({
                 )}
               </div>
             </div>
-            {/* Engine Protection Logic banner — fires when PX36_SEL > 5.5 psi */}
+            {/* Engine Protection Logic banner — fires when PX36_SEL > 5.5 psi.
+                Sized to be impossible to miss: oversized icon, large title,
+                generous padding, intense colour. The operator should read
+                this from across the room. */}
             {protBanner && (() => {
               const isLocked = protBanner.phase === 'locked';
               const accent = isLocked ? C.strong : C.warm;
               const tStr = (()=>{const d=new Date(protBanner.atSeconds*1000);return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;})();
-              // Live countdown for the staging timer (re-evaluated each render via tickCount)
               const remain = protBanner.timerEndsAt ? Math.max(0, protBanner.timerEndsAt - (Date.now()/1000)) : null;
+              const titleText = isLocked
+                ? "ENGINE LOCKED IN BD 4"
+                : (protBanner.cycleCount === 1
+                    ? "STAGED DOWN TO BD 4 — ELEVATED ACOUSTICS"
+                    : `ENGINE PROTECTION CYCLE ${protBanner.cycleCount} OF 3`);
+              const subText = isLocked
+                ? "CONTACT YOUR PROVIDER"
+                : (protBanner.cycleCount > 1 ? `STAGED DOWN TO BD ${protBanner.currentBR}` : null);
               return (
                 <div style={{
-                  marginBottom:12,padding:"12px 16px",
-                  background:`linear-gradient(90deg, ${accent}28 0%, ${accent}10 100%)`,
-                  border:`2px solid ${accent}`,borderRadius:6,
-                  display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:14
+                  marginBottom:14,padding:"18px 22px",
+                  background:`linear-gradient(135deg, ${accent}38 0%, ${accent}18 100%)`,
+                  border:`3px solid ${accent}`,borderRadius:8,
+                  boxShadow:`0 0 0 1px ${accent}25, 0 4px 16px ${accent}30, inset 0 0 0 1px ${accent}25`,
+                  display:"flex",alignItems:"center",justifyContent:"space-between",gap:18,
+                  position:"relative",
                 }}>
-                  <div style={{display:"flex",alignItems:"flex-start",gap:12,flex:1}}>
-                    <span style={{fontSize:22,color:accent,lineHeight:1,marginTop:2}}>{isLocked ? "🔒" : "⚠"}</span>
-                    <div style={{display:"flex",flexDirection:"column",gap:3,flex:1}}>
-                      <div style={{fontSize:13,fontWeight:700,color:accent,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px"}}>
-                        {isLocked
-                          ? "ENGINE LOCKED IN BD 4 — CONTACT YOUR PROVIDER"
-                          : (protBanner.cycleCount === 1
-                              ? "STAGED DOWN TO BD4 DUE TO ELEVATED ACOUSTICS"
-                              : `ENGINE PROTECTION CYCLE ${protBanner.cycleCount} OF 3 — STAGED DOWN TO BD${protBanner.currentBR}`)}
+                  {/* Big icon */}
+                  <div style={{flex:"0 0 auto",fontSize:48,color:accent,lineHeight:1,
+                    filter:`drop-shadow(0 0 10px ${accent}80)`}}>
+                    {isLocked ? "🔒" : "⚠"}
+                  </div>
+                  {/* Body */}
+                  <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:6}}>
+                    <div style={{fontSize:24,fontWeight:800,color:accent,
+                      fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"1.2px",
+                      lineHeight:1.1,textShadow:`0 1px 0 ${C.bg}`}}>
+                      {titleText}
+                    </div>
+                    {subText && (
+                      <div style={{fontSize:18,fontWeight:700,color:accent,
+                        fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"1px",
+                        lineHeight:1.1,opacity:0.95}}>
+                        {subText}
                       </div>
-                      <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.5}}>
-                        PX36_SEL trip at <strong style={{color:accent}}>{fmtPx(protBanner.px36Val)} {pxUnit}</strong> · {tStr}
-                        {!isLocked && (<>
-                          {" · BR="}<strong style={{color:C.violet}}>{protBanner.currentBR}</strong>
-                          {protBanner.nextBR != null && (<>
-                            {" → BR="}<strong style={{color:C.violet}}>{protBanner.nextBR}</strong>{" in "}
-                            <strong style={{color:accent}}>{remain != null ? `${Math.ceil(remain)}s` : "—"}</strong>
-                          </>)}
-                          {protBanner.nextBR == null && <em> · monitoring (will retrigger if PX36 spikes again)</em>}
+                    )}
+                    {/* Detail line */}
+                    <div style={{fontSize:13,color:C.txt,fontFamily:"monospace",
+                      lineHeight:1.55,marginTop:2}}>
+                      PX36_SEL trip at <strong style={{color:accent,fontSize:14}}>{fmtPx(protBanner.px36Val)} {pxUnit}</strong>
+                      &nbsp;·&nbsp; <strong>{tStr}</strong>
+                      {!isLocked && (<>
+                        &nbsp;·&nbsp; BR=<strong style={{color:C.violet}}>{protBanner.currentBR}</strong>
+                        {protBanner.nextBR != null && (<>
+                          &nbsp;→&nbsp; BR=<strong style={{color:C.violet}}>{protBanner.nextBR}</strong>
+                          &nbsp;in&nbsp;<strong style={{color:accent,fontSize:14}}>{remain != null ? `${Math.ceil(remain)} s` : "—"}</strong>
                         </>)}
-                      </div>
-                      <div style={{fontSize:10,color:C.txtMuted,fontStyle:"italic",marginTop:2}}>
-                        {isLocked
-                          ? "This message will not appear on the engine GUI."
-                          : "This tip will not appear on the engine GUI."}
-                      </div>
+                        {protBanner.nextBR == null && <em style={{color:C.txtDim}}>&nbsp;· monitoring (will retrigger if PX36 spikes again)</em>}
+                      </>)}
+                    </div>
+                    {/* Disclaimer */}
+                    <div style={{fontSize:12,color:C.txtMuted,fontStyle:"italic",
+                      marginTop:4,fontFamily:"'Barlow',sans-serif"}}>
+                      {isLocked
+                        ? "This message will not appear on the engine GUI."
+                        : "This tip will not appear on the engine GUI."}
                     </div>
                   </div>
+                  {/* Reset button */}
                   <button onClick={_resetProtection}
                     title={isLocked ? "Reset protection — clear lock and resume normal control" : "Dismiss and abort current protection cycle"}
-                    style={{padding:"5px 11px",fontSize:11,fontWeight:700,
-                      color:accent,background:"transparent",border:`1.5px solid ${accent}`,borderRadius:4,
-                      cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",whiteSpace:"nowrap",flexShrink:0}}>
+                    style={{padding:"10px 18px",fontSize:14,fontWeight:800,
+                      color:C.bg,background:accent,border:`2px solid ${accent}`,borderRadius:6,
+                      cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".7px",
+                      whiteSpace:"nowrap",flexShrink:0,boxShadow:`0 2px 8px ${accent}50`}}>
                     ⟲ RESET
                   </button>
                 </div>
