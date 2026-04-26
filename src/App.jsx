@@ -97,7 +97,13 @@ function interpMappingTable(table, T3_F){
 //   MW ≤ 10 → 1,  ≤ 45 → 2,  ≤ 65 → 4,  ≤ 75 → 6,  > 75 → 7.
 // When emissionsMode is false: the ladder caps at 4 — BRNDMD holds at 4
 // once it steps up from 2 to 4 and never progresses to 6 or 7.
-function calcBRNDMD(MW_net, emissionsMode=true){
+function calcBRNDMD(MW_net, emissionsMode=true, override=null){
+  // override: when a number, the Engine Protection Logic has forced the
+  // burner mode to a specific value (typically 4, 6, or 7). The override
+  // wins over the natural ladder so the protection state machine in the
+  // Live Mapping section can stage the engine through 4 → 6 → 7 transitions
+  // regardless of MW or emissionsMode.
+  if (override != null && Number.isFinite(override)) return Math.round(override);
   const mw=Number(MW_net);
   if(!Number.isFinite(mw)||mw<=0)return 0;
   if(mw<=10)return 1;
@@ -2181,6 +2187,7 @@ function CombustorMappingPanel({
   bkMap,
   mappingTables, setMappingTables,
   emissionsMode, setEmissionsMode,
+  brndmdOverride, setBrndmdOverride,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
@@ -2192,7 +2199,7 @@ function CombustorMappingPanel({
   // table defaults to BRNDMD=2 when BRNDMD=0 or 1 (no table for 1).
   const T3_K_cycle = cycleResult?.T3_K || 0;
   const T3_F_cycle = T3_K_cycle > 0 ? (T3_K_cycle - 273.15) * 9/5 + 32 : 0;
-  const brndmdVal = calcBRNDMD(cycleResult?.MW_net || 0, emissionsMode);
+  const brndmdVal = calcBRNDMD(cycleResult?.MW_net || 0, emissionsMode, brndmdOverride);
   const tableKey = brndmdVal >= 2 ? brndmdVal : 2;
   const activeTable = mappingTables?.[tableKey] || mappingTables?.[2];
   const tableLookup = activeTable ? interpMappingTable(activeTable, T3_F_cycle) : null;
@@ -2287,10 +2294,93 @@ function CombustorMappingPanel({
     cycleRef.current = cycleResult || null;
     emissionsModeRef.current = emissionsMode;
   });
-  // Auto-stage-down trip — fired when live PX36_SEL exceeds 5.5 psi while
-  // Emissions Mode is on. Captures the live value + timestamp so the banner
-  // reads as a real plant alarm. User dismisses with the × button.
-  const [acousticsTrip, setAcousticsTrip] = useState(null);  // {at, px36Val} | null
+  // ── ENGINE PROTECTION LOGIC ─────────────────────────────────────────
+  // Realistic plant control behavior. When live PX36_SEL crosses 5.5 psi,
+  // the engine is auto-staged through a defensive cycle:
+  //
+  //     (idle) → BD4 (50 s) → BD6 (30 s) → BD7 (monitoring)
+  //
+  // If PX36_SEL trips again from BD6 or BD7 (or from idle after the cycle
+  // completes), we restart the cycle and increment cycleCount. After 3
+  // such cycles, the engine LOCKS at BD4 with a "contact your provider"
+  // notice — operator action required to reset.
+  //
+  // State machine lives in a ref so the live-mapping interval callback
+  // reads the latest value without re-creating the interval. Banner state
+  // mirrors it for React rendering.
+  const protRef = useRef({
+    state: 'idle',          // 'idle' | 'at4' | 'at6' | 'at7' | 'locked'
+    cycleCount: 0,
+    timer: null,            // setTimeout handle for current phase
+  });
+  const [protBanner, setProtBanner] = useState(null);
+    // { phase: 'staged' | 'locked', cycleCount, atSeconds, px36Val,
+    //   currentBR: 4|6|7, nextBR?: 6|7|null, timerEndsAt?: epochSec }
+  const _clearProtTimer = () => {
+    if (protRef.current.timer) {
+      clearTimeout(protRef.current.timer);
+      protRef.current.timer = null;
+    }
+  };
+  // Push a banner snapshot capturing the current protection state.
+  const _bannerStaged = (px36Val, currentBR, nextBR, timerSec) => {
+    setProtBanner({
+      phase: 'staged',
+      cycleCount: protRef.current.cycleCount,
+      atSeconds: Date.now() / 1000,
+      px36Val, currentBR, nextBR,
+      timerEndsAt: timerSec ? (Date.now() / 1000) + timerSec : null,
+    });
+  };
+  const _bannerLocked = (px36Val) => {
+    setProtBanner({
+      phase: 'locked',
+      cycleCount: protRef.current.cycleCount,
+      atSeconds: Date.now() / 1000,
+      px36Val, currentBR: 4, nextBR: null, timerEndsAt: null,
+    });
+  };
+  // Trigger entry into the protection cycle (called when PX36 > 5.5 from
+  // any non-protective state).
+  const _triggerProtection = (px36Val) => {
+    protRef.current.cycleCount++;
+    if (protRef.current.cycleCount > 3) {
+      // LOCK at BD4, no more auto-staging
+      _clearProtTimer();
+      protRef.current.state = 'locked';
+      if (setBrndmdOverride) setBrndmdOverride(4);
+      _bannerLocked(px36Val);
+      return;
+    }
+    // Start a fresh cycle: BD4 (50 s) → BD6 (30 s) → BD7
+    _clearProtTimer();
+    protRef.current.state = 'at4';
+    if (setBrndmdOverride) setBrndmdOverride(4);
+    _bannerStaged(px36Val, 4, 6, 50);
+    protRef.current.timer = setTimeout(() => {
+      // BD4 → BD6
+      protRef.current.state = 'at6';
+      if (setBrndmdOverride) setBrndmdOverride(6);
+      _bannerStaged(px36Val, 6, 7, 30);
+      protRef.current.timer = setTimeout(() => {
+        // BD6 → BD7 (clear override, ladder takes over and gives 7 at high MW)
+        protRef.current.state = 'at7';
+        if (setBrndmdOverride) setBrndmdOverride(7);
+        _bannerStaged(px36Val, 7, null, null);
+        protRef.current.timer = null;
+      }, 30 * 1000);
+    }, 50 * 1000);
+  };
+  // Operator dismiss / reset — clears the override and resets the counter.
+  const _resetProtection = () => {
+    _clearProtTimer();
+    protRef.current.state = 'idle';
+    protRef.current.cycleCount = 0;
+    if (setBrndmdOverride) setBrndmdOverride(null);
+    setProtBanner(null);
+  };
+  // Cleanup timer on unmount
+  useEffect(() => () => _clearProtTimer(), []);
 
   // smoothstep: 3u² − 2u³. Smooth tangent at 0 and 1, exact arrival at u=1.
   const _smoothstep = u => u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
@@ -2366,13 +2456,15 @@ function CombustorMappingPanel({
       }
       const px36Val = dPX36 * (1 + n.PX36_SEL.sign * n.PX36_SEL.devPct);
 
-      // ── Auto-stage-down: if PX36_SEL excursion crosses the 5.5 psi
-      // trip line WHILE Emissions Mode is on, force-disable Emissions
-      // Mode (caps BRNDMD at 4) and pop a banner. Only fires on the
-      // ON→OFF transition so we don't repeat the action every tick.
-      if (px36Val > 5.5 && emissionsModeRef.current && setEmissionsMode) {
-        setEmissionsMode(false);
-        setAcousticsTrip({ at: now, px36Val });
+      // ── Engine Protection Logic — auto-stage on elevated acoustics ──
+      // Triggered when PX36_SEL > 5.5 psi from any state EXCEPT 'at4'
+      // (already protecting) or 'locked' (no more auto-staging). The 'at6'
+      // and 'at7' transitions handle the user-described "immediate excursion"
+      // case — if PX36 trips during the BD6 dwell, we restart the cycle.
+      if (px36Val > 5.5
+          && protRef.current.state !== 'at4'
+          && protRef.current.state !== 'locked') {
+        _triggerProtection(px36Val);
       }
 
       // NOx15 — 20 s sine, re-roll amp at wave end
@@ -2832,34 +2924,58 @@ function CombustorMappingPanel({
                 )}
               </div>
             </div>
-            {/* Acoustics-trip banner — auto-fired when PX36_SEL crosses 5.5 psi */}
-            {acousticsTrip && (
-              <div style={{
-                marginBottom:12,padding:"10px 14px",
-                background:`linear-gradient(90deg, ${C.strong}25 0%, ${C.warm}15 100%)`,
-                border:`1.5px solid ${C.strong}80`,borderRadius:6,
-                display:"flex",alignItems:"center",justifyContent:"space-between",gap:14
-              }}>
-                <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <span style={{fontSize:18,color:C.strong}}>⚠</span>
-                  <div style={{display:"flex",flexDirection:"column",gap:2}}>
-                    <div style={{fontSize:12.5,fontWeight:700,color:C.strong,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>
-                      STAGED DOWN TO BD4 DUE TO ELEVATED ACOUSTICS
-                    </div>
-                    <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}}>
-                      PX36_SEL hit <strong style={{color:C.warm}}>{fmtPx(acousticsTrip.px36Val)} {pxUnit}</strong> at <strong>{(()=>{const d=new Date(acousticsTrip.at*1000);return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;})()}</strong> — Emissions Mode auto-disabled (BRNDMD capped at 4).
+            {/* Engine Protection Logic banner — fires when PX36_SEL > 5.5 psi */}
+            {protBanner && (() => {
+              const isLocked = protBanner.phase === 'locked';
+              const accent = isLocked ? C.strong : C.warm;
+              const tStr = (()=>{const d=new Date(protBanner.atSeconds*1000);return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;})();
+              // Live countdown for the staging timer (re-evaluated each render via tickCount)
+              const remain = protBanner.timerEndsAt ? Math.max(0, protBanner.timerEndsAt - (Date.now()/1000)) : null;
+              return (
+                <div style={{
+                  marginBottom:12,padding:"12px 16px",
+                  background:`linear-gradient(90deg, ${accent}28 0%, ${accent}10 100%)`,
+                  border:`2px solid ${accent}`,borderRadius:6,
+                  display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:14
+                }}>
+                  <div style={{display:"flex",alignItems:"flex-start",gap:12,flex:1}}>
+                    <span style={{fontSize:22,color:accent,lineHeight:1,marginTop:2}}>{isLocked ? "🔒" : "⚠"}</span>
+                    <div style={{display:"flex",flexDirection:"column",gap:3,flex:1}}>
+                      <div style={{fontSize:13,fontWeight:700,color:accent,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px"}}>
+                        {isLocked
+                          ? "ENGINE LOCKED IN BD 4 — CONTACT YOUR PROVIDER"
+                          : (protBanner.cycleCount === 1
+                              ? "STAGED DOWN TO BD4 DUE TO ELEVATED ACOUSTICS"
+                              : `ENGINE PROTECTION CYCLE ${protBanner.cycleCount} OF 3 — STAGED DOWN TO BD${protBanner.currentBR}`)}
+                      </div>
+                      <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.5}}>
+                        PX36_SEL trip at <strong style={{color:accent}}>{fmtPx(protBanner.px36Val)} {pxUnit}</strong> · {tStr}
+                        {!isLocked && (<>
+                          {" · BR="}<strong style={{color:C.violet}}>{protBanner.currentBR}</strong>
+                          {protBanner.nextBR != null && (<>
+                            {" → BR="}<strong style={{color:C.violet}}>{protBanner.nextBR}</strong>{" in "}
+                            <strong style={{color:accent}}>{remain != null ? `${Math.ceil(remain)}s` : "—"}</strong>
+                          </>)}
+                          {protBanner.nextBR == null && <em> · monitoring (will retrigger if PX36 spikes again)</em>}
+                        </>)}
+                      </div>
+                      <div style={{fontSize:10,color:C.txtMuted,fontStyle:"italic",marginTop:2}}>
+                        {isLocked
+                          ? "This message will not appear on the engine GUI."
+                          : "This tip will not appear on the engine GUI."}
+                      </div>
                     </div>
                   </div>
+                  <button onClick={_resetProtection}
+                    title={isLocked ? "Reset protection — clear lock and resume normal control" : "Dismiss and abort current protection cycle"}
+                    style={{padding:"5px 11px",fontSize:11,fontWeight:700,
+                      color:accent,background:"transparent",border:`1.5px solid ${accent}`,borderRadius:4,
+                      cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",whiteSpace:"nowrap",flexShrink:0}}>
+                    ⟲ RESET
+                  </button>
                 </div>
-                <button onClick={() => setAcousticsTrip(null)}
-                  title="Dismiss alarm"
-                  style={{padding:"4px 10px",fontSize:14,fontWeight:700,color:C.txtDim,
-                    background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,
-                    cursor:"pointer",lineHeight:1,fontFamily:"monospace"}}>
-                  ×
-                </button>
-              </div>
-            )}
+              );
+            })()}
             {!mappingStartedAt ? (
               <div style={{padding:"40px 24px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:8,color:C.txtMuted,fontSize:12,fontFamily:"'Barlow',sans-serif"}}>
                 Click <strong style={{color:C.good}}>▶ START MAPPING</strong> to begin a real-time recording. The 10-minute window will fill in over time, one sample per second.
@@ -3212,6 +3328,7 @@ function OperationsSummaryPanel({
   // cycle sweep args
   cycleEngine, cyclePamb, cycleTamb, cycleRH, cycleLoad, cycleTcool, cycleAirFrac,
   emissionsMode,
+  brndmdOverride,
   // Mapping panel state — for per-load NOx15/CO15/BRNDMD in the sweep
   mapW36w3, mapFracIP, mapFracOP, mapFracIM, mapFracOM,
   mappingTables, emTfMults,
@@ -3459,7 +3576,7 @@ function OperationsSummaryPanel({
     CO2:CO2_pct_T4||null,
     NOx15:NOx_15||null,
     CO15:CO_15||null,
-    brndmd:cycleResult?calcBRNDMD(cycleResult.MW_net, emissionsMode):null,
+    brndmd:cycleResult?calcBRNDMD(cycleResult.MW_net, emissionsMode, brndmdOverride):null,
   };
 
   // Linear interpolation helper for sweep fallback (when live value missing).
@@ -3568,7 +3685,7 @@ function OperationsSummaryPanel({
           tip="Net shaft power divided by fuel LHV thermal input. Equivalent to 1 / HR in consistent units."/>
         <Hero flex={0} small label="Heat Rate" value={cycleResult.heat_rate_kJ_per_kWh.toFixed(0)} unit="kJ/kWh" color={C.accent3}
           tip="Fuel heat input per unit electrical output. Lower is better."/>
-        <Hero flex={0} small label="BRNDMD" value={String(calcBRNDMD(cycleResult.MW_net, emissionsMode))} unit="" color={C.violet}
+        <Hero flex={0} small label="BRNDMD" value={String(calcBRNDMD(cycleResult.MW_net, emissionsMode, brndmdOverride))} unit="" color={C.violet}
           tip={`Burner mode — piecewise-constant function of net shaft power (MW). Emissions Mode is currently ${emissionsMode?"ENABLED — full ladder 1/2/4/6/7":"DISABLED — holds at 4 for MW > 45"}. Breakpoints (emissions ON): ≤10 → 1, ≤45 → 2, ≤65 → 4, ≤75 → 6, >75 → 7.`}/>
         <Hero flex={0} small label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
           tip="Bleed valve position — 0 % = closed, 100 % = fully open. Auto schedule: 100 % below 75 % load, 0 % above 95 %, linear between. Effective air dumped = valve % × Max Bleed split %."/>
@@ -3628,7 +3745,7 @@ function OperationsSummaryPanel({
           subtle placeholder so the panel never breaks.
          ═════════════════════════════════════════════════════════════════ */}
       {(() => {
-        const _br = cycleResult ? calcBRNDMD(cycleResult.MW_net, emissionsMode) : null;
+        const _br = cycleResult ? calcBRNDMD(cycleResult.MW_net, emissionsMode, brndmdOverride) : null;
         const _imgMap = {1:"BD2", 2:"BD2", 4:"BD4", 6:"BD4", 7:"BD7"};
         const _imgName = _br!=null ? (_imgMap[_br] || "BD2") : null;
         const _imgSrc = _imgName ? `/burner-modes/${_imgName}.png` : null;
@@ -3937,6 +4054,10 @@ export default function App(){
   // (combustor stays in a simpler mode rather than progressing to high-
   // load modes). Referenced by calcBRNDMD() and displayed in Ops Summary.
   const[emissionsMode,setEmissionsMode]=useState(true);
+  // Engine Protection Logic override — set by the Live Mapping panel when
+  // it auto-stages the engine due to elevated PX36_SEL acoustics. When
+  // non-null, this value wins over the natural ladder in calcBRNDMD.
+  const[brndmdOverride,setBrndmdOverride]=useState(null);  // null | 4 | 6 | 7
   const[cycleTcool,setCycleTcool]=useState(288.15);    // K (15 C) — LMS100 IC supply
   // Combustor-air fraction is the FLAME-ZONE share of combustor airflow
   // (m_flame / m_comb_air). It is a pure intra-combustor split and does NOT
@@ -4146,7 +4267,7 @@ export default function App(){
   // the three circuit φ values into state so bkMap and Ops Summary always
   // see fresh values without having to visit the Mapping panel first.
   const _T3_F_app = cycleResult?.T3_K ? (cycleResult.T3_K - 273.15) * 9/5 + 32 : 0;
-  const _brndmd_app = calcBRNDMD(cycleResult?.MW_net || 0, emissionsMode);
+  const _brndmd_app = calcBRNDMD(cycleResult?.MW_net || 0, emissionsMode, brndmdOverride);
   const _tblKey_app = _brndmd_app >= 2 ? _brndmd_app : 2;
   const _tbl_app = mappingTables?.[_tblKey_app] || mappingTables?.[2];
   const _tblLookup_app = _tbl_app ? interpMappingTable(_tbl_app, _T3_F_app) : null;
@@ -4459,6 +4580,7 @@ export default function App(){
               phiIM={mapPhiIM} setPhiIM={setMapPhiIM}
               mappingTables={mappingTables} setMappingTables={setMappingTables}
               emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
+              brndmdOverride={brndmdOverride} setBrndmdOverride={setBrndmdOverride}
             />}
             {tab==="summary"&&<OperationsSummaryPanel
               fuel={fuel} ox={ox} Tfuel={T_fuel}
@@ -4474,6 +4596,7 @@ export default function App(){
               cycleRH={cycleRH} cycleLoad={cycleLoad} cycleTcool={cycleTcool}
               cycleAirFrac={cycleAirFrac}
               emissionsMode={emissionsMode}
+              brndmdOverride={brndmdOverride}
               // Mapping panel state — enables per-load NOx15/CO15/BRNDMD in the load sweep
               mapW36w3={mapW36w3} mapFracIP={mapFracIP} mapFracOP={mapFracOP}
               mapFracIM={mapFracIM} mapFracOM={mapFracOM}
