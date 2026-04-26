@@ -2543,7 +2543,11 @@ function CombustorMappingPanel({
               // TRIP fires — engine shutdown sequence begins
               tr.tripped = true; tr.tripAt = now; tr.tripCause = 'phi_ip';
               _updateTarget(now, m.PX36_SEL_HI, 100);  // instant spike to 100
-              setTripBanner({ atSec: now, cause: 'phi_ip', phi: pIp, thresh: tr.phiIp.thresh, brndmd: _br });
+              setTripBanner({
+                atSec: now, px36HiVal: 100,
+                brndmd: _br, loadPct,
+                phiIp: pIp, phiOp: Number(phiOP)||0, phiIm: Number(phiIM)||0,
+              });
               _resetProtection();  // cancel any in-progress protection cycle
             }
           } else {
@@ -2565,7 +2569,11 @@ function CombustorMappingPanel({
             if (pOp >= tr.phiOp.thresh) {
               tr.tripped = true; tr.tripAt = now; tr.tripCause = 'phi_op';
               _updateTarget(now, m.PX36_SEL_HI, 100);
-              setTripBanner({ atSec: now, cause: 'phi_op', phi: pOp, thresh: tr.phiOp.thresh, brndmd: _br });
+              setTripBanner({
+                atSec: now, px36HiVal: 100,
+                brndmd: _br, loadPct,
+                phiIp: Number(phiIP)||0, phiOp: pOp, phiIm: Number(phiIM)||0,
+              });
               _resetProtection();
             }
           } else {
@@ -3134,9 +3142,11 @@ function CombustorMappingPanel({
               const tStr = (()=>{const d=new Date(tripBanner.atSec*1000);return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;})();
               const releaseAt = new Date((tripBanner.atSec + LOCKOUT_SEC) * 1000);
               const releaseStr = `${String(releaseAt.getHours()).padStart(2,"0")}:${String(releaseAt.getMinutes()).padStart(2,"0")}:${String(releaseAt.getSeconds()).padStart(2,"0")}`;
-              const causeText = tripBanner.cause === 'phi_ip'
-                ? `phi_IP = ${tripBanner.phi.toFixed(3)} exceeded random trip ${tripBanner.thresh.toFixed(3)} at BR=7`
-                : `phi_OP = ${tripBanner.phi.toFixed(3)} exceeded random trip ${tripBanner.thresh.toFixed(3)} at BR=${tripBanner.brndmd}`;
+              // Operator-facing message — present the trip CONDITION (the
+              // PX36_SEL_HI value and the live mapping settings) without
+              // disclosing the underlying random-trigger logic. The user
+              // is expected to recognise patterns in the data themselves
+              // across multiple trips.
               return (
                 <div style={{
                   marginBottom:14,padding:"22px 26px",
@@ -3168,9 +3178,20 @@ function CombustorMappingPanel({
                         REMAINING · auto-release at <strong style={{color:C.txt,fontFamily:"monospace"}}>{releaseStr}</strong>
                       </div>
                     </div>
+                    {/* Trip condition — pure data, no cause disclosure */}
                     <div style={{fontSize:13,color:C.txt,fontFamily:"monospace",
-                      lineHeight:1.5,marginTop:5}}>
-                      {causeText} · tripped at <strong>{tStr}</strong>
+                      lineHeight:1.55,marginTop:6}}>
+                      <strong style={{color:C.warm}}>PX36_SEL_HI = {fmtPx(tripBanner.px36HiVal)} {pxUnit}</strong>
+                      &nbsp;·&nbsp; tripped at <strong>{tStr}</strong>
+                    </div>
+                    <div style={{fontSize:12,color:C.txtDim,fontFamily:"monospace",
+                      lineHeight:1.5,marginTop:2,letterSpacing:".2px"}}>
+                      Mapping at trip:&nbsp;
+                      Load <strong style={{color:C.txt}}>{tripBanner.loadPct.toFixed(0)} %</strong>
+                      &nbsp;·&nbsp; BR <strong style={{color:C.violet}}>{tripBanner.brndmd}</strong>
+                      &nbsp;·&nbsp; φ<sub>IP</sub> <strong style={{color:C.txt}}>{tripBanner.phiIp.toFixed(3)}</strong>
+                      &nbsp;·&nbsp; φ<sub>OP</sub> <strong style={{color:C.txt}}>{tripBanner.phiOp.toFixed(3)}</strong>
+                      &nbsp;·&nbsp; φ<sub>IM</sub> <strong style={{color:C.txt}}>{tripBanner.phiIm.toFixed(3)}</strong>
                     </div>
                     <div style={{fontSize:12,color:C.txtMuted,fontStyle:"italic",
                       marginTop:4,fontFamily:"'Barlow',sans-serif"}}>
