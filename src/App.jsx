@@ -2180,7 +2180,7 @@ function CombustorMappingPanel({
   phiIP, setPhiIP, phiOP, setPhiOP, phiIM, setPhiIM,
   bkMap,
   mappingTables, setMappingTables,
-  emissionsMode,
+  emissionsMode, setEmissionsMode,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
@@ -2275,11 +2275,22 @@ function CombustorMappingPanel({
     NOx15:    { amp: 0.04, waveStart: 0 },
     CO15:     { amp: 0.06, waveStart: 0 },
   });
-  // Refs that snapshot the latest correlation/cycle values so the interval
-  // callback always reads fresh data without re-creating the interval.
+  // Refs that snapshot the latest correlation/cycle/emissionsMode values so
+  // the interval callback always reads fresh data without re-creating the
+  // interval. emissionsModeRef lets the auto-stage-down trigger read the
+  // CURRENT value (not the value when the interval was first created).
   const corrRef = useRef(null);
   const cycleRef = useRef(null);
-  useEffect(() => { corrRef.current = R?.correlations || null; cycleRef.current = cycleResult || null; });
+  const emissionsModeRef = useRef(emissionsMode);
+  useEffect(() => {
+    corrRef.current = R?.correlations || null;
+    cycleRef.current = cycleResult || null;
+    emissionsModeRef.current = emissionsMode;
+  });
+  // Auto-stage-down trip — fired when live PX36_SEL exceeds 5.5 psi while
+  // Emissions Mode is on. Captures the live value + timestamp so the banner
+  // reads as a real plant alarm. User dismisses with the × button.
+  const [acousticsTrip, setAcousticsTrip] = useState(null);  // {at, px36Val} | null
 
   // smoothstep: 3u² − 2u³. Smooth tangent at 0 and 1, exact arrival at u=1.
   const _smoothstep = u => u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
@@ -2354,6 +2365,15 @@ function CombustorMappingPanel({
         n.PX36_SEL.nextChange = now + 1 + Math.random();  // 1-2 s
       }
       const px36Val = dPX36 * (1 + n.PX36_SEL.sign * n.PX36_SEL.devPct);
+
+      // ── Auto-stage-down: if PX36_SEL excursion crosses the 5.5 psi
+      // trip line WHILE Emissions Mode is on, force-disable Emissions
+      // Mode (caps BRNDMD at 4) and pop a banner. Only fires on the
+      // ON→OFF transition so we don't repeat the action every tick.
+      if (px36Val > 5.5 && emissionsModeRef.current && setEmissionsMode) {
+        setEmissionsMode(false);
+        setAcousticsTrip({ at: now, px36Val });
+      }
 
       // NOx15 — 20 s sine, re-roll amp at wave end
       if (now - n.NOx15.waveStart >= 20) {
@@ -2812,6 +2832,34 @@ function CombustorMappingPanel({
                 )}
               </div>
             </div>
+            {/* Acoustics-trip banner — auto-fired when PX36_SEL crosses 5.5 psi */}
+            {acousticsTrip && (
+              <div style={{
+                marginBottom:12,padding:"10px 14px",
+                background:`linear-gradient(90deg, ${C.strong}25 0%, ${C.warm}15 100%)`,
+                border:`1.5px solid ${C.strong}80`,borderRadius:6,
+                display:"flex",alignItems:"center",justifyContent:"space-between",gap:14
+              }}>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <span style={{fontSize:18,color:C.strong}}>⚠</span>
+                  <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                    <div style={{fontSize:12.5,fontWeight:700,color:C.strong,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>
+                      STAGED DOWN TO BD4 DUE TO ELEVATED ACOUSTICS
+                    </div>
+                    <div style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}}>
+                      PX36_SEL hit <strong style={{color:C.warm}}>{fmtPx(acousticsTrip.px36Val)} {pxUnit}</strong> at <strong>{(()=>{const d=new Date(acousticsTrip.at*1000);return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;})()}</strong> — Emissions Mode auto-disabled (BRNDMD capped at 4).
+                    </div>
+                  </div>
+                </div>
+                <button onClick={() => setAcousticsTrip(null)}
+                  title="Dismiss alarm"
+                  style={{padding:"4px 10px",fontSize:14,fontWeight:700,color:C.txtDim,
+                    background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,
+                    cursor:"pointer",lineHeight:1,fontFamily:"monospace"}}>
+                  ×
+                </button>
+              </div>
+            )}
             {!mappingStartedAt ? (
               <div style={{padding:"40px 24px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:8,color:C.txtMuted,fontSize:12,fontFamily:"'Barlow',sans-serif"}}>
                 Click <strong style={{color:C.good}}>▶ START MAPPING</strong> to begin a real-time recording. The 10-minute window will fill in over time, one sample per second.
@@ -4410,7 +4458,7 @@ export default function App(){
               phiOP={mapPhiOP} setPhiOP={setMapPhiOP}
               phiIM={mapPhiIM} setPhiIM={setMapPhiIM}
               mappingTables={mappingTables} setMappingTables={setMappingTables}
-              emissionsMode={emissionsMode}
+              emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
             />}
             {tab==="summary"&&<OperationsSummaryPanel
               fuel={fuel} ox={ox} Tfuel={T_fuel}
