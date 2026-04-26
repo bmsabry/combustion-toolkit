@@ -29,7 +29,9 @@ Inputs:
                       values, converted from K to °F
     T3      (°F)   = cycle T3 (K) → °F
     P3      (psia) = cycle P3 (bar) × 14.5038
-    C3_eff  (%)    = 0.8 × C2H6% + C3H8%
+    C3_eff  (%)    = 0.8·(C2H6+C2H4+C2H2) + 1.0·C3H8 + 1.2·C4H10
+                     + 1.4·C5H12 + 1.6·C6H14 + 1.8·C7H16 + 2.0·C8H18
+                     (coefficient = 0.2 × (n+2), n = carbon count)
     N2      (%)    = fuel N2 mole %
     Phi_OP         = user-set outer-pilot equivalence ratio
 """
@@ -233,11 +235,33 @@ def run(
     T3_F     = _K_to_F(T3_K)
     P3_psia  = float(P3_bar) * 14.5038
 
-    # C3_effective and N2 from fuel composition
-    C2H6_pct = float(fuel_pct.get("C2H6", 0.0))
-    C3H8_pct = float(fuel_pct.get("C3H8", 0.0))
-    C3_eff   = 0.8 * C2H6_pct + C3H8_pct
-    N2_pct   = float(fuel_pct.get("N2",   0.0))
+    # Propane-equivalent ("C3_eff") rolls every higher-than-CH4 hydrocarbon
+    # into a single equivalent C3H8 mole-percent that drives the NOx/CO/PX36
+    # correlation. Coefficient pattern: 0.2 × (n + 2) where n = carbon count
+    # — anchored at the original calibration points C2=0.8 and C3=1.0 then
+    # extrapolated by +0.2 per added carbon. Captures the incremental T_AFT
+    # rise and chain-reactivity increase of higher hydrocarbons.
+    #
+    #   Species              n    coefficient
+    #   C2H6 / C2H4 / C2H2   2    0.8
+    #   C3H8                 3    1.0
+    #   C4H10                4    1.2
+    #   C5H12                5    1.4
+    #   C6H14                6    1.6
+    #   C7H16                7    1.8
+    #   C8H18                8    2.0
+    C2_pct = (float(fuel_pct.get("C2H6", 0.0))
+              + float(fuel_pct.get("C2H4", 0.0))
+              + float(fuel_pct.get("C2H2", 0.0)))
+    C3_pct = float(fuel_pct.get("C3H8",  0.0))
+    C4_pct = float(fuel_pct.get("C4H10", 0.0))
+    C5_pct = float(fuel_pct.get("C5H12", 0.0))
+    C6_pct = float(fuel_pct.get("C6H14", 0.0))
+    C7_pct = float(fuel_pct.get("C7H16", 0.0))
+    C8_pct = float(fuel_pct.get("C8H18", 0.0))
+    C3_eff = (0.8 * C2_pct + 1.0 * C3_pct + 1.2 * C4_pct + 1.4 * C5_pct
+              + 1.6 * C6_pct + 1.8 * C7_pct + 2.0 * C8_pct)
+    N2_pct = float(fuel_pct.get("N2", 0.0))
 
     # --- correlation chain ---------------------------------------------------
     # Phi_IP contribution is one-sided: only the portion of phi_IP ABOVE
