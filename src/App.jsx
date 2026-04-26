@@ -2209,6 +2209,186 @@ function CombustorMappingPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tableKey]);
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // LIVE MAPPING — real-time gas-turbine instrument simulation
+  //
+  // Plays a 4-trace dashboard at 1 Hz showing what the operator would see on
+  // a control room HMI. Each trace centres on the cycle/correlation mean and
+  // adds realistic instrument noise. When the user changes a parameter, the
+  // displayed mean lags behind with sensor-realistic dead-time + smoothstep:
+  //
+  //          Metric        Dead time   Transition   Noise model
+  //   ─────────────────  ───────────  ──────────  ─────────────────────────
+  //   PX36_SEL              0 s         1 s        random step every 1-2 s,
+  //                                                amp depends on mean band
+  //   NOx15                83 s         7 s        sine wave, period 20 s,
+  //                                                amp re-rolled each wave
+  //   CO15                 83 s         7 s        same as NOx15
+  //   MWI_WIM               2 s         5 s        sine 1 s period, ±4 %
+  //   MWI_GC              415 s         5 s        sine 120 s period, ±0.5 %
+  //
+  // Buffer is a 600-sample ring (10 minutes at 1 Hz). Stored in a useRef so
+  // mutating it doesn't trigger React re-render — a separate tick counter
+  // useState bumps once per second to redraw the charts.
+  // ═══════════════════════════════════════════════════════════════════════
+  const [mappingActive, setMappingActive] = useState(false);
+  const [mappingStartedAt, setMappingStartedAt] = useState(null);  // wall-clock seconds since epoch
+  const [tickCount, setTickCount] = useState(0);  // drives chart re-render
+  const bufferRef = useRef([]);                   // up to 600 samples
+  // Per-metric mean tracker — captures the lagging "what the instrument is
+  // displaying right now" given the dead-time + smoothstep response model.
+  const meansRef = useRef({
+    PX36_SEL: { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 0,   transT: 1 },
+    NOx15:    { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 83,  transT: 7 },
+    CO15:     { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 83,  transT: 7 },
+    MWI_WIM:  { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 2,   transT: 5 },
+    MWI_GC:   { displayed: 0, target: 0, oldVal: 0, changeAt: 0, deadT: 415, transT: 5 },
+  });
+  // Per-metric noise generator state.
+  const noiseRef = useRef({
+    PX36_SEL: { devPct: 0, sign: 1, nextChange: 0 },
+    NOx15:    { amp: 0.04, waveStart: 0 },
+    CO15:     { amp: 0.06, waveStart: 0 },
+  });
+  // Refs that snapshot the latest correlation/cycle values so the interval
+  // callback always reads fresh data without re-creating the interval.
+  const corrRef = useRef(null);
+  const cycleRef = useRef(null);
+  useEffect(() => { corrRef.current = R?.correlations || null; cycleRef.current = cycleResult || null; });
+
+  // smoothstep: 3u² − 2u³. Smooth tangent at 0 and 1, exact arrival at u=1.
+  const _smoothstep = u => u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
+  const _displayedMean = (now, m) => {
+    if (m.target === m.oldVal) return m.target;
+    const t = now - m.changeAt;
+    if (t < m.deadT) return m.oldVal;
+    if (t < m.deadT + m.transT) {
+      const u = (t - m.deadT) / m.transT;
+      return m.oldVal + (m.target - m.oldVal) * _smoothstep(u);
+    }
+    return m.target;
+  };
+  const _updateTarget = (now, m, newTarget) => {
+    if (Math.abs(newTarget - m.target) < 1e-9) return;
+    // Capture current displayed value as the new "old" so mid-transition
+    // restarts blend smoothly from the current point, not from the original.
+    m.oldVal = _displayedMean(now, m);
+    m.target = newTarget;
+    m.changeAt = now;
+  };
+
+  // ── 1 Hz tick loop ──
+  useEffect(() => {
+    if (!mappingActive) return;
+    const id = setInterval(() => {
+      const now = Date.now() / 1000;
+      const corrLatest = corrRef.current;
+      const cycLatest = cycleRef.current;
+      const m = meansRef.current;
+
+      // Update targets from latest correlation/cycle (might have changed).
+      if (corrLatest) {
+        _updateTarget(now, m.PX36_SEL, corrLatest.PX36_SEL);
+        _updateTarget(now, m.NOx15,    corrLatest.NOx15);
+        _updateTarget(now, m.CO15,     corrLatest.CO15);
+      }
+      const mwiCycle = cycLatest?.fuel_flexibility?.mwi || 0;
+      if (mwiCycle > 0) {
+        _updateTarget(now, m.MWI_WIM, mwiCycle * 0.99);  // Wobbe-meter reads 1% low
+        _updateTarget(now, m.MWI_GC,  mwiCycle);          // GC matches cycle exactly
+      }
+
+      // Compute displayed (lagging) means.
+      const dPX36 = _displayedMean(now, m.PX36_SEL);
+      const dNOx  = _displayedMean(now, m.NOx15);
+      const dCO   = _displayedMean(now, m.CO15);
+      const dWIM  = _displayedMean(now, m.MWI_WIM);
+      const dGC   = _displayedMean(now, m.MWI_GC);
+
+      // Apply per-metric noise. PX36_SEL: random step jitter, mean-band
+      // dependent amplitude. NOx15/CO15: sine with re-rolled amplitude per
+      // 20 s wave. MWI: continuous sine, fixed amplitude.
+      const n = noiseRef.current;
+      // PX36_SEL — band ramps with dPX36 (psi units, raw correlation scale)
+      if (now >= n.PX36_SEL.nextChange) {
+        const x = dPX36;
+        let lo, hi;
+        if (x < 4.7)        { lo = 2.5; hi = 4.5; }
+        else if (x > 4.85)  { lo = 6.0; hi = 9.0; }
+        else {
+          const u = (x - 4.7) / 0.15;
+          lo = 2.5 + u * (6.0 - 2.5);
+          hi = 4.5 + u * (9.0 - 4.5);
+        }
+        n.PX36_SEL.devPct = (lo + Math.random() * (hi - lo)) / 100;
+        n.PX36_SEL.sign   = Math.random() < 0.5 ? -1 : 1;
+        n.PX36_SEL.nextChange = now + 1 + Math.random();  // 1-2 s
+      }
+      const px36Val = dPX36 * (1 + n.PX36_SEL.sign * n.PX36_SEL.devPct);
+
+      // NOx15 — 20 s sine, re-roll amp at wave end
+      if (now - n.NOx15.waveStart >= 20) {
+        n.NOx15.amp = (3 + Math.random() * 2) / 100;  // 3–5 %
+        n.NOx15.waveStart = now;
+      }
+      const noxPhase = ((now - n.NOx15.waveStart) / 20) * 2 * Math.PI;
+      const nox15Val = dNOx * (1 + n.NOx15.amp * Math.sin(noxPhase));
+
+      // CO15 — 20 s sine, re-roll amp at wave end
+      if (now - n.CO15.waveStart >= 20) {
+        n.CO15.amp = (5 + Math.random() * 2.5) / 100;  // 5–7.5 %
+        n.CO15.waveStart = now;
+      }
+      const coPhase = ((now - n.CO15.waveStart) / 20) * 2 * Math.PI;
+      const co15Val = dCO * (1 + n.CO15.amp * Math.sin(coPhase));
+
+      // MWI_WIM — continuous 1 s sine, ±4 %
+      const wimVal = dWIM * (1 + 0.04 * Math.sin((now % 1) * 2 * Math.PI));
+      // MWI_GC — continuous 120 s sine, ±0.5 %
+      const gcVal  = dGC  * (1 + 0.005 * Math.sin((now / 120) * 2 * Math.PI));
+
+      bufferRef.current.push({
+        t: now,
+        PX36_SEL: px36Val, NOx15: nox15Val, CO15: co15Val,
+        MWI_WIM: wimVal, MWI_GC: gcVal,
+      });
+      if (bufferRef.current.length > 600) bufferRef.current.shift();
+      setTickCount(c => c + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [mappingActive]);
+
+  const startMapping = () => {
+    const now = Date.now() / 1000;
+    bufferRef.current = [];
+    // Seed targets with current means so the very first tick has something
+    // sensible to centre on (rather than oscillating around 0).
+    const m = meansRef.current;
+    const c0 = R?.correlations;
+    if (c0) {
+      ["PX36_SEL","NOx15","CO15"].forEach(k => {
+        m[k].displayed = m[k].target = m[k].oldVal = c0[k] || 0; m[k].changeAt = now;
+      });
+    }
+    const mwi0 = cycleResult?.fuel_flexibility?.mwi || 0;
+    m.MWI_WIM.displayed = m.MWI_WIM.target = m.MWI_WIM.oldVal = mwi0 * 0.99; m.MWI_WIM.changeAt = now;
+    m.MWI_GC.displayed  = m.MWI_GC.target  = m.MWI_GC.oldVal  = mwi0;        m.MWI_GC.changeAt  = now;
+    noiseRef.current.NOx15.waveStart = now;
+    noiseRef.current.CO15.waveStart = now;
+    noiseRef.current.PX36_SEL.nextChange = now;  // forces immediate roll
+    setMappingStartedAt(now);
+    setTickCount(0);
+    setMappingActive(true);
+  };
+  const pauseMapping = () => setMappingActive(false);
+  const resumeMapping = () => setMappingActive(true);
+  const resetMapping = () => {
+    bufferRef.current = [];
+    setMappingStartedAt(null);
+    setTickCount(0);
+    setMappingActive(false);
+  };
+
   // Edit one cell of one table and persist via setMappingTables.
   const updateCell = (BRNDMD, rowIdx, key, value) => {
     setMappingTables(prev => {
@@ -2424,6 +2604,136 @@ function CombustorMappingPanel({
           <strong style={{color:C.warm}}>DT_Main</strong> (OM − IM) = <strong style={{color:C.warm,fontSize:13}}>{derived.DT_Main_F.toFixed(1)} °F</strong>
         </div>:null}
       </div>
+
+      {/* ═════════════════════════════════════════════════════════════════
+          LIVE MAPPING — real-time HMI-style trace dashboard
+          1 Hz tick · 10-min sliding window · sensor-realistic noise + lag
+         ═════════════════════════════════════════════════════════════════ */}
+      {(() => {
+        // X-axis range — first 10 min: [start, start+600s]; after that, slides.
+        const buf = bufferRef.current;
+        const now = Date.now() / 1000;
+        const xMin = mappingStartedAt
+          ? (now - mappingStartedAt < 600 ? mappingStartedAt : now - 600)
+          : 0;
+        const xMax = mappingStartedAt
+          ? (now - mappingStartedAt < 600 ? mappingStartedAt + 600 : now)
+          : 600;
+        // Format wall-clock time HH:MM from epoch seconds
+        const hhmm = (s) => {
+          const d = new Date(s * 1000);
+          const hh = String(d.getHours()).padStart(2, "0");
+          const mm = String(d.getMinutes()).padStart(2, "0");
+          const ss = String(d.getSeconds()).padStart(2, "0");
+          return `${hh}:${mm}:${ss}`;
+        };
+        // Slice the buffer to the visible window (no need to plot off-screen).
+        const visible = buf.filter(p => p.t >= xMin && p.t <= xMax);
+        // Helper for one mini chart with our standard styling.
+        const TraceChart = ({ title, color, yKey, fmt, unit, secondKey, secondColor, secondLabel }) => (
+          <div style={{background:C.bg2,border:`1px solid ${color}30`,borderRadius:6,padding:"10px 12px 4px"}}>
+            <div style={{fontSize:11,fontWeight:700,color,textTransform:"uppercase",letterSpacing:".8px",marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span>{title}</span>
+              {visible.length > 0 ? (
+                <span style={{fontSize:10,fontWeight:500,color,fontFamily:"monospace",letterSpacing:0,fontVariantNumeric:"tabular-nums"}}>
+                  {fmt(visible[visible.length-1][yKey])} {unit}
+                  {secondKey ? ` · ${secondLabel} ${fmt(visible[visible.length-1][secondKey])}` : ""}
+                </span>
+              ) : null}
+            </div>
+            <Chart
+              data={visible.map(p => ({
+                t: p.t,
+                v: fmt === Number ? p[yKey] : Number(fmt(p[yKey])),
+                ...(secondKey ? { v2: fmt === Number ? p[secondKey] : Number(fmt(p[secondKey])) } : {}),
+              }))}
+              xK="t" yK="v" xL=""
+              yL={`${title} (${unit})`}
+              color={color}
+              w={600} h={210}
+              xMin={xMin} xMax={xMax}
+              y2K={secondKey ? "v2" : null}
+              c2={secondColor || color}
+              y2L={secondLabel || ""}
+            />
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",marginTop:-2}}>
+              <span>{hhmm(xMin)}</span>
+              <span>{hhmm((xMin+xMax)/2)}</span>
+              <span>{hhmm(xMax)}</span>
+            </div>
+          </div>
+        );
+        // Unit converters — PX36 already has fmtPx/pxUnit defined above.
+        const fmtNOx = v => v.toFixed(1);
+        const fmtCO  = v => v.toFixed(1);
+        const fmtMWI = v => v.toFixed(2);
+        // Elapsed playback time
+        const elapsed = mappingStartedAt ? Math.floor(now - mappingStartedAt) : 0;
+        const mm = String(Math.floor(elapsed/60)).padStart(2,"0");
+        const ss = String(elapsed%60).padStart(2,"0");
+        return (
+          <div style={{...S.card,border:`1.5px solid ${mappingActive?C.good:C.border}`,background:mappingActive?`linear-gradient(180deg, ${C.good}06 0%, ${C.bg} 80%)`:undefined}}>
+            {/* Top bar — controls + status */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:10}}>
+              <div>
+                <div style={{...S.cardT,marginBottom:3}}>
+                  Live Mapping {mappingActive ? <span style={{fontSize:10,color:C.good,marginLeft:8,fontWeight:500,fontFamily:"monospace",letterSpacing:0}}>● RECORDING · {mm}:{ss}</span> : null}
+                </div>
+                <div style={{fontSize:10.5,color:C.txtMuted,lineHeight:1.45,fontFamily:"'Barlow',sans-serif",maxWidth:820}}>
+                  Real-time instrument simulation at 1 Hz. Each trace centres on the cycle/correlation mean; noise model is sensor-realistic per metric. When you change a parameter, the displayed mean lags behind by the device dead time (PX36: 0 s · NOx<sub>15</sub>/CO<sub>15</sub>: 83 s · MWI_WIM: 2 s · MWI_GC: 415 s) then ramps to the new value via smoothstep over 1 s / 7 s / 5 s / 5 s respectively.
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8,flexShrink:0}}>
+                {!mappingActive && !mappingStartedAt && (
+                  <button onClick={startMapping}
+                    style={{padding:"10px 18px",fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",
+                      color:C.bg,background:C.good,border:`1.5px solid ${C.good}`,borderRadius:6,cursor:"pointer",
+                      display:"flex",alignItems:"center",gap:7}}>
+                    ▶ START MAPPING
+                  </button>
+                )}
+                {!mappingActive && mappingStartedAt && (
+                  <button onClick={resumeMapping}
+                    style={{padding:"10px 18px",fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",
+                      color:C.bg,background:C.good,border:`1.5px solid ${C.good}`,borderRadius:6,cursor:"pointer",
+                      display:"flex",alignItems:"center",gap:7}}>
+                    ▶ RESUME
+                  </button>
+                )}
+                {mappingActive && (
+                  <button onClick={pauseMapping}
+                    style={{padding:"10px 18px",fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",
+                      color:C.bg,background:C.accent2,border:`1.5px solid ${C.accent2}`,borderRadius:6,cursor:"pointer",
+                      display:"flex",alignItems:"center",gap:7}}>
+                    ⏸ PAUSE
+                  </button>
+                )}
+                {mappingStartedAt && (
+                  <button onClick={resetMapping}
+                    style={{padding:"10px 14px",fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",
+                      color:C.warm,background:"transparent",border:`1.5px solid ${C.warm}`,borderRadius:6,cursor:"pointer",
+                      display:"flex",alignItems:"center",gap:7}}>
+                    ⟳ RESET
+                  </button>
+                )}
+              </div>
+            </div>
+            {!mappingStartedAt ? (
+              <div style={{padding:"40px 24px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:8,color:C.txtMuted,fontSize:12,fontFamily:"'Barlow',sans-serif"}}>
+                Click <strong style={{color:C.good}}>▶ START MAPPING</strong> to begin a real-time recording. The 10-minute window will fill in over time, one sample per second.
+              </div>
+            ) : (
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+                <TraceChart title="PX36_SEL" color={C.warm}    yKey="PX36_SEL" fmt={fmtPx}  unit={pxUnit}/>
+                <TraceChart title="NOx @ 15 % O₂" color={C.accent} yKey="NOx15"    fmt={fmtNOx} unit="ppmvd"/>
+                <TraceChart title="CO @ 15 % O₂"  color={C.accent2} yKey="CO15"     fmt={fmtCO}  unit="ppmvd"/>
+                <TraceChart title="MWI" color={C.violet} yKey="MWI_WIM" fmt={fmtMWI} unit="BTU/scf·√°R"
+                  secondKey="MWI_GC" secondColor={C.accent3} secondLabel="GC"/>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ═════════════════════════════════════════════════════════════════
           2 · USER INPUTS — Air Fraction (editable) + φ (editable) +
