@@ -2367,6 +2367,8 @@ function CombustorMappingPanel({
   // Trigger entry into the protection cycle (called when PX36 > 5.5 from
   // any non-protective state).
   const _triggerProtection = (px36Val) => {
+    // PX36 protection wins — abort any in-flight emissions-mode staging.
+    _cancelEmissionsStaging();
     protRef.current.cycleCount++;
     if (protRef.current.cycleCount > 3) {
       // LOCK at BD4, no more auto-staging
@@ -2405,6 +2407,96 @@ function CombustorMappingPanel({
   };
   // Cleanup timer on unmount
   useEffect(() => () => _clearProtTimer(), []);
+
+  // ── EMISSIONS-MODE STAGING ──────────────────────────────────────────
+  // Mirrors the protection staging timing (BD4 → 50s → BD6 → 30s → BD7)
+  // but triggers when the user enables Emissions Mode. The staging
+  // endpoint adapts to current MW: at low load (BR_max=4) we skip
+  // staging entirely; at mid load (BR_max=6) we stop at BD6; at high
+  // load (BR_max=7) we run the full sequence.
+  const emStagingRef = useRef({
+    state: 'idle',     // 'idle' | 'at4' | 'at6' | 'done'
+    targetMaxBR: 4,    // the natural ladder cap when staging started
+    timer: null,
+  });
+  const [emStagingBanner, setEmStagingBanner] = useState(null);
+  // {currentBR, nextBR, timerEndsAt}
+  const _clearEmTimer = () => {
+    if (emStagingRef.current.timer) {
+      clearTimeout(emStagingRef.current.timer);
+      emStagingRef.current.timer = null;
+    }
+  };
+  const _cancelEmissionsStaging = () => {
+    _clearEmTimer();
+    emStagingRef.current.state = 'idle';
+    if (setBrndmdOverride) setBrndmdOverride(null);
+    setEmStagingBanner(null);
+  };
+  const _triggerEmissionsStaging = () => {
+    // Determine natural max BR at current MW (ladder with emissionsMode=true,
+    // no override) — this defines where the staging stops.
+    const mw = cycleResult?.MW_net || 0;
+    const targetMaxBR = calcBRNDMD(mw, true, null);
+    // Skip staging entirely when natural ladder caps at ≤4 (low load,
+    // engine would just run at BD4 anyway).
+    if (targetMaxBR <= 4) return;
+    _clearEmTimer();
+    emStagingRef.current.state = 'at4';
+    emStagingRef.current.targetMaxBR = targetMaxBR;
+    if (setBrndmdOverride) setBrndmdOverride(4);
+    setEmStagingBanner({
+      currentBR: 4, nextBR: 6, timerEndsAt: (Date.now()/1000) + 50,
+    });
+    emStagingRef.current.timer = setTimeout(() => {
+      // Phase 2: BR=6
+      emStagingRef.current.state = 'at6';
+      if (setBrndmdOverride) setBrndmdOverride(6);
+      if (emStagingRef.current.targetMaxBR === 6) {
+        // Mid-load: stop at BD6, don't progress to BD7.
+        // Release override (ladder gives BR=6 naturally at this MW range).
+        emStagingRef.current.timer = setTimeout(() => {
+          emStagingRef.current.state = 'done';
+          emStagingRef.current.timer = null;
+          if (setBrndmdOverride) setBrndmdOverride(null);
+          setEmStagingBanner(null);
+        }, 100);  // brief settle, then release
+        // Show "stopping at BD6" banner during the brief window
+        setEmStagingBanner({ currentBR: 6, nextBR: null, timerEndsAt: null });
+      } else {
+        // High-load: continue to BR=7 after 30 s
+        setEmStagingBanner({
+          currentBR: 6, nextBR: 7, timerEndsAt: (Date.now()/1000) + 30,
+        });
+        emStagingRef.current.timer = setTimeout(() => {
+          // Phase 3: release override; ladder gives BR=7 naturally
+          emStagingRef.current.state = 'done';
+          emStagingRef.current.timer = null;
+          if (setBrndmdOverride) setBrndmdOverride(null);
+          setEmStagingBanner(null);
+        }, 30 * 1000);
+      }
+    }, 50 * 1000);
+  };
+  // Detect Emissions Mode toggle and react accordingly.
+  const _prevEmissionsModeRef = useRef(emissionsMode);
+  useEffect(() => {
+    const prev = _prevEmissionsModeRef.current;
+    _prevEmissionsModeRef.current = emissionsMode;
+    if (!mappingActive) return;
+    if (tripStateRef.current.tripped) return;
+    // Ignore toggle while a protection cycle is in flight (protection wins).
+    if (protRef.current.state !== 'idle' && protRef.current.state !== 'locked') return;
+    if (prev === emissionsMode) return;
+    if (!prev && emissionsMode) {
+      _triggerEmissionsStaging();
+    } else if (prev && !emissionsMode) {
+      _cancelEmissionsStaging();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emissionsMode, mappingActive]);
+  // Cleanup on unmount
+  useEffect(() => () => _clearEmTimer(), []);
 
   // smoothstep: 3u² − 2u³. Smooth tangent at 0 and 1, exact arrival at u=1.
   const _smoothstep = u => u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
@@ -2549,6 +2641,7 @@ function CombustorMappingPanel({
                 phiIp: pIp, phiOp: Number(phiOP)||0, phiIm: Number(phiIM)||0,
               });
               _resetProtection();  // cancel any in-progress protection cycle
+              _cancelEmissionsStaging();  // cancel any in-progress emissions ramp
             }
           } else {
             // phi dropped out of band — clear so next entry re-rolls
@@ -2575,6 +2668,7 @@ function CombustorMappingPanel({
                 phiIp: Number(phiIP)||0, phiOp: pOp, phiIm: Number(phiIM)||0,
               });
               _resetProtection();
+              _cancelEmissionsStaging();
             }
           } else {
             tr.phiOp.inBand = false; tr.phiOp.thresh = null;
@@ -3290,6 +3384,47 @@ function CombustorMappingPanel({
                       whiteSpace:"nowrap",flexShrink:0,boxShadow:`0 2px 8px ${accent}50`}}>
                     ⟲ RESET
                   </button>
+                </div>
+              );
+            })()}
+            {/* ── Emissions-mode staging banner (green) ──
+                Shown while ramping BD4 → BD6 → BD7 after the operator turns
+                Emissions Mode ON. Hidden during trip and during PX36
+                protection — those higher-priority banners take the slot. */}
+            {!tripBanner && !protBanner && emStagingBanner && (() => {
+              const accent = C.good;
+              const remain = emStagingBanner.timerEndsAt
+                ? Math.max(0, emStagingBanner.timerEndsAt - (Date.now()/1000))
+                : null;
+              return (
+                <div style={{
+                  marginBottom:14,padding:"14px 18px",
+                  background:`linear-gradient(135deg, ${accent}30 0%, ${accent}12 100%)`,
+                  border:`2px solid ${accent}`,borderRadius:8,
+                  boxShadow:`0 0 0 1px ${accent}25, 0 3px 12px ${accent}25`,
+                  display:"flex",alignItems:"center",justifyContent:"space-between",gap:14,
+                }}>
+                  <div style={{flex:"0 0 auto",fontSize:32,color:accent,lineHeight:1,
+                    filter:`drop-shadow(0 0 8px ${accent}80)`}}>
+                    ✓
+                  </div>
+                  <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:4}}>
+                    <div style={{fontSize:18,fontWeight:800,color:accent,
+                      fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"1px",
+                      lineHeight:1.1}}>
+                      EMISSIONS MODE STAGING IN PROGRESS
+                    </div>
+                    <div style={{fontSize:13,color:C.txt,fontFamily:"monospace",lineHeight:1.55}}>
+                      Currently at BR=<strong style={{color:accent,fontSize:14}}>{emStagingBanner.currentBR}</strong>
+                      {emStagingBanner.nextBR != null && (<>
+                        &nbsp;→&nbsp; BR=<strong style={{color:accent,fontSize:14}}>{emStagingBanner.nextBR}</strong>
+                        &nbsp;in&nbsp;<strong style={{color:accent,fontSize:14}}>{remain != null ? `${Math.ceil(remain)} s` : "—"}</strong>
+                      </>)}
+                      {emStagingBanner.nextBR == null && (
+                        <em style={{color:C.txtDim}}>&nbsp;· settled at target burner mode</em>
+                      )}
+                    </div>
+                  </div>
                 </div>
               );
             })()}
