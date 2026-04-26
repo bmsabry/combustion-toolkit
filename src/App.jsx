@@ -2235,6 +2235,31 @@ function CombustorMappingPanel({
   const [mappingStartedAt, setMappingStartedAt] = useState(null);  // wall-clock seconds since epoch
   const [tickCount, setTickCount] = useState(0);  // drives chart re-render
   const bufferRef = useRef([]);                   // up to 600 samples
+  // User-editable y-axis ranges per plot. Stored in BASE units (psi for
+  // PX36, ppm for NOx/CO, BTU/scf·√°R for MWI). The actual plot axis is
+  // the MAX of (user-set range, data range) — auto-extends if live values
+  // exceed the user bounds, never shrinks below them. Persisted across
+  // sessions via localStorage.
+  const [userRanges, setUserRanges] = useState(() => {
+    const defaults = {
+      PX36_SEL: { min: 2,  max: 6   },  // psi (display unit-converted)
+      NOx15:    { min: 10, max: 50  },  // ppmvd
+      CO15:     { min: 10, max: 450 },  // ppmvd
+      MWI:      { min: 44, max: 56  },  // BTU/scf·√°R, shared by WIM and GC
+    };
+    try {
+      const saved = localStorage.getItem("ctk.userRanges.v1");
+      if (saved) return { ...defaults, ...JSON.parse(saved) };
+    } catch {}
+    return defaults;
+  });
+  useEffect(() => {
+    try { localStorage.setItem("ctk.userRanges.v1", JSON.stringify(userRanges)); } catch {}
+  }, [userRanges]);
+  const _setRange = (key, side, valBase) => {
+    if (!Number.isFinite(valBase)) return;
+    setUserRanges(prev => ({...prev, [key]: {...(prev[key] || {min:0,max:1}), [side]: valBase}}));
+  };
   // Per-metric mean tracker — captures the lagging "what the instrument is
   // displaying right now" given the dead-time + smoothstep response model.
   const meansRef = useRef({
@@ -2638,19 +2663,66 @@ function CombustorMappingPanel({
         // Slice the buffer to the visible window (no need to plot off-screen).
         const visible = buf.filter(p => p.t >= xMin && p.t <= xMax);
         // Helper for one mini chart with our standard styling.
-        // yLockMin/yLockMax pin the y-axis to a fixed range so the trace
-        // moves visibly inside that range instead of the chart auto-rescaling
-        // every tick (which makes oscillations look like flat lines).
-        const TraceChart = ({ title, color, yKey, fmt, unit, secondKey, secondColor, secondLabel, primaryLabel, yLockMin, yLockMax, y2LockMin, y2LockMax, hLines }) => (
+        // userMinDisp / userMaxDisp = user-set bounds in DISPLAY units.
+        // The actual axis = max(user, data) so the trace can extend the axis
+        // dynamically if values exceed the user bounds (never shrinks below).
+        // onChangeMin / onChangeMax — callbacks invoked with a value in DISPLAY
+        // units; parent converts to base units before storing in userRanges.
+        // Each plot also shows a small editable Range pill in the header.
+        const TraceChart = ({ title, color, yKey, fmt, unit, secondKey, secondColor, secondLabel, primaryLabel,
+                              userMinDisp, userMaxDisp, onChangeMin, onChangeMax, decimals=2,
+                              y2LockMin, y2LockMax, hLines }) => {
+          // Extract every visible numeric value (primary + secondary if present)
+          // in display units, find the data extremes, and let them push the axis
+          // beyond the user bounds when needed.
+          const allVals = [];
+          visible.forEach(p => {
+            const a = Number(fmt(p[yKey])); if (Number.isFinite(a)) allVals.push(a);
+            if (secondKey) {
+              const b = Number(fmt(p[secondKey])); if (Number.isFinite(b)) allVals.push(b);
+            }
+          });
+          const dataMin = allVals.length ? Math.min(...allVals) : userMinDisp;
+          const dataMax = allVals.length ? Math.max(...allVals) : userMaxDisp;
+          const effMin  = Math.min(userMinDisp, dataMin);
+          const effMax  = Math.max(userMaxDisp, dataMax);
+          // For dual-axis plots (MWI), the secondary axis should match the
+          // primary effective range so both series read against the same scale.
+          const effY2Min = secondKey ? effMin : y2LockMin;
+          const effY2Max = secondKey ? effMax : y2LockMax;
+          // Tiny editor for one bound — a NumField that calls onChange on commit.
+          const RangeInput = ({ value, onChange, hint }) => (
+            <NumField value={value} decimals={decimals}
+              onCommit={v => Number.isFinite(v) && onChange(v)}
+              title={hint}
+              style={{width:62,padding:"2px 5px",fontSize:10,fontFamily:"monospace",color,
+                background:C.bg,border:`1px solid ${color}50`,borderRadius:3,textAlign:"center",
+                outline:"none",fontWeight:600}}/>
+          );
+          // Visual cue: when the axis is auto-extended beyond the user range,
+          // show a small "AUTO+" tag so the operator knows the band has stretched.
+          const extended = effMin < userMinDisp || effMax > userMaxDisp;
+          return (
           <div style={{background:C.bg2,border:`1px solid ${color}30`,borderRadius:6,padding:"10px 12px 4px"}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:".8px",marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
-              <span style={{color}}>{title}</span>
+            <div style={{fontSize:11,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:".8px",marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <span style={{color,display:"flex",alignItems:"center",gap:8}}>
+                {title}
+                {extended && <span title="Axis auto-extended past your set range to fit live data" style={{fontSize:8.5,fontWeight:700,padding:"1px 5px",background:`${C.warm}25`,border:`1px solid ${C.warm}60`,borderRadius:3,color:C.warm,letterSpacing:".3px"}}>AUTO+</span>}
+              </span>
               {visible.length > 0 ? (
                 <span style={{fontSize:10,fontWeight:500,fontFamily:"monospace",letterSpacing:0,fontVariantNumeric:"tabular-nums",display:"flex",gap:10,alignItems:"baseline"}}>
                   <span style={{color}}>{primaryLabel ? `${primaryLabel} ` : ""}{fmt(visible[visible.length-1][yKey])} {unit}</span>
                   {secondKey ? <span style={{color:secondColor}}>{secondLabel} {fmt(visible[visible.length-1][secondKey])}</span> : null}
                 </span>
               ) : null}
+            </div>
+            {/* Editable y-axis bounds */}
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",letterSpacing:".3px"}}>
+              <span>RANGE:</span>
+              <RangeInput value={userMinDisp} onChange={onChangeMin} hint={`Set y-axis MIN. Axis still auto-extends if data drops below this.`}/>
+              <span>—</span>
+              <RangeInput value={userMaxDisp} onChange={onChangeMax} hint={`Set y-axis MAX. Axis still auto-extends if data rises above this.`}/>
+              <span>{unit}</span>
             </div>
             <Chart
               data={visible.map(p => ({
@@ -2663,11 +2735,11 @@ function CombustorMappingPanel({
               color={color}
               w={600} h={210}
               xMin={xMin} xMax={xMax}
-              yMin={yLockMin} yMax={yLockMax}
+              yMin={effMin} yMax={effMax}
               y2K={secondKey ? "v2" : null}
               c2={secondColor || color}
               y2L={secondLabel || ""}
-              y2Min={y2LockMin} y2Max={y2LockMax}
+              y2Min={effY2Min} y2Max={effY2Max}
               hLines={hLines}
             />
             <div style={{display:"flex",justifyContent:"space-between",fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",marginTop:-2}}>
@@ -2676,19 +2748,15 @@ function CombustorMappingPanel({
               <span>{hhmm(xMax)}</span>
             </div>
           </div>
-        );
+          );
+        };
         // Unit converters — PX36 already has fmtPx/pxUnit defined above.
         const fmtNOx = v => v.toFixed(1);
         const fmtCO  = v => v.toFixed(1);
         const fmtMWI = v => v.toFixed(2);
-        // Fixed y-axis ranges — locked so the trace moves visibly within the
-        // band instead of auto-rescaling. PX36 lock is in psi; convert to
-        // mbar in SI mode (1 psi = 68.9476 mbar). Same conversion applies
-        // to the alarm / trip threshold lines so they stay at the right
-        // physical setpoint regardless of unit mode.
+        // PX36 user range and threshold lines are in psi (base units); convert
+        // to mbar in SI display mode via _px (1 psi = 68.9476 mbar).
         const _px = (psi) => units==="SI" ? psi * 68.9476 : psi;
-        const px36YMin = _px(2);
-        const px36YMax = _px(6);
         const px36HLines = [
           { y: _px(5.0), color: C.accent2, label: "ALARM" },  // amber/yellow
           { y: _px(5.5), color: C.strong,  label: "TRIP"  },  // red
@@ -2751,16 +2819,26 @@ function CombustorMappingPanel({
             ) : (
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
                 <TraceChart title="PX36_SEL" color={C.warm}    yKey="PX36_SEL" fmt={fmtPx}  unit={pxUnit}
-                  yLockMin={px36YMin} yLockMax={px36YMax} hLines={px36HLines}/>
+                  userMinDisp={_px(userRanges.PX36_SEL.min)} userMaxDisp={_px(userRanges.PX36_SEL.max)}
+                  decimals={units==="SI"?1:2}
+                  // Convert display→base on commit. PX36 stored in psi.
+                  onChangeMin={v => _setRange("PX36_SEL", "min", units==="SI"?v/68.9476:v)}
+                  onChangeMax={v => _setRange("PX36_SEL", "max", units==="SI"?v/68.9476:v)}
+                  hLines={px36HLines}/>
                 <TraceChart title="NOx @ 15 % O₂" color={C.accent} yKey="NOx15"    fmt={fmtNOx} unit="ppmvd"
-                  yLockMin={10} yLockMax={50}/>
+                  userMinDisp={userRanges.NOx15.min} userMaxDisp={userRanges.NOx15.max} decimals={1}
+                  onChangeMin={v => _setRange("NOx15", "min", v)}
+                  onChangeMax={v => _setRange("NOx15", "max", v)}/>
                 <TraceChart title="CO @ 15 % O₂"  color={C.accent2} yKey="CO15"     fmt={fmtCO}  unit="ppmvd"
-                  yLockMin={10} yLockMax={450}/>
+                  userMinDisp={userRanges.CO15.min} userMaxDisp={userRanges.CO15.max} decimals={0}
+                  onChangeMin={v => _setRange("CO15", "min", v)}
+                  onChangeMax={v => _setRange("CO15", "max", v)}/>
                 <TraceChart title="MWI — Wobbe Index" color={C.accent3} yKey="MWI_WIM" fmt={fmtMWI} unit="BTU/scf·√°R"
                   primaryLabel="WIM"
                   secondKey="MWI_GC" secondColor={C.good} secondLabel="GC"
-                  yLockMin={44} yLockMax={56}
-                  y2LockMin={44} y2LockMax={56}/>
+                  userMinDisp={userRanges.MWI.min} userMaxDisp={userRanges.MWI.max} decimals={1}
+                  onChangeMin={v => _setRange("MWI", "min", v)}
+                  onChangeMax={v => _setRange("MWI", "max", v)}/>
               </div>
             )}
           </div>
