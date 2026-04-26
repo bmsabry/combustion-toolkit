@@ -2742,8 +2742,8 @@ function CombustorMappingPanel({
                   yLockMin={10} yLockMax={450}/>
                 <TraceChart title="MWI" color={C.violet} yKey="MWI_WIM" fmt={fmtMWI} unit="BTU/scf·√°R"
                   secondKey="MWI_GC" secondColor={C.accent3} secondLabel="GC"
-                  yLockMin={40} yLockMax={60}
-                  y2LockMin={40} y2LockMax={60}/>
+                  yLockMin={44} yLockMax={56}
+                  y2LockMin={44} y2LockMax={56}/>
               </div>
             )}
           </div>
