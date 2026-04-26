@@ -675,7 +675,7 @@ if(mappingTables){
 XLSX.writeFile(wb,"ProReadyEngineer_CombustionReport.xlsx");}
 
 /* ══════════════════ SVG CHART ══════════════════ */
-function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,markerColor=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null,step=false}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}let yn=yn_-(yx_-yn_)*0.05;const yx=yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;
+function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,markerColor=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null,yMin=null,yMax=null,step=false}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn,yx;if(yMin!=null&&yMax!=null){yn=yMin;yx=yMax;}else{let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}yn=yMin!=null?yMin:yn_-(yx_-yn_)*0.05;yx=yMax!=null?yMax:yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;}const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;
 // Staircase path: hold each y constant from x_i to x_{i+1}, then jump to y_{i+1}.
 // Used for piecewise-constant series like BRNDMD vs load.
 const buildStep=(arr,xKey,yKey,syFn)=>{
@@ -2630,7 +2630,10 @@ function CombustorMappingPanel({
         // Slice the buffer to the visible window (no need to plot off-screen).
         const visible = buf.filter(p => p.t >= xMin && p.t <= xMax);
         // Helper for one mini chart with our standard styling.
-        const TraceChart = ({ title, color, yKey, fmt, unit, secondKey, secondColor, secondLabel }) => (
+        // yLockMin/yLockMax pin the y-axis to a fixed range so the trace
+        // moves visibly inside that range instead of the chart auto-rescaling
+        // every tick (which makes oscillations look like flat lines).
+        const TraceChart = ({ title, color, yKey, fmt, unit, secondKey, secondColor, secondLabel, yLockMin, yLockMax }) => (
           <div style={{background:C.bg2,border:`1px solid ${color}30`,borderRadius:6,padding:"10px 12px 4px"}}>
             <div style={{fontSize:11,fontWeight:700,color,textTransform:"uppercase",letterSpacing:".8px",marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span>{title}</span>
@@ -2644,14 +2647,15 @@ function CombustorMappingPanel({
             <Chart
               data={visible.map(p => ({
                 t: p.t,
-                v: fmt === Number ? p[yKey] : Number(fmt(p[yKey])),
-                ...(secondKey ? { v2: fmt === Number ? p[secondKey] : Number(fmt(p[secondKey])) } : {}),
+                v: Number(fmt(p[yKey])),
+                ...(secondKey ? { v2: Number(fmt(p[secondKey])) } : {}),
               }))}
               xK="t" yK="v" xL=""
               yL={`${title} (${unit})`}
               color={color}
               w={600} h={210}
               xMin={xMin} xMax={xMax}
+              yMin={yLockMin} yMax={yLockMax}
               y2K={secondKey ? "v2" : null}
               c2={secondColor || color}
               y2L={secondLabel || ""}
@@ -2667,6 +2671,11 @@ function CombustorMappingPanel({
         const fmtNOx = v => v.toFixed(1);
         const fmtCO  = v => v.toFixed(1);
         const fmtMWI = v => v.toFixed(2);
+        // Fixed y-axis ranges — locked so the trace moves visibly within the
+        // band instead of auto-rescaling. PX36 lock is in psi; convert to
+        // mbar in SI mode (1 psi = 68.9476 mbar).
+        const px36YMin = units==="SI" ? 1 * 68.9476 : 1;
+        const px36YMax = units==="SI" ? 8 * 68.9476 : 8;
         // Elapsed playback time
         const elapsed = mappingStartedAt ? Math.floor(now - mappingStartedAt) : 0;
         const mm = String(Math.floor(elapsed/60)).padStart(2,"0");
@@ -2724,11 +2733,15 @@ function CombustorMappingPanel({
               </div>
             ) : (
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-                <TraceChart title="PX36_SEL" color={C.warm}    yKey="PX36_SEL" fmt={fmtPx}  unit={pxUnit}/>
-                <TraceChart title="NOx @ 15 % O₂" color={C.accent} yKey="NOx15"    fmt={fmtNOx} unit="ppmvd"/>
-                <TraceChart title="CO @ 15 % O₂"  color={C.accent2} yKey="CO15"     fmt={fmtCO}  unit="ppmvd"/>
+                <TraceChart title="PX36_SEL" color={C.warm}    yKey="PX36_SEL" fmt={fmtPx}  unit={pxUnit}
+                  yLockMin={px36YMin} yLockMax={px36YMax}/>
+                <TraceChart title="NOx @ 15 % O₂" color={C.accent} yKey="NOx15"    fmt={fmtNOx} unit="ppmvd"
+                  yLockMin={10} yLockMax={50}/>
+                <TraceChart title="CO @ 15 % O₂"  color={C.accent2} yKey="CO15"     fmt={fmtCO}  unit="ppmvd"
+                  yLockMin={10} yLockMax={450}/>
                 <TraceChart title="MWI" color={C.violet} yKey="MWI_WIM" fmt={fmtMWI} unit="BTU/scf·√°R"
-                  secondKey="MWI_GC" secondColor={C.accent3} secondLabel="GC"/>
+                  secondKey="MWI_GC" secondColor={C.accent3} secondLabel="GC"
+                  yLockMin={40} yLockMax={60}/>
               </div>
             )}
           </div>
