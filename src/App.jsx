@@ -1,5 +1,7 @@
 import { Fragment, useState, useMemo, useCallback, useEffect, useRef, createContext, useContext } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as XLSX from "xlsx";
+import JSZip from "jszip";
 import {
   AUTOMATABLE_PANELS, AUTO_VARS, AUTO_OUTPUTS,
   varsForPanels, outputsForPanels,
@@ -1022,7 +1024,12 @@ function MultiSeriesChart({
   }
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%", maxWidth:w}}>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${w} ${h}`}
+      width={w} height={h}
+      style={{width:"100%", maxWidth:w, height:"auto"}}>
+      {/* Solid background — required for PNG export so charts read on dark
+          docs and don't render with transparent canvas-default. */}
+      <rect x="0" y="0" width={w} height={h} fill={C.bg}/>
       {/* Gridlines + Y tick labels */}
       {yTk.map((v,i) => (
         <g key={`y${i}`}>
@@ -5908,6 +5915,198 @@ const PLOT_PALETTE = [
   "#A3E635", "#F472B6",
 ];
 
+// ─────────────────────────────────────────────────────────────────────────
+//  Combustion-engineer priority ranking. Lower rank = higher priority.
+//  Drives both the ORDER plots are rendered (most-important first) and
+//  which plots are checked by default in the multi-selector. Reflects how
+//  a gas-turbine combustion SME reads results: regulated emissions first,
+//  then flame temperatures, then stability/blowoff, then ignition, then
+//  cycle, then secondary properties, finally O₂/inerts.
+//
+//  The HUNDREDS digit groups outputs into report categories used as ZIP
+//  folder names — see _CATEGORY_LABELS below.
+// ─────────────────────────────────────────────────────────────────────────
+const _OUTPUT_PRIORITY = {
+  // ── Tier 1: Regulated emissions (NOx & CO @ 15% O₂ first) ──
+  "NOx_15_psr": 100, "CO_15_psr": 101,
+  "NOx15_mapping": 110, "CO15_mapping": 111,
+  "exit_NO_ppm": 120, "exit_CO_ppm": 121,
+  "psr_NO_ppm": 130, "psr_CO_ppm": 131,
+  // ── Tier 2: Flame / combustion temperatures ──
+  "T_ad": 200, "Tflame": 210,
+  "T_psr": 220, "T_exit": 221,
+  "T_AFT_IP": 230, "T_AFT_OP": 231, "T_AFT_IM": 232, "T_AFT_OM": 233,
+  "T_Bulk": 240, "T4": 241,
+  // ── Tier 3: Flame stability / blowoff (S_L, BOT, Da, etc.) ──
+  "S_L_cms":           300,
+  "blowoff_velocity":  310,
+  "tau_BO_ms":         320,   // Zukoski blowoff time
+  "Damkohler":         330,
+  "g_c":               340,   // Lewis-vE stretch rate
+  "stable":            350,
+  "premixer_safe":     351,
+  "flashback_margin":  352,
+  // ── Tier 4: Autoignition / time scales ──
+  "tau_ign_ms":     400,
+  "tau_res_ms":     410,
+  "tau_chem_ms":    420,
+  "tau_flow_ms":    430,
+  "ignition_safe":  440,
+  // ── Tier 5: Cycle performance (MW, η) ──
+  "MW_net": 500, "MW_gross": 501, "MW_cap": 502,
+  "eta_LHV_pct": 510, "HR": 511,
+  "T1": 520, "T2": 521, "T2c": 522, "T3": 523, "T5": 524,
+  "W_turb_MW": 530, "W_comp_MW": 531,
+  // ── Tier 6: Mapping correlations (PX36, ΔT) ──
+  "PX36_SEL": 600, "PX36_SEL_HI": 601,
+  "DT_Main": 610, "C3_eff_pct": 611,
+  "phi_OP_mult": 620, "P3_pressure_ratio": 621,
+  // ── Tier 7: Mass flows ──
+  "mdot_air": 700, "mdot_fuel": 701, "mdot_bleed": 702, "mdot_water": 703,
+  // ── Tier 8: φ / FAR ──
+  "phi4": 800, "FAR4": 801, "phi_Bulk": 802, "phi_OM": 803,
+  "exh_phi_from_O2": 810, "exh_phi_from_CO2": 811,
+  // ── Tier 9: Pressures ──
+  "P3": 900, "P_exhaust": 901,
+  // ── Tier 10: Fuel properties ──
+  "LHV_mass": 1000, "LHV_vol": 1001, "MW_fuel": 1002, "SG": 1003,
+  "AFR_mass": 1004, "WI": 1005,
+  "MWI_BTUscf_R": 1010, "MWI_status": 1011, "MWI_derate_pct": 1012,
+  "FAR_stoich": 1020,
+  // ── Tier 11: Mixed inlet temp & transport ──
+  "T_mixed": 1100, "alpha_th": 1110,
+  // ── Tier 12: Mole fractions (interesting species first) ──
+  "X_NO": 1200, "X_OH": 1201,
+  "X_CO": 1210, "X_CO2": 1211, "X_H2O": 1212,
+  // ── Tier 13: Conversion / total residence ──
+  "conv_psr_pct": 1300,
+  "tau_pfr_ms":   1310, "tau_total_ms": 1311,
+  // ── Tier 14: Exhaust-derived (rederivable from inputs) ──
+  "exh_T_ad_from_O2": 1400, "exh_T_ad_from_CO2": 1401,
+  "exh_FAR_from_O2":  1410, "exh_FAR_from_CO2":  1411,
+  // ── Tier 15: O₂ / inerts (last — usually a result, not a driver) ──
+  "O2_dry_pct": 1500, "X_O2": 1501, "bleed_air_frac": 1510,
+};
+
+// Folder name (also used as the report-section heading) for each
+// hundreds-digit category in the priority map.
+const _CATEGORY_LABELS = {
+  1:  "01_emissions",
+  2:  "02_flame_temperatures",
+  3:  "03_stability_blowoff",
+  4:  "04_autoignition",
+  5:  "05_cycle_performance",
+  6:  "06_mapping_correlations",
+  7:  "07_mass_flows",
+  8:  "08_phi_FAR",
+  9:  "09_pressures",
+  10: "10_fuel_properties",
+  11: "11_inlet_temps_transport",
+  12: "12_mole_fractions",
+  13: "13_conversion_residence",
+  14: "14_exhaust_inverted",
+  15: "15_O2_inerts",
+};
+
+// X-axis ranking — when ONE Y output has multiple plots (one per varied
+// X), order operating-condition Xs first (φ, T_air, P, …), cycle drivers
+// next, then design knobs. This is the engineering "how a SME would walk
+// through the results" sequence.
+const _INPUT_PRIORITY = {
+  "phi": 100, "FAR": 101, "T_flame": 102,
+  "T_air": 110, "T_fuel": 111, "P": 112, "WFR": 113, "water_mode": 114,
+  "load_pct": 200, "T_amb": 210, "RH": 211, "P_amb": 212,
+  "T_cool": 220, "com_air_frac": 221, "engine": 230,
+  "bleed_open_pct": 240, "bleed_valve_size_pct": 241,
+  "emissionsMode": 250,
+  "mapW36w3":  300,
+  "mapPhiIP":  310, "mapPhiOP":  311, "mapPhiIM":  312,
+  "mapFracIP": 320, "mapFracOP": 321, "mapFracIM": 322, "mapFracOM": 323,
+  "tau_psr": 400, "L_pfr": 401, "V_pfr": 402, "heatLossFrac": 403,
+  "Lpremix": 500, "Vpremix": 501, "Lchar": 502, "Dfh": 503, "velocity": 510,
+  "measO2": 600, "measCO2": 601,
+};
+function _outputRank(o){
+  return _OUTPUT_PRIORITY[o.id] != null ? _OUTPUT_PRIORITY[o.id] : 9999;
+}
+function _outputCategory(o){
+  const r = _outputRank(o);
+  if (r >= 9000) return "99_other";
+  return _CATEGORY_LABELS[Math.floor(r / 100)] || "99_other";
+}
+function _inputRank(varSpec){
+  if (varSpec.kind === "fuel_species") return 800;
+  if (varSpec.kind === "ox_species")   return 810;
+  return _INPUT_PRIORITY[varSpec.id] != null ? _INPUT_PRIORITY[varSpec.id] : 9999;
+}
+
+// Strip filesystem-unsafe characters and collapse whitespace. Used for both
+// PNG download names and ZIP entry names (jszip doesn't sanitize).
+function _sanitizeFilename(s){
+  return String(s)
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+    .replace(/[^\w\s.\-+%₂₃₄]/g, "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .slice(0, 100);
+}
+
+// Trigger a browser download for a Blob. Uses an off-DOM anchor so it
+// works on every modern browser without a file-saver dependency.
+function _triggerBlobDownload(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Convert a MultiSeriesChart props bundle to a self-contained SVG string.
+// Uses ReactDOMServer's static markup renderer so we get the exact same
+// chart the user is looking at — zero divergence between on-screen and
+// exported plots. Adds the SVG namespace explicitly (some browsers reject
+// canvas drawImage on SVG without xmlns even if React rendered without).
+function _chartSpecToSvgString(spec){
+  let s = renderToStaticMarkup(<MultiSeriesChart {...spec}/>);
+  if (!s.includes('xmlns="http://www.w3.org/2000/svg"')){
+    s = s.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  return s;
+}
+
+// Convert an SVG markup string to a PNG Blob via canvas. Uses a Blob URL
+// (not a data URL) to avoid hitting the ~2 MB limit on data URLs in
+// older Safari builds. 2× pixel ratio for crisp text on retina screens.
+async function _svgStringToPngBlob(svgString, w, h, scale=2){
+  const blob = new Blob([svgString], {type: "image/svg+xml;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  try {
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width  = Math.round(w * scale);
+          canvas.height = Math.round(h * scale);
+          const ctx = canvas.getContext("2d");
+          // Solid background so the PNG isn't transparent on white viewers.
+          ctx.fillStyle = "#0D1117";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(b => b ? resolve(b) : reject(new Error("toBlob returned null")), "image/png");
+        } catch (e){ reject(e); }
+      };
+      img.onerror = () => reject(new Error("SVG failed to load into Image"));
+      img.src = url;
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 // Format a single column value for use as a group-key label. Uses
 // formatRowValue for nice numeric rounding, falls back to String() for
 // enums/bools that are already strings/booleans.
@@ -6066,6 +6265,40 @@ function ColPicker({ label, cols, value, onChange, allowNone=false, noneLabel="(
   );
 }
 
+// Cheap test for "is this Y essentially constant across the run". If max
+// and min are within 1e-9 of each other (or relative spread < 1e-6), we
+// consider the Y constant and skip plotting it — flat lines waste real
+// estate and obscure the plots that actually carry information.
+function _isYConstant(series){
+  const ys = series.flatMap(s => s.points.map(p => p.y)).filter(Number.isFinite);
+  if (ys.length < 2) return true;
+  const lo = Math.min(...ys), hi = Math.max(...ys);
+  const span = hi - lo;
+  if (span <= 1e-12) return true;
+  // Relative spread < 0.01% counts as effectively constant (covers stuff
+  // like FAR_stoich which barely budges when you sweep a knob that doesn't
+  // touch composition).
+  const ref = Math.max(Math.abs(lo), Math.abs(hi), 1e-30);
+  return (span / ref) < 1e-4;
+}
+
+// Build the chart props bundle (everything MultiSeriesChart wants) for one
+// auto-plot entry. Same arguments produce identical SVG, so this is what
+// gets passed both to the on-screen renderer AND the renderToStaticMarkup
+// path used for ZIP export.
+function _autoChartSpec(ch, useLog){
+  return {
+    series: ch.data.series,
+    xLabel: `${ch.xCol.label}${ch.xCol.unit ? ` (${ch.xCol.unit})` : ""}`,
+    yLabel: `${ch.yCol.label}${ch.yCol.unit ? ` (${ch.yCol.unit})` : ""}`,
+    w: 720, h: 460,   // export-resolution; on-screen uses w=520/h=300
+    xCategorical: ch.data.xCategorical,
+    xLabels: ch.data.xLabels,
+    yLog: useLog && _seriesAllPositive(ch.data.series),
+    legendCols: ch.data.series.length > 4 ? 2 : 1,
+  };
+}
+
 function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
   // varSpecs is the user's varied list (already filtered to active panels);
   // selectedOutputs is the captured-output catalog for those panels.
@@ -6076,9 +6309,25 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
   const inputCols  = useMemo(() => allCols.filter(c => c.kind === "input"),  [allCols]);
   const outputCols = useMemo(() => allCols.filter(c => c.kind === "output"), [allCols]);
 
-  // Custom-plot defaults: first varied input as X, first output as Y, no group.
-  const [customXId, setCustomXId] = useState(() => allCols[0]?.id || null);
-  const [customYId, setCustomYId] = useState(() => outputCols[0]?.id || allCols[1]?.id || null);
+  // Custom-plot defaults: first input as X (most-important by combustion
+  // priority — usually φ), highest-priority output as Y, no group.
+  const sortedInputs = useMemo(() => {
+    return [...inputCols].sort((a, b) => {
+      const av = varSpecs.find(v => v.id === a.varId);
+      const bv = varSpecs.find(v => v.id === b.varId);
+      return (av ? _inputRank(av) : 9999) - (bv ? _inputRank(bv) : 9999);
+    });
+  }, [inputCols, varSpecs]);
+  const sortedOutputs = useMemo(() => {
+    return [...outputCols].sort((a, b) => {
+      const ao = selectedOutputs.find(o => `out:${o.id}` === a.id);
+      const bo = selectedOutputs.find(o => `out:${o.id}` === b.id);
+      return (ao ? _outputRank(ao) : 9999) - (bo ? _outputRank(bo) : 9999);
+    });
+  }, [outputCols, selectedOutputs]);
+
+  const [customXId, setCustomXId] = useState(() => sortedInputs[0]?.id || allCols[0]?.id || null);
+  const [customYId, setCustomYId] = useState(() => sortedOutputs[0]?.id || outputCols[0]?.id || null);
   const [customGId, setCustomGId] = useState(null);
   const [customLog, setCustomLog] = useState(false);
 
@@ -6092,45 +6341,188 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
     return _buildSeries(results, xCol, yCol, groupCols);
   }, [results, xCol, yCol, gCol]);
 
-  // ── Auto-plot grid: one chart per (output × varied-input X axis). ──
-  //   If there's only one varied input, no other-vars exist to group by, so
-  //   each chart has exactly one series. With N≥2 varied inputs each chart
-  //   has up to ∏ (steps_of_other_var) distinct series — capped via the
-  //   palette length so the legend stays readable.
+  // ── Auto-plot grid ───────────────────────────────────────────────
+  //   For every captured output × every varied input as the X axis, build
+  //   a multi-series chart whose series are bucketed by the OTHER varied
+  //   inputs combined. Then:
+  //     1. Drop charts where Y is effectively constant (filter clutter).
+  //     2. Sort by combustion priority — emissions first, then flame
+  //        temps, then stability, etc. — so the most decision-relevant
+  //        plots show at the top of the page.
+  //     3. Tag each chart with its category (used for ZIP folder name)
+  //        and a sanitized filename for individual / bulk export.
   const autoCharts = useMemo(() => {
     if (inputCols.length === 0 || outputCols.length === 0) return [];
     const out = [];
     for (const yc of outputCols){
+      const yOutDef = selectedOutputs.find(o => `out:${o.id}` === yc.id);
+      const yRank = yOutDef ? _outputRank(yOutDef) : 9999;
+      const yCategory = yOutDef ? _outputCategory(yOutDef) : "99_other";
       for (const xc of inputCols){
+        const xVarDef = varSpecs.find(v => v.id === xc.varId);
+        const xRank = xVarDef ? _inputRank(xVarDef) : 9999;
         const groupCols = inputCols
           .filter(c => c.varId !== xc.varId)
           .map(c => ({ ...c, varId: c.varId }));
         const sd = _buildSeries(results, xc, yc, groupCols);
         if (sd.series.length === 0) continue;
+        // Skip plots where Y never moves — they're just flat horizontals.
+        if (_isYConstant(sd.series)) continue;
+        const baseName = `${_sanitizeFilename(yc.label)}_vs_${_sanitizeFilename(xc.label)}`;
         out.push({
           key: `${yc.id}__vs__${xc.id}`,
           title: `${yc.label} vs ${xc.label}`,
           xCol: xc, yCol: yc, data: sd,
-          // If the Y values span >2 orders of magnitude AND are all positive,
-          // hint a log axis (renders as a checkbox the user can toggle).
-          // We compute the hint here; user can override via state.
           logHint: _shouldLogAxis(sd.series),
+          yRank, xRank, category: yCategory,
+          filename: `${baseName}.png`,
         });
       }
     }
+    // Stable sort: yRank (output importance) → xRank (X importance) →
+    // alpha title for ties.
+    out.sort((a, b) =>
+      (a.yRank - b.yRank) ||
+      (a.xRank - b.xRank) ||
+      a.title.localeCompare(b.title)
+    );
     return out;
-  }, [results, inputCols, outputCols]);
+  }, [results, inputCols, outputCols, varSpecs, selectedOutputs]);
 
-  const [logFlags, setLogFlags] = useState({});  // { chartKey: bool }
-  const [filterAuto, setFilterAuto] = useState("");
-  const filteredAutoCharts = useMemo(() => {
-    if (!filterAuto.trim()) return autoCharts;
-    const needle = filterAuto.trim().toLowerCase();
-    return autoCharts.filter(ch => ch.title.toLowerCase().includes(needle));
-  }, [autoCharts, filterAuto]);
+  const [logFlags, setLogFlags] = useState({});
+
+  // ── Multi-select state ──────────────────────────────────────────
+  // Default selection: top-N most-important plots (combustion priority).
+  // The Set stores chart keys; a key being IN the set means "render &
+  // export it". Recomputed whenever the chart list changes.
+  const DEFAULT_SHOW_N = 8;
+  const [selectedKeys, setSelectedKeys] = useState(() =>
+    new Set(autoCharts.slice(0, DEFAULT_SHOW_N).map(ch => ch.key))
+  );
+  // Re-seed when autoCharts changes (e.g. user reruns matrix).
+  useEffect(() => {
+    setSelectedKeys(new Set(autoCharts.slice(0, DEFAULT_SHOW_N).map(ch => ch.key)));
+  }, [autoCharts]);
+
+  const renderedCharts = useMemo(
+    () => autoCharts.filter(ch => selectedKeys.has(ch.key)),
+    [autoCharts, selectedKeys],
+  );
 
   const ok = results.filter(r => !r.__error__).length;
   const errored = results.length - ok;
+
+  // ── Export handlers ─────────────────────────────────────────────
+  const [exporting, setExporting] = useState(null);  // null | "custom" | "zip"
+
+  const exportCustomPlot = useCallback(async () => {
+    if (!xCol || !yCol || !customSeriesData) return;
+    setExporting("custom");
+    try {
+      const props = {
+        series: customSeriesData.series,
+        xLabel: `${xCol.label}${xCol.unit ? ` (${xCol.unit})` : ""}`,
+        yLabel: `${yCol.label}${yCol.unit ? ` (${yCol.unit})` : ""}`,
+        w: 960, h: 560,
+        xCategorical: customSeriesData.xCategorical,
+        xLabels: customSeriesData.xLabels,
+        yLog: customLog && _seriesAllPositive(customSeriesData.series),
+        legendCols: customSeriesData.series.length > 6 ? 3 : 2,
+      };
+      const svg = _chartSpecToSvgString(props);
+      const png = await _svgStringToPngBlob(svg, props.w, props.h);
+      const groupSuffix = gCol ? `_by_${_sanitizeFilename(gCol.label)}` : "";
+      const logSuffix = props.yLog ? "_logy" : "";
+      const fname = `${_sanitizeFilename(yCol.label)}_vs_${_sanitizeFilename(xCol.label)}${groupSuffix}${logSuffix}.png`;
+      _triggerBlobDownload(png, fname);
+    } catch (e){
+      console.error("custom plot export failed:", e);
+      alert(`Export failed: ${e.message || e}`);
+    } finally {
+      setExporting(null);
+    }
+  }, [xCol, yCol, gCol, customSeriesData, customLog]);
+
+  const exportSingleAuto = useCallback(async (ch) => {
+    setExporting(ch.key);
+    try {
+      const useLog = logFlags[ch.key] != null ? logFlags[ch.key] : false;
+      const props = _autoChartSpec(ch, useLog);
+      const svg = _chartSpecToSvgString(props);
+      const png = await _svgStringToPngBlob(svg, props.w, props.h);
+      const logSuffix = props.yLog ? "_logy" : "";
+      const base = ch.filename.replace(/\.png$/, "");
+      _triggerBlobDownload(png, `${base}${logSuffix}.png`);
+    } catch (e){
+      console.error("single chart export failed:", e);
+      alert(`Export failed: ${e.message || e}`);
+    } finally {
+      setExporting(null);
+    }
+  }, [logFlags]);
+
+  const exportZipAll = useCallback(async () => {
+    if (renderedCharts.length === 0) return;
+    setExporting("zip");
+    try {
+      const zip = new JSZip();
+      // Pre-rank ordering inside each folder is preserved — just slap a
+      // 2-digit ordinal on each filename so the directory listing reads
+      // top-to-bottom in priority order even for users on filesystems
+      // that don't sort naturally.
+      const counters = {};
+      for (const ch of renderedCharts){
+        const useLog = logFlags[ch.key] != null ? logFlags[ch.key] : false;
+        const props  = _autoChartSpec(ch, useLog);
+        const svg    = _chartSpecToSvgString(props);
+        const png    = await _svgStringToPngBlob(svg, props.w, props.h);
+        const folder = zip.folder(ch.category);
+        counters[ch.category] = (counters[ch.category] || 0) + 1;
+        const ord = String(counters[ch.category]).padStart(2, "0");
+        const logSuffix = props.yLog ? "_logy" : "";
+        const base = ch.filename.replace(/\.png$/, "");
+        folder.file(`${ord}_${base}${logSuffix}.png`, png);
+      }
+      // README inside the ZIP — small note describing how plots are sorted
+      // and what the categories mean. Pure plain text, never expensive.
+      const readme = [
+        "ProReadyEngineer · Combustion Toolkit — Automated Plots",
+        "",
+        `Run captured ${results.length} matrix rows (${ok} valid, ${errored} errored).`,
+        `${renderedCharts.length} plots exported, organized by combustion-domain priority.`,
+        "",
+        "Folder ordering (most decision-relevant first):",
+        "  01_emissions            NOx, CO @ 15% O₂ — regulatory drivers",
+        "  02_flame_temperatures   T_ad, T_psr, T_AFT, T_Bulk, T4",
+        "  03_stability_blowoff    S_L, blowoff velocity, τ_BO, Damköhler, g_c",
+        "  04_autoignition         τ_ign, τ_res, τ_chem, ignition margin",
+        "  05_cycle_performance    MW, η_LHV, heat rate, station temps",
+        "  06_mapping_correlations PX36, ΔT_Main, C3-effective",
+        "  07_mass_flows           mdot air / fuel / bleed / water",
+        "  08_phi_FAR              φ4, FAR4, φ_Bulk, exhaust-derived φ",
+        "  09_pressures            P3, P_exhaust",
+        "  10_fuel_properties      LHV, MW, SG, AFR, Wobbe, MWI",
+        "  11_inlet_temps_transport T_mixed, α_th",
+        "  12_mole_fractions       X_NO, X_OH, X_CO, X_CO2, X_H2O",
+        "  13_conversion_residence PSR conv, τ_PFR, τ_total",
+        "  14_exhaust_inverted     T_ad / FAR derived from O₂ / CO₂ measurements",
+        "  15_O2_inerts            Exhaust O₂, X_O2, bleed fraction",
+        "",
+        `Generated ${new Date().toISOString()}`,
+        `Units: ${units}`,
+      ].join("\n");
+      zip.file("README.txt", readme);
+
+      const blob = await zip.generateAsync({type: "blob", compression: "DEFLATE"});
+      const ts = new Date().toISOString().slice(0, 16).replace(/[:T-]/g, "");
+      _triggerBlobDownload(blob, `ProReadyEngineer_Plots_${ts}.zip`);
+    } catch (e){
+      console.error("ZIP export failed:", e);
+      alert(`ZIP export failed: ${e.message || e}`);
+    } finally {
+      setExporting(null);
+    }
+  }, [renderedCharts, logFlags, results.length, ok, errored, units]);
 
   return (
     <div style={{
@@ -6164,12 +6556,21 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
           <ColPicker label="Group by" cols={inputCols} value={customGId} onChange={setCustomGId}
             allowNone={true} noneLabel="(no grouping — single series)"/>
         </div>
-        <div style={{display:"flex", alignItems:"center", gap:14, marginBottom:8}}>
+        <div style={{display:"flex", alignItems:"center", gap:14, marginBottom:8, flexWrap:"wrap"}}>
           <label style={{display:"flex", alignItems:"center", gap:6, fontSize:11,
             color:C.txtDim, cursor:"pointer", fontFamily:"'Barlow',sans-serif"}}>
             <input type="checkbox" checked={customLog} onChange={e=>setCustomLog(e.target.checked)}/>
             Y log scale
           </label>
+          <button onClick={exportCustomPlot}
+            disabled={!xCol || !yCol || !customSeriesData || customSeriesData.series.length === 0 || exporting === "custom"}
+            style={{marginLeft:"auto", padding:"5px 12px", fontSize:11, fontWeight:700,
+              color: C.bg, background: C.accent2, border: "none", borderRadius:4,
+              cursor: (!xCol || !yCol || !customSeriesData || customSeriesData.series.length === 0) ? "not-allowed" : "pointer",
+              opacity: (!xCol || !yCol || !customSeriesData || customSeriesData.series.length === 0) ? 0.4 : 1,
+              fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px"}}>
+            {exporting === "custom" ? "⏳ EXPORTING…" : "📥 EXPORT PNG"}
+          </button>
         </div>
         {xCol && yCol && customSeriesData && customSeriesData.series.length > 0 ? (
           <div style={{background:C.bg2, borderRadius:6, padding:8}}>
@@ -6199,35 +6600,56 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
 
       {/* ── Auto plots ──────────────────────────────────────────────── */}
       <div>
-        <div style={{display:"flex", alignItems:"center", gap:14, marginBottom:8}}>
+        <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:8, flexWrap:"wrap"}}>
           <span style={{fontSize:11, fontWeight:700, color:C.txtDim,
             fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".6px",
             textTransform:"uppercase"}}>
-            Auto plots ({filteredAutoCharts.length}{filteredAutoCharts.length !== autoCharts.length ? ` of ${autoCharts.length}` : ""})
-            — every captured output × every varied input
+            Auto plots — sorted by combustion priority
+            <span style={{fontWeight:400, color:C.txtMuted, marginLeft:6}}>
+              ({renderedCharts.length} of {autoCharts.length} shown
+              {autoCharts.length > 0 ? `; constant outputs filtered out` : ""})
+            </span>
           </span>
-          <input type="text" placeholder="filter charts (e.g. NOx, T_ad, phi)…"
-            value={filterAuto} onChange={e=>setFilterAuto(e.target.value)}
-            style={{marginLeft:"auto", padding:"4px 8px", fontSize:11,
-              background:C.bg, color:C.txt, border:`1px solid ${C.border}`, borderRadius:4,
-              fontFamily:"monospace", width:280}}/>
+          <PlotMultiSelect
+            charts={autoCharts}
+            selectedKeys={selectedKeys}
+            setSelectedKeys={setSelectedKeys}
+          />
+          <button onClick={exportZipAll}
+            disabled={renderedCharts.length === 0 || exporting === "zip"}
+            style={{padding:"5px 12px", fontSize:11, fontWeight:700,
+              color: C.bg, background: C.good, border: "none", borderRadius:4,
+              cursor: renderedCharts.length === 0 ? "not-allowed" : "pointer",
+              opacity: renderedCharts.length === 0 ? 0.4 : 1,
+              fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px"}}
+            title={`Export the ${renderedCharts.length} selected plot${renderedCharts.length !== 1 ? "s" : ""} as a ZIP, organized into combustion-domain folders.`}>
+            {exporting === "zip" ? `⏳ ZIPPING…` : `📦 EXPORT ${renderedCharts.length} AS ZIP`}
+          </button>
         </div>
         {autoCharts.length === 0 && (
           <div style={{padding:14, color:C.txtMuted, fontSize:12, fontStyle:"italic",
             fontFamily:"monospace"}}>
-            Need at least one varied input and one captured output to render auto plots.
+            No informative auto plots — every output is constant across the matrix
+            (or no inputs are varied). Vary at least one input that drives a
+            non-constant output to populate this section.
+          </div>
+        )}
+        {autoCharts.length > 0 && renderedCharts.length === 0 && (
+          <div style={{padding:14, color:C.txtMuted, fontSize:12, fontStyle:"italic",
+            fontFamily:"monospace"}}>
+            No plots selected. Use the picker above to choose which charts to display.
           </div>
         )}
         <div style={{display:"grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
           gap: 10}}>
-          {filteredAutoCharts.map(ch => {
+          {renderedCharts.map(ch => {
             const useLog = logFlags[ch.key] != null ? logFlags[ch.key] : false;
             const canLog = _seriesAllPositive(ch.data.series);
             return (
               <div key={ch.key} style={{background:C.bg, padding:8, borderRadius:6,
                 border:`1px solid ${C.border}`}}>
-                <div style={{display:"flex", alignItems:"center", marginBottom:4}}>
+                <div style={{display:"flex", alignItems:"center", marginBottom:4, gap:8}}>
                   <span style={{fontSize:11.5, fontWeight:700, color:C.txt,
                     fontFamily:"'Barlow',sans-serif"}}>
                     {ch.yCol.label}{ch.yCol.unit ? ` (${ch.yCol.unit})` : ""} vs {ch.xCol.label}{ch.xCol.unit ? ` (${ch.xCol.unit})` : ""}
@@ -6242,6 +6664,16 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
                       log y{ch.logHint ? " ★" : ""}
                     </label>
                   )}
+                  <button onClick={() => exportSingleAuto(ch)}
+                    disabled={exporting === ch.key}
+                    style={{marginLeft: canLog ? 0 : "auto",
+                      padding:"2px 8px", fontSize:10, fontWeight:700,
+                      color: C.txtDim, background: "transparent",
+                      border: `1px solid ${C.border}`, borderRadius:3, cursor:"pointer",
+                      fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".4px"}}
+                    title="Export this plot as a PNG file">
+                    {exporting === ch.key ? "⏳" : "📥 PNG"}
+                  </button>
                 </div>
                 <MultiSeriesChart
                   series={ch.data.series}
@@ -6258,6 +6690,145 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Searchable multi-select dropdown for the auto-plot selector ──
+//   Trigger button shows "{N selected of M}". Click → opens a panel with
+//   a search box, select-all/clear shortcuts, and a category-grouped
+//   checkbox list. Click outside closes. Keys click on the chart key
+//   from autoCharts; the parent renders only checked charts.
+function PlotMultiSelect({ charts, selectedKeys, setSelectedKeys }){
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const wrapRef = useRef(null);
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    if (!q.trim()) return charts;
+    const needle = q.trim().toLowerCase();
+    return charts.filter(ch =>
+      ch.title.toLowerCase().includes(needle) ||
+      ch.category.toLowerCase().includes(needle)
+    );
+  }, [charts, q]);
+
+  // Group by category for the list.
+  const grouped = useMemo(() => {
+    const m = new Map();
+    for (const ch of filtered){
+      if (!m.has(ch.category)) m.set(ch.category, []);
+      m.get(ch.category).push(ch);
+    }
+    return [...m.entries()].sort((a,b) => a[0].localeCompare(b[0]));
+  }, [filtered]);
+
+  const toggle = (key) => {
+    setSelectedKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  const selectAllFiltered = () => {
+    setSelectedKeys(prev => {
+      const next = new Set(prev);
+      for (const ch of filtered) next.add(ch.key);
+      return next;
+    });
+  };
+  const clearAllFiltered = () => {
+    setSelectedKeys(prev => {
+      const next = new Set(prev);
+      for (const ch of filtered) next.delete(ch.key);
+      return next;
+    });
+  };
+
+  const totalSel = selectedKeys.size;
+  const totalAll = charts.length;
+
+  return (
+    <div ref={wrapRef} style={{position:"relative"}}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{padding:"5px 12px", fontSize:11, fontWeight:600,
+          color: C.txt, background: C.bg, border: `1px solid ${C.accent}80`,
+          borderRadius:4, cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif",
+          letterSpacing:".4px", minWidth: 240, textAlign:"left",
+          display:"flex", alignItems:"center", gap:8}}>
+        <span>SELECT PLOTS · {totalSel} / {totalAll}</span>
+        <span style={{marginLeft:"auto", color: C.accent, fontSize:10}}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div style={{position:"absolute", top:"calc(100% + 4px)", left:0, zIndex:50,
+          width: 460, maxHeight: 420, overflow:"hidden", display:"flex", flexDirection:"column",
+          background: C.bg2, border: `1px solid ${C.accent}80`, borderRadius: 6,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.5)"}}>
+          <div style={{padding: 8, borderBottom: `1px solid ${C.border}`,
+            display:"flex", flexDirection:"column", gap:6}}>
+            <input type="text" value={q} placeholder="search title, category…"
+              onChange={e => setQ(e.target.value)}
+              style={{padding:"5px 8px", fontSize:11, background: C.bg, color: C.txt,
+                border: `1px solid ${C.border}`, borderRadius:4, fontFamily:"monospace"}}/>
+            <div style={{display:"flex", gap:6, fontSize:10}}>
+              <button onClick={selectAllFiltered}
+                style={{flex:1, padding:"4px 8px", fontSize:10, fontWeight:600,
+                  color: C.accent, background:"transparent", border:`1px solid ${C.accent}60`,
+                  borderRadius:3, cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif"}}>
+                ✓ SELECT {filtered.length}{q ? " FILTERED" : " ALL"}
+              </button>
+              <button onClick={clearAllFiltered}
+                style={{flex:1, padding:"4px 8px", fontSize:10, fontWeight:600,
+                  color: C.warm, background:"transparent", border:`1px solid ${C.warm}60`,
+                  borderRadius:3, cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif"}}>
+                ✕ CLEAR{q ? " FILTERED" : " ALL"}
+              </button>
+            </div>
+          </div>
+          <div style={{flex:1, overflowY:"auto", padding: 6}}>
+            {grouped.length === 0 && (
+              <div style={{padding:8, color:C.txtMuted, fontSize:11, fontStyle:"italic",
+                fontFamily:"monospace"}}>
+                no charts match
+              </div>
+            )}
+            {grouped.map(([cat, items]) => (
+              <div key={cat} style={{marginBottom:8}}>
+                <div style={{fontSize:9.5, fontWeight:700, color: C.accent,
+                  textTransform:"uppercase", letterSpacing:".7px", padding:"4px 6px",
+                  background:`${C.accent}10`, borderRadius:3,
+                  fontFamily:"'Barlow Condensed',sans-serif"}}>
+                  {cat.replace(/^\d+_/, "").replace(/_/g, " ")} ({items.length})
+                </div>
+                {items.map(ch => {
+                  const checked = selectedKeys.has(ch.key);
+                  return (
+                    <label key={ch.key}
+                      style={{display:"flex", alignItems:"center", gap:6, padding:"3px 6px",
+                        cursor:"pointer", fontSize:11, fontFamily:"'Barlow',sans-serif",
+                        color: checked ? C.txt : C.txtDim,
+                        background: checked ? `${C.accent}14` : "transparent",
+                        borderRadius:3}}>
+                      <input type="checkbox" checked={checked} onChange={() => toggle(ch.key)}/>
+                      <span style={{fontFamily:"monospace", fontSize:10.5}}>{ch.title}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
