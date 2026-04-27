@@ -931,6 +931,172 @@ const pts = step
   })}{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmtX(v)}</text></g>)}{(!bands || bands.length===0) && <path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/>}<path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{hLines&&hLines.map((hl,i)=>hl.y>=yn&&hl.y<=yx?<g key={`hl${i}`}><line x1={p.l} y1={sy(hl.y)} x2={w-p.r} y2={sy(hl.y)} stroke={hl.color} strokeWidth="1.5" strokeDasharray="6 4" opacity="0.9"/><text x={w-p.r-6} y={sy(hl.y)-4} fill={hl.color} fontSize="9.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" textAnchor="end" letterSpacing=".5px">{hl.label} · {hl.y.toFixed(1)}</text></g>:null)}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={markerColor||C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="4" fill={markerColor||C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={markerColor||C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
 function HBar({data,w=540,h=180}){if(!data)return null;const entries=Object.entries(data).filter(([_,v])=>v>0.05).sort((a,b)=>b[1]-a[1]);if(!entries.length)return null;const pa={t:6,r:78,b:6,l:48};const bH=Math.min(22,(h-pa.t-pa.b)/entries.length-3);const mx=Math.max(...entries.map(e=>e[1]));const W=w-pa.l-pa.r;const clr={CO2:C.warm,H2O:C.accent,N2:C.accent3,O2:"#38BDF8",Ar:"#64748B",CH4:C.accent2,C2H6:C.orange,C3H8:"#F59E0B",H2:C.good,CO:"#FB923C",NO:C.strong,OH:C.violet,H:"#FDE68A",O:"#FCA5A5"};return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}>{entries.map(([sp,val],i)=>{const y=pa.t+i*(bH+3);const bw=val/mx*W;return(<g key={sp}><text x={pa.l-4} y={y+bH/2+4} fill={C.txtDim} fontSize="11" textAnchor="end" fontFamily="monospace">{fmt(sp)}</text><rect x={pa.l} y={y} width={Math.max(1,bw)} height={bH} rx="2" fill={clr[sp]||"#64748B"} opacity=".85"/><text x={pa.l+bw+4} y={y+bH/2+4} fill={C.txt} fontSize="10" fontFamily="monospace">{val.toFixed(2)}%</text></g>);})}</svg>);}
 
+// ── Multi-series scatter/line chart for the Automate "Plot Data" panel.
+//   Independent of the existing single-series `Chart` so we can keep `Chart`
+//   simple and not retrofit it. Each series is {name, color, points:[{x,y}]}
+//   pre-sorted by x ascending. Renders gridlines, axis ticks, points, lines
+//   between points (only when ≥2 points exist), legend, and axis titles.
+//   Auto-derives min/max with 5% padding (clamping min→0 for non-negative
+//   data); honours explicit xMin/xMax/yMin/yMax overrides. xCategorical
+//   (true) uses integer indices on x and shows the matching xLabel string
+//   under each tick — used when the X column is enum/bool. yLog activates a
+//   base-10 log scale on Y for outputs spanning many orders of magnitude.
+function MultiSeriesChart({
+  series, xLabel, yLabel, w=560, h=300,
+  xMin=null, xMax=null, yMin=null, yMax=null,
+  xCategorical=false, xLabels=null, yLog=false,
+  legendCols=2,
+}){
+  const allPts = series.flatMap(s => s.points || []).filter(p =>
+    p && Number.isFinite(p.x) && Number.isFinite(p.y) && (!yLog || p.y > 0)
+  );
+  if (allPts.length === 0){
+    return <div style={{color:C.txtMuted, padding:20, fontSize:13, fontFamily:"monospace"}}>No data</div>;
+  }
+  // Reserve ~24 px per legend row at the bottom (legendCols entries per row).
+  const nLegendRows = Math.ceil(series.length / Math.max(1, legendCols));
+  const legendH = nLegendRows * 18 + 8;
+  const p = { t: 24, r: 18, b: 50 + legendH, l: 70 };
+  const W = w - p.l - p.r, H = h - p.t - p.b;
+
+  const xs = allPts.map(d => d.x);
+  let xn = xMin != null ? xMin : Math.min(...xs);
+  let xx = xMax != null ? xMax : Math.max(...xs);
+  if (xn === xx){ xn -= 1; xx += 1; }
+  if (xMin == null && xMax == null){
+    const pad = (xx - xn) * 0.05;
+    xn -= pad; xx += pad;
+    if (Math.min(...xs) >= 0 && xn < 0) xn = 0;
+  }
+
+  // Y scale — linear or log10
+  let yToPx, pxToY, yTk;
+  const ys = allPts.map(d => d.y);
+  if (yLog){
+    const positiveYs = ys.filter(v => v > 0);
+    let lyn = Math.log10(Math.min(...positiveYs));
+    let lyx = Math.log10(Math.max(...positiveYs));
+    if (lyn === lyx){ lyn -= 0.5; lyx += 0.5; }
+    const lpad = (lyx - lyn) * 0.05;
+    lyn -= lpad; lyx += lpad;
+    yToPx = v => p.t + H - (Math.log10(v) - lyn) / (lyx - lyn || 1) * H;
+    const nY = 5;
+    yTk = Array.from({length: nY+1}, (_,i) => Math.pow(10, lyn + (lyx - lyn) * i / nY));
+  } else {
+    let yn = yMin != null ? yMin : Math.min(...ys);
+    let yx = yMax != null ? yMax : Math.max(...ys);
+    if (yn === yx){ yn -= 1; yx += 1; }
+    if (yMin == null && yMax == null){
+      const pad = (yx - yn) * 0.05;
+      yn -= pad; yx += pad;
+      if (Math.min(...ys) >= 0 && yn < 0) yn = 0;
+    }
+    yToPx = v => p.t + H - (v - yn) / (yx - yn || 1) * H;
+    const nY = 5;
+    yTk = Array.from({length: nY+1}, (_,i) => yn + (yx - yn) * i / nY);
+  }
+
+  const xToPx = v => p.l + (v - xn) / (xx - xn || 1) * W;
+  const fmt = v => {
+    if (!Number.isFinite(v)) return "—";
+    const a = Math.abs(v);
+    if (a !== 0 && (a < 0.01 || a >= 1e5)) return v.toExponential(1);
+    if (a >= 1e4) return (v/1e3).toFixed(0) + "k";
+    if (a >= 100) return v.toFixed(0);
+    if (a >= 1)   return v.toFixed(2);
+    if (a >= 0.01) return v.toFixed(3);
+    return v.toFixed(4);
+  };
+
+  // X ticks — for categorical, use one tick per integer index in [xn, xx];
+  // for numeric, 6 evenly spaced ticks.
+  let xTk;
+  if (xCategorical && xLabels){
+    xTk = xLabels.map((label, i) => ({ v: i, label }));
+  } else {
+    const nX = 6;
+    xTk = Array.from({length: nX+1}, (_,i) => {
+      const v = xn + (xx - xn) * i / nX;
+      return { v, label: fmt(v) };
+    });
+  }
+
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%", maxWidth:w}}>
+      {/* Gridlines + Y tick labels */}
+      {yTk.map((v,i) => (
+        <g key={`y${i}`}>
+          <line x1={p.l} y1={yToPx(v)} x2={w - p.r} y2={yToPx(v)}
+            stroke={C.grid} strokeWidth=".5"/>
+          <text x={p.l - 6} y={yToPx(v) + 3.5} fill={C.axis} fontSize="9"
+            textAnchor="end" fontFamily="monospace">{fmt(v)}</text>
+        </g>
+      ))}
+      {/* X tick lines + labels */}
+      {xTk.map((tk,i) => (
+        <g key={`x${i}`}>
+          <line x1={xToPx(tk.v)} y1={p.t} x2={xToPx(tk.v)} y2={p.t + H}
+            stroke={C.grid} strokeWidth=".5"/>
+          <text x={xToPx(tk.v)} y={h - p.b + 14} fill={C.axis} fontSize="9"
+            textAnchor="middle" fontFamily="monospace"
+            transform={xCategorical ? `rotate(-25, ${xToPx(tk.v)}, ${h - p.b + 14})` : ""}>
+            {tk.label}
+          </text>
+        </g>
+      ))}
+      {/* Axis frame */}
+      <rect x={p.l} y={p.t} width={W} height={H} fill="none" stroke={C.border} strokeWidth="1"/>
+      {/* Series — one path per series; circles for each point */}
+      {series.map((s, sIdx) => {
+        const pts = (s.points || []).filter(d =>
+          Number.isFinite(d.x) && Number.isFinite(d.y) && (!yLog || d.y > 0)
+        );
+        if (pts.length === 0) return null;
+        const path = pts.map((d,i) =>
+          `${i ? 'L' : 'M'}${xToPx(d.x).toFixed(1)},${yToPx(d.y).toFixed(1)}`
+        ).join(' ');
+        return (
+          <g key={`s${sIdx}`}>
+            {pts.length >= 2 && (
+              <path d={path} fill="none" stroke={s.color} strokeWidth="1.8"
+                strokeLinejoin="round" strokeLinecap="round" opacity="0.85"/>
+            )}
+            {pts.map((d,i) => (
+              <circle key={i} cx={xToPx(d.x).toFixed(1)} cy={yToPx(d.y).toFixed(1)}
+                r="3" fill={s.color} stroke={C.bg} strokeWidth="1"/>
+            ))}
+          </g>
+        );
+      })}
+      {/* Axis titles */}
+      <text x={p.l + W/2} y={h - p.b + 38} fill={C.txtDim} fontSize="11"
+        textAnchor="middle" fontFamily="'Barlow',sans-serif" fontWeight="600">
+        {xLabel}
+      </text>
+      <text x={14} y={p.t + H/2} fill={C.txtDim} fontSize="11"
+        textAnchor="middle" fontFamily="'Barlow',sans-serif" fontWeight="600"
+        transform={`rotate(-90, 14, ${p.t + H/2})`}>
+        {yLabel}{yLog ? " (log₁₀)" : ""}
+      </text>
+      {/* Legend — wrap into legendCols columns × nLegendRows rows */}
+      {series.map((s, i) => {
+        const colW = W / Math.max(1, legendCols);
+        const r = Math.floor(i / legendCols), c = i % legendCols;
+        const lx = p.l + c * colW + 2;
+        const ly = h - legendH + 6 + r * 18;
+        return (
+          <g key={`lg${i}`}>
+            <line x1={lx} y1={ly} x2={lx + 18} y2={ly} stroke={s.color} strokeWidth="2.5"/>
+            <circle cx={lx + 9} cy={ly} r="3" fill={s.color} stroke={C.bg} strokeWidth="1"/>
+            <text x={lx + 24} y={ly + 3.5} fill={C.txtDim} fontSize="10"
+              fontFamily="'Barlow',sans-serif">{s.name}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 /* ══════════════════ UI COMPONENTS ══════════════════ */
 const C={bg:"#0D1117",bg2:"#161B22",bg3:"#1C2128",border:"#30363D",accent:"#2DD4BF",accent2:"#FBBF24",accent3:"#60A5FA",warm:"#F87171",good:"#4ADE80",violet:"#A78BFA",orange:"#FB923C",strong:"#EF4444",txt:"#F0F6FC",txtDim:"#C9D1D9",txtMuted:"#8B949E",grid:"#21262D",axis:"#8B949E"};
 
@@ -5722,6 +5888,394 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+   PLOT PANEL — visualize the matrix results
+   ──────────────────────────────────────────────────────────────────────────
+   Two sections:
+     1. CUSTOM PLOT — user picks X, Y, and group-by columns from a searchable
+        list of varied inputs + captured outputs. Renders a single chart.
+     2. AUTO PLOTS  — for every captured output we render N charts (one per
+        varied input as the X axis). Series within a chart are grouped by
+        the OTHER varied inputs, so each line is a unique combination of
+        the held-fixed-this-time values. With N=1 varied input there's one
+        series per chart and the legend is hidden.
+   Both sections feed the same MultiSeriesChart component. All values are
+   converted to display units (SI or ENG) so labels and ticks match the
+   user's selection. ══════════════════════════════════════════════════════ */
+
+const PLOT_PALETTE = [
+  "#2DD4BF", "#FBBF24", "#60A5FA", "#F87171", "#A78BFA",
+  "#4ADE80", "#FB923C", "#EF4444", "#38BDF8", "#FDE68A",
+  "#A3E635", "#F472B6",
+];
+
+// Format a single column value for use as a group-key label. Uses
+// formatRowValue for nice numeric rounding, falls back to String() for
+// enums/bools that are already strings/booleans.
+function _plotFmtVal(col, raw){
+  if (raw == null) return "—";
+  if (col.isCategorical) return String(raw);
+  const disp = col.toDisp(raw);
+  if (typeof disp === "number" && Number.isFinite(disp)) return formatRowValue(disp);
+  return String(disp);
+}
+
+// Build a stable, human-readable group-key label from the OTHER (non-X)
+// varied inputs in a row. The key includes column labels so the user can
+// tell which combination produced this series.
+function _plotGroupKey(row, groupCols){
+  if (groupCols.length === 0) return "all data";
+  return groupCols.map(c => `${c.label}=${_plotFmtVal(c, row.__inputs__?.[c.varId])}`).join(" · ");
+}
+
+// Compile the full set of plottable columns once per (varSpecs, outputs,
+// units) tuple. Each column knows how to pick a raw SI value out of a row
+// and how to convert that value to display units.
+function _buildPlotColumns(varSpecs, outputs, units){
+  const cols = [];
+  for (const v of varSpecs){
+    const isCat = v.kind === "enum" || v.kind === "bool" || v.kind === "fuel_species" || v.kind === "ox_species";
+    cols.push({
+      id: `in:${v.id}`, kind: "input", varId: v.id,
+      label: v.label,
+      unit: unitFor(v, units),
+      isCategorical: isCat && v.kind !== "fuel_species" && v.kind !== "ox_species",
+      // Species columns ARE numeric (mol %), so don't tag them categorical.
+      raw: row => row.__inputs__?.[v.id],
+      toDisp: raw => toDisplay(v, raw, units),
+    });
+  }
+  for (const o of outputs){
+    const isCat = o.unit === "bool";
+    cols.push({
+      id: `out:${o.id}`, kind: "output",
+      label: o.label,
+      unit: outputUnitFor(o, units),
+      isCategorical: isCat,
+      raw: row => row.__outputs__?.[o.id],
+      toDisp: raw => isCat ? (raw ? 1 : 0) : outputDisplayValue(o, raw, units),
+    });
+  }
+  return cols;
+}
+
+// Build the chart's series array. Sorts the rows by X ascending so lines
+// trace cleanly left-to-right, splits them into series keyed by the
+// `groupCols` value combination, and assigns a palette color to each
+// series. Returns {series, xCategorical, xLabels?} ready for
+// MultiSeriesChart.
+function _buildSeries(rows, xCol, yCol, groupCols){
+  // Build a list of {row, x, y, gKey} after dropping invalid points.
+  const pts = [];
+  let xIsCat = !!xCol.isCategorical;
+  // For categorical X, build a list of distinct values in row-encounter order.
+  const catOrder = [];
+  const catIdx = new Map();
+  for (const row of rows){
+    if (row.__error__) continue;
+    let xRaw = xCol.raw(row);
+    let yRaw = yCol.raw(row);
+    if (xRaw == null || yRaw == null) continue;
+    // For categorical: stable integer index from the first-seen value.
+    let x;
+    if (xIsCat){
+      const k = String(xRaw);
+      if (!catIdx.has(k)){ catIdx.set(k, catOrder.length); catOrder.push(k); }
+      x = catIdx.get(k);
+    } else {
+      x = xCol.toDisp(xRaw);
+      if (typeof x !== "number" || !Number.isFinite(x)) continue;
+    }
+    let y = yCol.toDisp(yRaw);
+    if (typeof y === "boolean") y = y ? 1 : 0;
+    if (typeof y !== "number" || !Number.isFinite(y)) continue;
+    pts.push({ x, y, gKey: _plotGroupKey(row, groupCols) });
+  }
+  // Bucket by group key.
+  const buckets = new Map();
+  for (const p of pts){
+    if (!buckets.has(p.gKey)) buckets.set(p.gKey, []);
+    buckets.get(p.gKey).push({ x: p.x, y: p.y });
+  }
+  const series = [];
+  let i = 0;
+  for (const [name, points] of buckets){
+    points.sort((a,b) => a.x - b.x);
+    series.push({ name, color: PLOT_PALETTE[i % PLOT_PALETTE.length], points });
+    i++;
+  }
+  // Sort series by name for predictable ordering & color stability across
+  // re-renders that produce the same group keys.
+  series.sort((a,b) => a.name.localeCompare(b.name));
+  // Re-assign colors after sort.
+  series.forEach((s, k) => { s.color = PLOT_PALETTE[k % PLOT_PALETTE.length]; });
+  return { series, xCategorical: xIsCat, xLabels: xIsCat ? catOrder : null };
+}
+
+// A small searchable selector for plottable columns. Filters the list of
+// `cols` against the user-typed substring (case-insensitive). Renders a
+// scrollable list; the currently-selected entry is highlighted.
+function ColPicker({ label, cols, value, onChange, allowNone=false, noneLabel="(none)" }){
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    if (!q.trim()) return cols;
+    const needle = q.trim().toLowerCase();
+    return cols.filter(c =>
+      c.label.toLowerCase().includes(needle) || c.id.toLowerCase().includes(needle)
+    );
+  }, [cols, q]);
+  return (
+    <div style={{display:"flex", flexDirection:"column", gap:4, minWidth:200, flex:"1 1 200px"}}>
+      <div style={{fontSize:10, color:C.txtMuted, textTransform:"uppercase", letterSpacing:".5px",
+        fontFamily:"'Barlow Condensed',sans-serif", fontWeight:700}}>{label}</div>
+      <input type="text" value={q} placeholder="search…" onChange={e=>setQ(e.target.value)}
+        style={{padding:"5px 8px", fontSize:11, fontFamily:"monospace",
+          background:C.bg, color:C.txt, border:`1px solid ${C.border}`, borderRadius:4}}/>
+      <div style={{maxHeight:160, overflow:"auto", border:`1px solid ${C.border}`,
+        borderRadius:4, background:C.bg}}>
+        {allowNone && (
+          <div onClick={() => onChange(null)}
+            style={{padding:"4px 8px", fontSize:11, cursor:"pointer",
+              fontFamily:"monospace",
+              background: value == null ? `${C.accent}30` : "transparent",
+              color: value == null ? C.accent : C.txtDim,
+              borderBottom:`1px solid ${C.border}40`}}>
+            {noneLabel}
+          </div>
+        )}
+        {filtered.length === 0 && (
+          <div style={{padding:"6px 8px", fontSize:11, color:C.txtMuted, fontStyle:"italic",
+            fontFamily:"monospace"}}>no match</div>
+        )}
+        {filtered.map(c => (
+          <div key={c.id} onClick={() => onChange(c.id)}
+            style={{padding:"4px 8px", fontSize:11, cursor:"pointer",
+              fontFamily:"monospace",
+              background: value === c.id ? `${C.accent}30` : "transparent",
+              color: value === c.id ? C.accent : C.txtDim,
+              borderBottom:`1px solid ${C.border}40`}}>
+            <span style={{color:c.kind === "input" ? C.accent3 : C.warm,
+              fontSize:9, marginRight:6, fontWeight:700}}>
+              {c.kind === "input" ? "IN" : "OUT"}
+            </span>
+            {c.label}
+            {c.unit ? <span style={{color:C.txtMuted, marginLeft:6}}>({c.unit})</span> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
+  // varSpecs is the user's varied list (already filtered to active panels);
+  // selectedOutputs is the captured-output catalog for those panels.
+  const allCols = useMemo(
+    () => _buildPlotColumns(varSpecs, selectedOutputs, units),
+    [varSpecs, selectedOutputs, units],
+  );
+  const inputCols  = useMemo(() => allCols.filter(c => c.kind === "input"),  [allCols]);
+  const outputCols = useMemo(() => allCols.filter(c => c.kind === "output"), [allCols]);
+
+  // Custom-plot defaults: first varied input as X, first output as Y, no group.
+  const [customXId, setCustomXId] = useState(() => allCols[0]?.id || null);
+  const [customYId, setCustomYId] = useState(() => outputCols[0]?.id || allCols[1]?.id || null);
+  const [customGId, setCustomGId] = useState(null);
+  const [customLog, setCustomLog] = useState(false);
+
+  const xCol = useMemo(() => allCols.find(c => c.id === customXId) || null, [allCols, customXId]);
+  const yCol = useMemo(() => allCols.find(c => c.id === customYId) || null, [allCols, customYId]);
+  const gCol = useMemo(() => allCols.find(c => c.id === customGId) || null, [allCols, customGId]);
+
+  const customSeriesData = useMemo(() => {
+    if (!xCol || !yCol) return null;
+    const groupCols = gCol ? [{ ...gCol, varId: gCol.varId }] : [];
+    return _buildSeries(results, xCol, yCol, groupCols);
+  }, [results, xCol, yCol, gCol]);
+
+  // ── Auto-plot grid: one chart per (output × varied-input X axis). ──
+  //   If there's only one varied input, no other-vars exist to group by, so
+  //   each chart has exactly one series. With N≥2 varied inputs each chart
+  //   has up to ∏ (steps_of_other_var) distinct series — capped via the
+  //   palette length so the legend stays readable.
+  const autoCharts = useMemo(() => {
+    if (inputCols.length === 0 || outputCols.length === 0) return [];
+    const out = [];
+    for (const yc of outputCols){
+      for (const xc of inputCols){
+        const groupCols = inputCols
+          .filter(c => c.varId !== xc.varId)
+          .map(c => ({ ...c, varId: c.varId }));
+        const sd = _buildSeries(results, xc, yc, groupCols);
+        if (sd.series.length === 0) continue;
+        out.push({
+          key: `${yc.id}__vs__${xc.id}`,
+          title: `${yc.label} vs ${xc.label}`,
+          xCol: xc, yCol: yc, data: sd,
+          // If the Y values span >2 orders of magnitude AND are all positive,
+          // hint a log axis (renders as a checkbox the user can toggle).
+          // We compute the hint here; user can override via state.
+          logHint: _shouldLogAxis(sd.series),
+        });
+      }
+    }
+    return out;
+  }, [results, inputCols, outputCols]);
+
+  const [logFlags, setLogFlags] = useState({});  // { chartKey: bool }
+  const [filterAuto, setFilterAuto] = useState("");
+  const filteredAutoCharts = useMemo(() => {
+    if (!filterAuto.trim()) return autoCharts;
+    const needle = filterAuto.trim().toLowerCase();
+    return autoCharts.filter(ch => ch.title.toLowerCase().includes(needle));
+  }, [autoCharts, filterAuto]);
+
+  const ok = results.filter(r => !r.__error__).length;
+  const errored = results.length - ok;
+
+  return (
+    <div style={{
+      marginTop: 14, padding: 14, background: C.bg2, borderRadius: 8,
+      border: `1px solid ${C.accent}30`,
+    }}>
+      <div style={{display:"flex", alignItems:"center", marginBottom: 10}}>
+        <span style={{fontSize: 14, fontWeight: 700, color: C.accent,
+          fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".7px"}}>
+          📊 PLOT DATA · {ok} valid rows{errored > 0 ? ` · ${errored} errored (skipped)` : ""}
+        </span>
+        <button onClick={onClose}
+          style={{marginLeft:"auto", padding:"4px 12px", fontSize:11, fontWeight:600,
+            color: C.txtDim, background: "transparent", border: `1px solid ${C.border}`,
+            borderRadius:4, cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif"}}>
+          ✕ CLOSE
+        </button>
+      </div>
+
+      {/* ── Custom plot builder ─────────────────────────────────────── */}
+      <div style={{padding:10, background:C.bg, borderRadius:6, marginBottom:14,
+        border:`1px solid ${C.border}`}}>
+        <div style={{fontSize:11, fontWeight:700, color:C.txtDim,
+          fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".6px",
+          textTransform:"uppercase", marginBottom:8}}>
+          Custom plot — pick any X, Y, and (optional) group-by
+        </div>
+        <div style={{display:"flex", gap:14, flexWrap:"wrap", marginBottom:10}}>
+          <ColPicker label="X axis" cols={allCols} value={customXId} onChange={setCustomXId}/>
+          <ColPicker label="Y axis" cols={allCols} value={customYId} onChange={setCustomYId}/>
+          <ColPicker label="Group by" cols={inputCols} value={customGId} onChange={setCustomGId}
+            allowNone={true} noneLabel="(no grouping — single series)"/>
+        </div>
+        <div style={{display:"flex", alignItems:"center", gap:14, marginBottom:8}}>
+          <label style={{display:"flex", alignItems:"center", gap:6, fontSize:11,
+            color:C.txtDim, cursor:"pointer", fontFamily:"'Barlow',sans-serif"}}>
+            <input type="checkbox" checked={customLog} onChange={e=>setCustomLog(e.target.checked)}/>
+            Y log scale
+          </label>
+        </div>
+        {xCol && yCol && customSeriesData && customSeriesData.series.length > 0 ? (
+          <div style={{background:C.bg2, borderRadius:6, padding:8}}>
+            <div style={{fontSize:12, color:C.txt, marginBottom:6, fontWeight:600,
+              fontFamily:"'Barlow',sans-serif"}}>
+              {yCol.label}{yCol.unit ? ` (${yCol.unit})` : ""} vs {xCol.label}{xCol.unit ? ` (${xCol.unit})` : ""}
+              {gCol ? ` — grouped by ${gCol.label}` : ""}
+            </div>
+            <MultiSeriesChart
+              series={customSeriesData.series}
+              xLabel={`${xCol.label}${xCol.unit ? ` (${xCol.unit})` : ""}`}
+              yLabel={`${yCol.label}${yCol.unit ? ` (${yCol.unit})` : ""}`}
+              w={760} h={380}
+              xCategorical={customSeriesData.xCategorical}
+              xLabels={customSeriesData.xLabels}
+              yLog={customLog && _seriesAllPositive(customSeriesData.series)}
+              legendCols={customSeriesData.series.length > 6 ? 3 : 2}
+            />
+          </div>
+        ) : (
+          <div style={{padding:14, color:C.txtMuted, fontSize:12, fontStyle:"italic",
+            fontFamily:"monospace", textAlign:"center"}}>
+            Pick an X and Y column above to build a custom plot.
+          </div>
+        )}
+      </div>
+
+      {/* ── Auto plots ──────────────────────────────────────────────── */}
+      <div>
+        <div style={{display:"flex", alignItems:"center", gap:14, marginBottom:8}}>
+          <span style={{fontSize:11, fontWeight:700, color:C.txtDim,
+            fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".6px",
+            textTransform:"uppercase"}}>
+            Auto plots ({filteredAutoCharts.length}{filteredAutoCharts.length !== autoCharts.length ? ` of ${autoCharts.length}` : ""})
+            — every captured output × every varied input
+          </span>
+          <input type="text" placeholder="filter charts (e.g. NOx, T_ad, phi)…"
+            value={filterAuto} onChange={e=>setFilterAuto(e.target.value)}
+            style={{marginLeft:"auto", padding:"4px 8px", fontSize:11,
+              background:C.bg, color:C.txt, border:`1px solid ${C.border}`, borderRadius:4,
+              fontFamily:"monospace", width:280}}/>
+        </div>
+        {autoCharts.length === 0 && (
+          <div style={{padding:14, color:C.txtMuted, fontSize:12, fontStyle:"italic",
+            fontFamily:"monospace"}}>
+            Need at least one varied input and one captured output to render auto plots.
+          </div>
+        )}
+        <div style={{display:"grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+          gap: 10}}>
+          {filteredAutoCharts.map(ch => {
+            const useLog = logFlags[ch.key] != null ? logFlags[ch.key] : false;
+            const canLog = _seriesAllPositive(ch.data.series);
+            return (
+              <div key={ch.key} style={{background:C.bg, padding:8, borderRadius:6,
+                border:`1px solid ${C.border}`}}>
+                <div style={{display:"flex", alignItems:"center", marginBottom:4}}>
+                  <span style={{fontSize:11.5, fontWeight:700, color:C.txt,
+                    fontFamily:"'Barlow',sans-serif"}}>
+                    {ch.yCol.label}{ch.yCol.unit ? ` (${ch.yCol.unit})` : ""} vs {ch.xCol.label}{ch.xCol.unit ? ` (${ch.xCol.unit})` : ""}
+                  </span>
+                  {canLog && (
+                    <label style={{marginLeft:"auto", display:"flex", alignItems:"center", gap:4,
+                      fontSize:10, color: ch.logHint ? C.accent2 : C.txtMuted, cursor:"pointer",
+                      fontFamily:"'Barlow',sans-serif"}}
+                      title={ch.logHint ? "Wide y-range — log scale recommended" : "Toggle log y axis"}>
+                      <input type="checkbox" checked={useLog}
+                        onChange={e => setLogFlags(f => ({...f, [ch.key]: e.target.checked}))}/>
+                      log y{ch.logHint ? " ★" : ""}
+                    </label>
+                  )}
+                </div>
+                <MultiSeriesChart
+                  series={ch.data.series}
+                  xLabel={`${ch.xCol.label}${ch.xCol.unit ? ` (${ch.xCol.unit})` : ""}`}
+                  yLabel={`${ch.yCol.label}${ch.yCol.unit ? ` (${ch.yCol.unit})` : ""}`}
+                  w={520} h={300}
+                  xCategorical={ch.data.xCategorical}
+                  xLabels={ch.data.xLabels}
+                  yLog={useLog && canLog}
+                  legendCols={ch.data.series.length > 4 ? 2 : 1}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Heuristic: prefer a log y axis when all-positive AND span ≥ 2 orders.
+function _shouldLogAxis(series){
+  const ys = series.flatMap(s => s.points.map(p => p.y)).filter(Number.isFinite);
+  if (ys.length === 0) return false;
+  const positives = ys.filter(v => v > 0);
+  if (positives.length !== ys.length) return false;
+  const lo = Math.min(...positives), hi = Math.max(...positives);
+  return hi / Math.max(lo, 1e-30) >= 100;
+}
+function _seriesAllPositive(series){
+  return series.every(s => s.points.every(p => p.y > 0));
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    AUTOMATION PANEL (tab UI)
    ──────────────────────────────────────────────────────────────────────────
    Five-step wizard:
@@ -5751,6 +6305,7 @@ function AutomatePanel(props){
   const [progress, setProgress] = useState(null);
   const [results, setResults]   = useState(null);
   const [errMsg, setErrMsg]     = useState(null);
+  const [showPlots, setShowPlots] = useState(false);
   const abortRef = useRef({aborted:false});
 
   // Auto-include dependency panels (mapping → cycle)
@@ -5967,7 +6522,7 @@ function AutomatePanel(props){
       accurate, selectedPanels: effectivePanels, units, baseline,
     });
   };
-  const resetRun = () => { setResults(null); setProgress(null); setErrMsg(null); };
+  const resetRun = () => { setResults(null); setProgress(null); setErrMsg(null); setShowPlots(false); };
 
   // ─────────────────────────────────────────────────────────────────────
   //  UI helpers
@@ -6346,6 +6901,15 @@ function AutomatePanel(props){
               letterSpacing:".5px"}}>
             📥 DOWNLOAD EXCEL
           </button>
+          <button onClick={()=>setShowPlots(s=>!s)}
+            style={{padding:"8px 18px", fontSize:12, fontWeight:700,
+              color: showPlots ? C.bg : C.accent,
+              background: showPlots ? C.accent : "transparent",
+              border:`1.5px solid ${C.accent}`, borderRadius:5,
+              cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif",
+              letterSpacing:".5px"}}>
+            📊 {showPlots ? "HIDE PLOTS" : "PLOT DATA"}
+          </button>
           <button onClick={resetRun}
             style={{padding:"8px 14px", fontSize:11, fontWeight:600,
               color:C.txtDim, background:"transparent", border:`1px solid ${C.border}`,
@@ -6358,6 +6922,15 @@ function AutomatePanel(props){
         <div style={{marginTop:8, padding:"6px 10px", background:`${C.warm}14`,
           border:`1px solid ${C.warm}60`, borderRadius:4, fontSize:11, color:C.warm,
           fontFamily:"monospace"}}>{errMsg}</div>
+      )}
+      {!running && results && showPlots && (
+        <PlotPanel
+          results={results}
+          varSpecs={activeVarSpecs}
+          selectedOutputs={effectiveOutputs}
+          units={units}
+          onClose={() => setShowPlots(false)}
+        />
       )}
     </Step>
   </div>);
