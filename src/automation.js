@@ -503,6 +503,18 @@ export const AUTO_OUTPUTS = [
   { id: "WI",                 label: "Wobbe Index",  panel: "aft",
     unit_si: "MJ/m³", unit_en: "BTU/scf", siToEn: MJm3_to_BTUscf,
     pick: r => r.derived?.WI },
+  // Modified Wobbe Index (BTU/scf·√°R, GE convention) — same units in
+  // both SI and English mode; the formula already mixes BTU/scf with
+  // absolute T in °R per the GE spec, so no conversion needed.
+  { id: "MWI",                label: "MWI (Modified Wobbe)", panel: "aft", unit: "BTU/scf·√°R",
+    pick: r => r.derived?.MWI },
+  // Higher Heating Values — same unit shape as LHV.
+  { id: "HHV_mass",           label: "HHV (mass)",   panel: "aft",
+    unit_si: "MJ/kg", unit_en: "BTU/lb", siToEn: MJkg_to_BTUlb,
+    pick: r => r.derived?.HHV_mass },
+  { id: "HHV_vol",            label: "HHV (vol)",    panel: "aft",
+    unit_si: "MJ/m³", unit_en: "BTU/scf", siToEn: MJm3_to_BTUscf,
+    pick: r => r.derived?.HHV_vol },
   { id: "AFR_mass",           label: "Stoich AFR (mass)", panel: "aft", unit: "—",    pick: r => r.derived?.AFR_mass },
   { id: "X_CO2",              label: "X_CO₂ (wet)",  panel: "aft", unit: "%",         pick: r => r.aft?.products?.CO2 },
   { id: "X_H2O",              label: "X_H₂O (wet)",  panel: "aft", unit: "%",         pick: r => r.aft?.products?.H2O },

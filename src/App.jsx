@@ -151,7 +151,26 @@ function o2_per_mol(sp){const d=SP[sp];if(!d)return 0;return d.C+d.H/4-d.O/2;}
 function stoichO2(fuel){const t=Object.values(fuel).reduce((a,b)=>a+b,0);if(t===0)return 0;let o2=0;for(const[sp,pct]of Object.entries(fuel)){if(SP[sp]&&(SP[sp].C>0||SP[sp].H>0||sp==="CO"))o2+=(pct/t)*o2_per_mol(sp);}return o2;}
 function mixMW(comp){const t=Object.values(comp).reduce((a,b)=>a+b,0);if(t===0)return 28.97;let mw=0;for(const[sp,pct]of Object.entries(comp)){if(SP[sp])mw+=pct/t*SP[sp].MW;}return mw;}
 function calcHeatingValues(fuel){const t=Object.values(fuel).reduce((a,b)=>a+b,0);if(t===0)return{LHV_mass:0,HHV_mass:0,LHV_vol:0,HHV_vol:0,MW:28.97};const lhv_d={CH4:802.3,C2H6:1428.6,C3H8:2044.0,C4H10:2657.4,C2H4:1323.1,H2:241.8,CO:283.0};const hhv_d={CH4:890.4,C2H6:1560.7,C3H8:2220.0,C4H10:2877.4,C2H4:1411.2,H2:285.8,CO:283.0};let lhv=0,hhv=0,mw=0;for(const[sp,pct]of Object.entries(fuel)){const xi=pct/t;if(lhv_d[sp])lhv+=xi*lhv_d[sp];if(hhv_d[sp])hhv+=xi*hhv_d[sp];if(SP[sp])mw+=xi*SP[sp].MW;}const mol_m3=101325/(R_u*288.15);return{LHV_mass:lhv/mw,HHV_mass:hhv/mw,LHV_vol:lhv*mol_m3/1000,HHV_vol:hhv*mol_m3/1000,MW:mw};}
-function calcFuelProps(fuel,ox){const hv=calcHeatingValues(fuel);const MW_air=mixMW(ox);const SG=hv.MW/28.97;const WI=hv.HHV_vol/Math.sqrt(SG||0.01);const sO2=stoichO2(fuel);const oxO2f=(ox.O2||20.95)/100;const stoichOxMol=sO2/(oxO2f||0.2095);const AFR_mass=stoichOxMol*MW_air/hv.MW;return{...hv,SG,WI,AFR_mass,AFR_vol:stoichOxMol,MW_fuel:hv.MW,MW_air,stoichO2:sO2};}
+function calcFuelProps(fuel,ox,T_fuel_K=288.15){
+  const hv=calcHeatingValues(fuel);
+  const MW_air=mixMW(ox);
+  const SG=hv.MW/28.97;
+  const WI=hv.HHV_vol/Math.sqrt(SG||0.01);
+  const sO2=stoichO2(fuel);
+  const oxO2f=(ox.O2||20.95)/100;
+  const stoichOxMol=sO2/(oxO2f||0.2095);
+  const AFR_mass=stoichOxMol*MW_air/hv.MW;
+  // Modified Wobbe Index per GE convention (BTU/scf·√°R):
+  //   MWI = LHV_vol[BTU/scf] / √(SG × T_fuel[°R])
+  // LHV_vol from calcHeatingValues is MJ/m³ at 15 °C / 1 atm — convert to
+  // BTU/scf via × 26.839. T_fuel default = 288.15 K (15 °C / 519.67 °R)
+  // so legacy callers that don't pass T_fuel still get a sensible MWI.
+  const T_fuel_R=(T_fuel_K||288.15)*1.8;
+  const LHV_vol_BTUscf=(hv.LHV_vol||0)*26.839;
+  const _denom=Math.sqrt(Math.max(SG*T_fuel_R,1e-9));
+  const MWI=_denom>0 ? LHV_vol_BTUscf/_denom : 0;
+  return{...hv,SG,WI,MWI,AFR_mass,AFR_vol:stoichOxMol,MW_fuel:hv.MW,MW_air,stoichO2:sO2};
+}
 function calcAFT(fuel,ox,phi,T0){const ft=Object.values(fuel).reduce((a,b)=>a+b,0);const ot=Object.values(ox).reduce((a,b)=>a+b,0);if(ft===0||ot===0)return{T_ad:T0,products:{}};const fN={},oN={};for(const k in fuel)fN[k]=fuel[k]/ft;for(const k in ox)oN[k]=ox[k]/ot;const sO2=stoichO2(fuel);const oxO2f=oN.O2||0.2095;const oxMols=sO2/(oxO2f*phi);const reactants={};for(const[sp,xi]of Object.entries(fN))reactants[sp]=(reactants[sp]||0)+xi;for(const[sp,xi]of Object.entries(oN))reactants[sp]=(reactants[sp]||0)+xi*oxMols;const products={};for(const sp of["N2","Ar"])products[sp]=reactants[sp]||0;products.H2O=reactants.H2O||0;products.CO2=reactants.CO2||0;let O2_used=0;for(const[sp,xi]of Object.entries(fN)){const d=SP[sp];if(!d||(d.C===0&&d.H===0&&sp!=="CO"))continue;products.CO2=(products.CO2||0)+xi*d.C;products.H2O=(products.H2O||0)+xi*d.H/2;O2_used+=xi*o2_per_mol(sp);}const O2_avail=oxMols*oxO2f;if(phi<=1){products.O2=O2_avail-O2_used;}else{const deficit=O2_used-O2_avail;const shift=Math.min(deficit,products.CO2||0);products.CO=shift;products.CO2=Math.max(0,(products.CO2||0)-shift);if(deficit>shift){const hS=(deficit-shift)*2;products.H2=hS;products.H2O=Math.max(0,(products.H2O||0)-hS);}products.O2=0;}let H_react=0;for(const[sp,n]of Object.entries(reactants)){if(!SP[sp])continue;H_react+=n*h_mol(sp,T0);}let T_ad=T0+1800;for(let i=0;i<200;i++){let H_prod=0;for(const[sp,n]of Object.entries(products)){if(!SP[sp]||n<=0)continue;H_prod+=n*h_mol(sp,T_ad);}let Cp=0;const Tm=(T0+T_ad)/2;for(const[sp,n]of Object.entries(products)){if(!SP[sp]||n<=0)continue;Cp+=n*cp_mol(sp,Tm);}if(Cp<1)break;const err=H_react-H_prod;const T_n=T_ad+err/Cp*0.6;if(Math.abs(T_n-T_ad)<0.2){T_ad=T_n;break;}T_ad=T_n;}T_ad=Math.max(T0,Math.min(T_ad,5500));const pT=Object.values(products).reduce((a,b)=>a+Math.max(0,b),0);const pPct={};for(const[sp,n]of Object.entries(products)){if(n>0.001)pPct[sp]=n/pT*100;}return{T_ad,products:pPct};}
 function sweepAFT(fuel,ox,T0,P,mode){const r=[];for(let phi=0.3;phi<=1.01;phi+=0.02){const a=calcAFTx(fuel,ox,phi,T0,P,mode);r.push({phi:+phi.toFixed(2),T_ad:a.T_ad});}return r;}
 
@@ -5197,7 +5216,7 @@ async function runAutomationMatrix({
       Object.assign(rowState, batchOutcome);
 
       // Always compute fuel-property "derived" bundle for AFT outputs.
-      rowState.derived = calcFuelProps(inputs.fuel, inputs.ox);
+      rowState.derived = calcFuelProps(inputs.fuel, inputs.ox, inputs.T_fuel);
     } catch (e){
       rowError = e?.message || String(e);
       console.warn(`[automation] row ${i+1} failed:`, e);
@@ -9122,24 +9141,31 @@ export default function App(){
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="props"&&<PropsPanel/>}
-            {tab==="automate"&&<AutomatePanel baseline={{
-              // Snapshot every input the runner needs as a per-row baseline.
-              // Anything the user doesn't vary stays at this value across rows.
-              // Field names here MUST match the override() keys used in the
-              // runner (App.jsx runAutomationMatrix inputs object).
-              phi, T_air:T0, T_fuel, P, WFR, water_mode:waterMode,
-              engine:cycleEngine, P_amb:cyclePamb, T_amb:cycleTamb, RH:cycleRH,
-              load_pct:cycleLoad, T_cool:cycleTcool, com_air_frac:cycleAirFrac,
-              bleed_open_pct:bleedOpenPct,
-              bleed_valve_size_pct:bleedValveSizePct,
-              emissionsMode,
-              mapW36w3, mapPhiIP, mapPhiOP, mapPhiIM,
-              mapFracIP, mapFracOP, mapFracIM, mapFracOM,
-              tau_psr, L_pfr, V_pfr, heatLossFrac,
-              velocity, Lchar, Dfh, Lpremix, Vpremix,
-              measO2, measCO2,
-              fuel, ox,
-            }}/>}
+            {/* AutomatePanel is always mounted (just hidden when not the
+                active tab) so an in-progress run, captured results, the
+                wizard state, and the Plot Data panel survive tab switches.
+                Conditionally mounting would destroy all panel-internal
+                state on every navigation. */}
+            <div style={{display: tab==="automate" ? "block" : "none"}}>
+              <AutomatePanel baseline={{
+                // Snapshot every input the runner needs as a per-row baseline.
+                // Anything the user doesn't vary stays at this value across rows.
+                // Field names here MUST match the override() keys used in the
+                // runner (App.jsx runAutomationMatrix inputs object).
+                phi, T_air:T0, T_fuel, P, WFR, water_mode:waterMode,
+                engine:cycleEngine, P_amb:cyclePamb, T_amb:cycleTamb, RH:cycleRH,
+                load_pct:cycleLoad, T_cool:cycleTcool, com_air_frac:cycleAirFrac,
+                bleed_open_pct:bleedOpenPct,
+                bleed_valve_size_pct:bleedValveSizePct,
+                emissionsMode,
+                mapW36w3, mapPhiIP, mapPhiOP, mapPhiIM,
+                mapFracIP, mapFracOP, mapFracIM, mapFracOM,
+                tau_psr, L_pfr, V_pfr, heatLossFrac,
+                velocity, Lchar, Dfh, Lpremix, Vpremix,
+                measO2, measCO2,
+                fuel, ox,
+              }}/>
+            </div>
             {tab==="assumptions"&&<AssumptionsPanel/>}
             {tab==="account"&&auth.isAuthenticated&&<AccountPanel C={C}/>}
           </div>
