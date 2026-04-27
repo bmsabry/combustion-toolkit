@@ -845,7 +845,11 @@ if(mappingTables){
 return wb;}
 
 /* ══════════════════ SVG CHART ══════════════════ */
-function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,markerColor=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null,yMin=null,yMax=null,y2Min=null,y2Max=null,step=false,hLines=null,xFmt=null,nXTicks=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn,yx;if(yMin!=null&&yMax!=null){yn=yMin;yx=yMax;}else{let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}yn=yMin!=null?yMin:yn_-(yx_-yn_)*0.05;yx=yMax!=null?yMax:yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;}const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;
+function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,markerColor=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null,yMin=null,yMax=null,y2Min=null,y2Max=null,step=false,hLines=null,xFmt=null,nXTicks=null,
+  // bands: [{x0, x1, color}] in x-axis units. Drawn as background rectangles
+  // BEHIND gridlines and the data line. Used to shade BR-mode regions on the
+  // cycle load-sweep plots; safe to omit elsewhere.
+  bands=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn,yx;if(yMin!=null&&yMax!=null){yn=yMin;yx=yMax;}else{let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}yn=yMin!=null?yMin:yn_-(yx_-yn_)*0.05;yx=yMax!=null?yMax:yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;}const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;
 // Staircase path: hold each y constant from x_i to x_{i+1}, then jump to y_{i+1}.
 // Used for piecewise-constant series like BRNDMD vs load.
 const buildStep=(arr,xKey,yKey,syFn)=>{
@@ -859,11 +863,55 @@ const buildStep=(arr,xKey,yKey,syFn)=>{
 };
 const pts = step
   ? buildStep(data,xK,yK,sy)
-  : data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy(d[yK]).toFixed(1)}`).join(' ');let y2n,y2x,sy2,pts2;if(y2K){const y2s=data.map(d=>d[y2K]);if(y2Min!=null&&y2Max!=null){y2n=y2Min;y2x=y2Max;}else{let y2n_=Math.min(...y2s),y2x_=Math.max(...y2s);if(y2n_===y2x_){y2n_-=1;y2x_+=1;}y2n=y2Min!=null?y2Min:y2n_-(y2x_-y2n_)*0.05;y2x=y2Max!=null?y2Max:y2x_+(y2x_-y2n_)*0.05;if(y2n_>=0&&y2n<0)y2n=0;}sy2=v=>p.t+H-(v-y2n)/(y2x-y2n||1)*H;pts2=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy2(d[y2K]).toFixed(1)}`).join(' ');}const nY=5,nX=nXTicks!=null?nXTicks:6;const yTk=Array.from({length:nY+1},(_,i)=>yn+(yx-yn)*i/nY);const xTk=Array.from({length:nX+1},(_,i)=>xn+(xx-xn)*i/nX);const fmt=v=>Math.abs(v)>=1e4?(v/1e3).toFixed(0)+'k':Math.abs(v)>=100?v.toFixed(0):Math.abs(v)>=1?v.toFixed(1):v.toFixed(3);const fmtX=v=>xFmt?xFmt(v):fmt(v);const gid=`g${yK}${color.replace('#','')}${Math.random().toString(36).slice(2,6)}`;return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}><defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".2"/><stop offset="100%" stopColor={color} stopOpacity=".01"/></linearGradient></defs>{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmtX(v)}</text></g>)}<path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/><path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{hLines&&hLines.map((hl,i)=>hl.y>=yn&&hl.y<=yx?<g key={`hl${i}`}><line x1={p.l} y1={sy(hl.y)} x2={w-p.r} y2={sy(hl.y)} stroke={hl.color} strokeWidth="1.5" strokeDasharray="6 4" opacity="0.9"/><text x={w-p.r-6} y={sy(hl.y)-4} fill={hl.color} fontSize="9.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" textAnchor="end" letterSpacing=".5px">{hl.label} · {hl.y.toFixed(1)}</text></g>:null)}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={markerColor||C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="4" fill={markerColor||C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={markerColor||C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
+  : data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy(d[yK]).toFixed(1)}`).join(' ');let y2n,y2x,sy2,pts2;if(y2K){const y2s=data.map(d=>d[y2K]);if(y2Min!=null&&y2Max!=null){y2n=y2Min;y2x=y2Max;}else{let y2n_=Math.min(...y2s),y2x_=Math.max(...y2s);if(y2n_===y2x_){y2n_-=1;y2x_+=1;}y2n=y2Min!=null?y2Min:y2n_-(y2x_-y2n_)*0.05;y2x=y2Max!=null?y2Max:y2x_+(y2x_-y2n_)*0.05;if(y2n_>=0&&y2n<0)y2n=0;}sy2=v=>p.t+H-(v-y2n)/(y2x-y2n||1)*H;pts2=data.map((d,i)=>`${i?'L':'M'}${sx(d[xK]).toFixed(1)},${sy2(d[y2K]).toFixed(1)}`).join(' ');}const nY=5,nX=nXTicks!=null?nXTicks:6;const yTk=Array.from({length:nY+1},(_,i)=>yn+(yx-yn)*i/nY);const xTk=Array.from({length:nX+1},(_,i)=>xn+(xx-xn)*i/nX);const fmt=v=>Math.abs(v)>=1e4?(v/1e3).toFixed(0)+'k':Math.abs(v)>=100?v.toFixed(0):Math.abs(v)>=1?v.toFixed(1):v.toFixed(3);const fmtX=v=>xFmt?xFmt(v):fmt(v);const gid=`g${yK}${color.replace('#','')}${Math.random().toString(36).slice(2,6)}`;return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}><defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".2"/><stop offset="100%" stopColor={color} stopOpacity=".01"/></linearGradient></defs>{bands && bands.map((b,i)=>{
+    // Clip band to the visible x-range; drop bands that don't overlap.
+    const x0c = Math.max(b.x0, xn), x1c = Math.min(b.x1, xx);
+    if (!(x1c > x0c)) return null;
+    const xa = sx(x0c), xb = sx(x1c);
+    return (<rect key={`band${i}`} x={xa} y={p.t} width={Math.max(0, xb - xa)} height={H} fill={b.color} stroke="none"/>);
+  })}{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmtX(v)}</text></g>)}<path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/><path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{hLines&&hLines.map((hl,i)=>hl.y>=yn&&hl.y<=yx?<g key={`hl${i}`}><line x1={p.l} y1={sy(hl.y)} x2={w-p.r} y2={sy(hl.y)} stroke={hl.color} strokeWidth="1.5" strokeDasharray="6 4" opacity="0.9"/><text x={w-p.r-6} y={sy(hl.y)-4} fill={hl.color} fontSize="9.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" textAnchor="end" letterSpacing=".5px">{hl.label} · {hl.y.toFixed(1)}</text></g>:null)}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={markerColor||C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="4" fill={markerColor||C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={markerColor||C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
 function HBar({data,w=540,h=180}){if(!data)return null;const entries=Object.entries(data).filter(([_,v])=>v>0.05).sort((a,b)=>b[1]-a[1]);if(!entries.length)return null;const pa={t:6,r:78,b:6,l:48};const bH=Math.min(22,(h-pa.t-pa.b)/entries.length-3);const mx=Math.max(...entries.map(e=>e[1]));const W=w-pa.l-pa.r;const clr={CO2:C.warm,H2O:C.accent,N2:C.accent3,O2:"#38BDF8",Ar:"#64748B",CH4:C.accent2,C2H6:C.orange,C3H8:"#F59E0B",H2:C.good,CO:"#FB923C",NO:C.strong,OH:C.violet,H:"#FDE68A",O:"#FCA5A5"};return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}>{entries.map(([sp,val],i)=>{const y=pa.t+i*(bH+3);const bw=val/mx*W;return(<g key={sp}><text x={pa.l-4} y={y+bH/2+4} fill={C.txtDim} fontSize="11" textAnchor="end" fontFamily="monospace">{fmt(sp)}</text><rect x={pa.l} y={y} width={Math.max(1,bw)} height={bH} rx="2" fill={clr[sp]||"#64748B"} opacity=".85"/><text x={pa.l+bw+4} y={y+bH/2+4} fill={C.txt} fontSize="10" fontFamily="monospace">{val.toFixed(2)}%</text></g>);})}</svg>);}
 
 /* ══════════════════ UI COMPONENTS ══════════════════ */
 const C={bg:"#0D1117",bg2:"#161B22",bg3:"#1C2128",border:"#30363D",accent:"#2DD4BF",accent2:"#FBBF24",accent3:"#60A5FA",warm:"#F87171",good:"#4ADE80",violet:"#A78BFA",orange:"#FB923C",strong:"#EF4444",txt:"#F0F6FC",txtDim:"#C9D1D9",txtMuted:"#8B949E",grid:"#21262D",axis:"#8B949E"};
+
+// BR-mode (BRNDMD) tint palette — used to shade chart backgrounds in the
+// cycle load-sweep dashboard. Cool→warm progression maps to operational
+// comfort: BD7 = full DLE (calm); BD2 = startup/diffusion (hottest).
+//   solid: full-opacity color used for legend swatches and the BRNDMD
+//          step-plot line itself.
+//   tint:  same color at low alpha (12 in hex = ~7 %) — used as the
+//          chart-background fill rectangles. Subtle enough to never
+//          out-shout the data line.
+const BR_PALETTE = {
+  7: { solid: "#2DD4BF", tint: "#2DD4BF14", label: "BD7", desc: "Full DLE (high load)" },
+  6: { solid: "#A78BFA", tint: "#A78BFA14", label: "BD6", desc: "Transition" },
+  4: { solid: "#FBBF24", tint: "#FBBF2414", label: "BD4", desc: "Part-load" },
+  2: { solid: "#F87171", tint: "#F8717114", label: "BD2", desc: "Startup / off-design" },
+};
+// Compute BR-mode background-band specs from a load-sweep result.
+// Walks the sorted-by-load points and emits one band per contiguous BR-mode
+// run. Returns [{x0, x1, color}, ...] in load-% units, ready for Chart.
+function brBandsFromSweep(sweepData){
+  if(!sweepData || sweepData.length === 0) return [];
+  const pts = [...sweepData].sort((a,b)=>a.load - b.load);
+  const out = [];
+  let curBR = pts[0].brndmd;
+  let segStart = pts[0].load;
+  for(let i = 1; i < pts.length; i++){
+    if(pts[i].brndmd !== curBR){
+      // Boundary midway between this point and the previous one.
+      const x1 = (pts[i].load + pts[i-1].load) / 2;
+      const tint = BR_PALETTE[curBR]?.tint;
+      if(tint) out.push({ x0: segStart, x1, color: tint, br: curBR });
+      segStart = x1;
+      curBR = pts[i].brndmd;
+    }
+  }
+  const tint = BR_PALETTE[curBR]?.tint;
+  if(tint) out.push({ x0: segStart, x1: pts[pts.length-1].load, color: tint, br: curBR });
+  return out;
+}
 const hs={box:{fontSize:10.5,lineHeight:1.55,color:C.txtDim,padding:"10px 12px",background:`${C.accent}08`,border:`1px solid ${C.accent}18`,borderRadius:6,marginBottom:10,fontFamily:"'Barlow',sans-serif"},em:{color:C.accent,fontWeight:600},warn:{color:C.accent2,fontWeight:600}};
 
 // ── Help Components ──
@@ -4360,6 +4408,17 @@ function OperationsSummaryPanel({
     return null;
   };
 
+  // BR-mode bands derived from sweepData[].brndmd transitions. Computed once
+  // per sweep and shared across every MiniChart so the bands align exactly.
+  const brBands = useMemo(() => brBandsFromSweep(sweepData), [sweepData]);
+  // Which BR modes actually appear in the sweep — drives the legend strip
+  // (don't show a swatch for a mode the engine never enters at this ambient).
+  const activeBRModes = useMemo(() => {
+    const s = new Set(sweepData.map(d => d.brndmd).filter(b => BR_PALETTE[b]));
+    // Keep the legend in cool→warm order, so it always reads BD7 → BD2.
+    return [7,6,4,2].filter(b => s.has(b));
+  }, [sweepData]);
+
   const MiniChart=({title,yKey,color,unit,transformY,currentRaw,step=false})=>{
     if(!sweepData.length)return(<div style={{padding:"32px 10px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.border}`,borderRadius:6,color:C.txtMuted,fontSize:11,fontFamily:"'Barlow',sans-serif"}}>{title}<br/><span style={{fontSize:9.5,fontStyle:"italic"}}>Run sweep to populate</span></div>);
     const plotData=sweepData.map(d=>({load:d.load,y:transformY?transformY(d[yKey]):d[yKey]}));
@@ -4378,8 +4437,8 @@ function OperationsSummaryPanel({
         <span>{title}</span>
         {partial?<span style={{fontSize:9,fontWeight:500,color:C.warm,textTransform:"none",letterSpacing:0,fontStyle:"italic"}}>partial — re-run to reach 100%</span>:null}
       </div>
-      {/* xMin/xMax pin the x-axis to the full 20-100% span so every chart covers the whole load envelope even if a sweep stopped early. Red marker shows current operating point. */}
-      <Chart data={plotData} xK="load" yK="y" xL="Load (%)" yL={unit} color={color} w={680} h={240} xMin={20} xMax={100} marker={marker} markerColor="#EF4444" step={step}/>
+      {/* xMin/xMax pin the x-axis to the full 20-100% span so every chart covers the whole load envelope even if a sweep stopped early. Red marker shows current operating point. BR-mode bands tint the chart background to flag which burner mode the engine is in at each load. */}
+      <Chart data={plotData} xK="load" yK="y" xL="Load (%)" yL={unit} color={color} w={680} h={240} xMin={20} xMax={100} marker={marker} markerColor="#EF4444" step={step} bands={brBands}/>
     </div>);
   };
 
@@ -4573,6 +4632,42 @@ function OperationsSummaryPanel({
         </button>
       </div>
       {sweepErr?<div style={{padding:"6px 10px",background:`${C.strong}14`,border:`1px solid ${C.strong}60`,borderRadius:4,fontSize:10.5,color:C.strong,marginBottom:10}}>Sweep error: {sweepErr}</div>:null}
+
+      {/* BR-mode legend strip — shared across every chart below. Only shows
+          modes that actually appear in the current sweep. Cool→warm reads
+          BD7 → BD2 (well-behaved DLE → off-design startup). Each swatch
+          shows the load-% range over which that mode is active in this
+          ambient/engine combo. */}
+      {activeBRModes.length > 0 && (
+        <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",
+          padding:"8px 12px",marginBottom:10,
+          background:C.bg2,border:`1px solid ${C.border}`,borderRadius:6,
+          fontFamily:"'Barlow',sans-serif"}}
+          title="Background tint on every chart below indicates which burner mode the engine is in at that load. Cool teal = BD7 (full DLE, calm). Warm red = BD2 (startup). BD-mode breakpoints depend on engine deck and ambient — re-run the sweep after changing ambient to update the bands.">
+          <span style={{fontSize:10,fontWeight:700,color:C.txtDim,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",textTransform:"uppercase"}}>
+            Burner mode (BR) bands:
+          </span>
+          {activeBRModes.map(br => {
+            // Find this mode's load-% extent from brBands.
+            const segs = brBands.filter(b => b.br === br);
+            const lo = Math.min(...segs.map(s => s.x0));
+            const hi = Math.max(...segs.map(s => s.x1));
+            const pal = BR_PALETTE[br];
+            return (
+              <div key={br} style={{display:"flex",alignItems:"center",gap:6,fontSize:11}}>
+                <span style={{display:"inline-block",width:18,height:12,
+                  background:pal.solid,opacity:0.45,
+                  border:`1px solid ${pal.solid}`,borderRadius:2}}/>
+                <span style={{fontWeight:700,color:pal.solid,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>{pal.label}</span>
+                <span style={{color:C.txtMuted,fontFamily:"monospace",fontSize:10}}>
+                  {lo.toFixed(0)}–{hi.toFixed(0)} %
+                </span>
+                <span style={{color:C.txtDim,fontSize:10,fontStyle:"italic"}}>· {pal.desc}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
         <MiniChart title="Net Power" yKey="MW" color={C.accent} unit={`MW`} currentRaw={mCurrent.MW}/>
