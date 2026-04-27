@@ -6259,61 +6259,110 @@ function _buildPlotColumns(varSpecs, outputs, units){
   return cols;
 }
 
+// Build the canonical {kindRaw, varId, species} bundle from a varSpec.
+// Used everywhere the slicing/matching code needs to read a value out of
+// row.__inputs__ — keeps the species-vs-id distinction in one place.
+function _colFromVarSpec(varSpec){
+  return {
+    kindRaw: varSpec.kind,
+    varId:   varSpec.id,
+    species: varSpec.species,
+  };
+}
+
+// Distinct values of a varSpec across the matrix, sorted (numeric → low to
+// high; string → alphabetical). Used both for slicing fallbacks and for
+// populating the per-held-var dropdowns in the UI.
+function _distinctValuesForVar(results, varSpec){
+  const seen = new Map();   // rounded-key → original raw value
+  const col = _colFromVarSpec(varSpec);
+  for (const r of results){
+    if (r.__error__) continue;
+    const raw = _readRowVarValue(r, col);
+    if (raw == null) continue;
+    const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
+    if (!seen.has(k)) seen.set(k, raw);
+  }
+  const arr = [...seen.values()];
+  if (arr.every(v => typeof v === "number")) arr.sort((a, b) => a - b);
+  else arr.sort((a, b) => String(a).localeCompare(String(b)));
+  return arr;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 //  Hold-constant slice resolution.
 //
-//  When the user plots "Y vs X grouped by G1, G2", every OTHER varied
-//  input must be pinned to ONE value or the resulting curve is a smear
-//  of unrelated data points. Standard DOE analysis practice: hold all
-//  non-axis non-group factors at a single canonical value (here: the
-//  user's baseline state from the sidebar at run time). If no row matches
-//  the baseline (because the user swept the baseline OUT of the matrix),
-//  fall back to the most-common (mode) value of each held variable —
-//  that maximizes the number of plottable points and is the classic
-//  "Y on X | most-frequent slice" fallback in DOE plotting.
+//  Standard DOE plotting practice: when plotting Y vs X grouped by G1/G2,
+//  every other varied factor must be pinned to a single value or the
+//  resulting curve is a smear of unrelated points.
+//
+//  Value-selection precedence per held variable:
+//    1. User override (heldOverrides Map<varId, value>) — takes precedence.
+//    2. App baseline value, IF that value actually appears in the matrix.
+//    3. Mode (most-common) value across the matrix as fallback.
+//
+//  Returns each held entry with `distinct` (the matrix's distinct values
+//  for that var, suitable for a dropdown) and `source` ∈ {"user", "baseline", "mode"}.
 // ─────────────────────────────────────────────────────────────────────────
-function _findHeldSlice(varSpecs, baseline, results, freeVarIds){
-  // Held vars = every varSpec that isn't free (X axis if input, or any
-  // grouping variable). For each, pick a canonical value.
-  const held = [];        // [{varSpec, value, source: "baseline"|"mode"}]
+function _findHeldSlice(varSpecs, baseline, results, freeVarIds, heldOverrides){
+  const held = [];
+  let anyFallback = false;
   for (const v of varSpecs){
     if (freeVarIds.has(v.id)) continue;
-    const baseVal = _readBaselineVar(baseline, v);
-    held.push({ varSpec: v, value: baseVal, source: "baseline" });
+    const distinct = _distinctValuesForVar(results, v);
+    let value = null, source = "mode";
+    // (1) User override wins
+    if (heldOverrides && heldOverrides.has(v.id)){
+      value = heldOverrides.get(v.id);
+      source = "user";
+    } else {
+      // (2) Baseline if it's in the matrix
+      const baseVal = _readBaselineVar(baseline, v);
+      const baseInMatrix = baseVal != null && distinct.some(d => _valuesMatch(d, baseVal));
+      if (baseInMatrix){
+        value = baseVal;
+        source = "baseline";
+      } else {
+        // (3) Mode fallback
+        const counts = new Map();
+        const col = _colFromVarSpec(v);
+        for (const r of results){
+          if (r.__error__) continue;
+          const raw = _readRowVarValue(r, col);
+          if (raw == null) continue;
+          const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
+          counts.set(k, (counts.get(k) || 0) + 1);
+        }
+        let bestK = null, bestN = 0, bestRaw = null;
+        for (const [k, n] of counts){
+          if (n > bestN){
+            bestK = k; bestN = n;
+            // Recover the original raw (not the rounded key) by matching distinct[].
+            const match = distinct.find(d => {
+              const dk = (typeof d === "number") ? +d.toPrecision(8) : String(d);
+              return dk === k;
+            });
+            bestRaw = match != null ? match : k;
+          }
+        }
+        value = bestRaw;
+        anyFallback = true;
+      }
+    }
+    held.push({ varSpec: v, value, source, distinct });
   }
-  // Verify the baseline slice has rows in the matrix.
-  let count = _countMatchingRows(results, varSpecs, held, freeVarIds);
-  if (count >= 2) return { held, count, fallback: false };
-  // Baseline misses — find the most-common value for each held var
-  // ACROSS the rows, take that as the canonical slice instead.
-  const fallbackHeld = held.map(h => {
-    const vals = new Map();   // raw → count
-    for (const r of results){
-      if (r.__error__) continue;
-      const col = { kindRaw: h.varSpec.kind, varId: h.varSpec.id };
-      const raw = _readRowVarValue(r, col);
-      if (raw == null) continue;
-      // Round numeric to 8 sig figs so float jitter doesn't fragment counts.
-      const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
-      vals.set(k, (vals.get(k) || 0) + 1);
-    }
-    let bestK = null, bestN = 0;
-    for (const [k, n] of vals){
-      if (n > bestN){ bestK = k; bestN = n; }
-    }
-    return { varSpec: h.varSpec, value: bestK, source: "mode" };
-  });
-  count = _countMatchingRows(results, varSpecs, fallbackHeld, freeVarIds);
-  return { held: fallbackHeld, count, fallback: true };
+  const count = _countMatchingRows(results, held);
+  return { held, count, fallback: anyFallback };
 }
-function _countMatchingRows(results, varSpecs, held, freeVarIds){
+
+function _countMatchingRows(results, held){
   if (held.length === 0) return results.filter(r => !r.__error__).length;
   let n = 0;
   for (const r of results){
     if (r.__error__) continue;
     let ok = true;
     for (const h of held){
-      const col = { kindRaw: h.varSpec.kind, varId: h.varSpec.id };
+      const col = _colFromVarSpec(h.varSpec);
       if (!_valuesMatch(_readRowVarValue(r, col), h.value)){ ok = false; break; }
     }
     if (ok) n++;
@@ -6557,6 +6606,99 @@ function _heldSliceCaption(slice, units){
   return `Held constant: ${parts.join(" · ")}${note}`;
 }
 
+// Per-held-variable dropdown UI. Renders one <select> per held var with
+// the matrix's distinct values, plus a small "[baseline / mode / picked]"
+// badge so the user always knows whether the slice is auto-selected or
+// overridden. Picking a value writes into the heldOverrides Map (which
+// takes precedence over baseline/mode in _findHeldSlice).
+function HeldValuePicker({ slice, units, heldOverrides, setHeldOverrides }){
+  const labelFor = (v, raw) => {
+    if (raw == null) return "—";
+    if (v.kind === "fuel_species" || v.kind === "ox_species" ||
+        v.kind === "enum" || v.kind === "bool"){
+      return String(raw);
+    }
+    if (typeof raw === "number"){
+      return formatRowValue(toDisplay(v, raw, units));
+    }
+    return String(raw);
+  };
+
+  const onChange = (varId, distinct, idx) => {
+    setHeldOverrides(prev => {
+      const next = new Map(prev);
+      next.set(varId, distinct[idx]);
+      return next;
+    });
+  };
+  const reset = (varId) => {
+    setHeldOverrides(prev => {
+      if (!prev.has(varId)) return prev;
+      const next = new Map(prev);
+      next.delete(varId);
+      return next;
+    });
+  };
+
+  return (
+    <div style={{padding:"8px 10px", background:`${C.accent}10`, borderRadius:5,
+      border:`1px solid ${C.accent}40`, marginBottom:10}}>
+      <div style={{fontSize:10, fontWeight:700, color:C.accent,
+        textTransform:"uppercase", letterSpacing:".7px", marginBottom:6,
+        fontFamily:"'Barlow Condensed',sans-serif"}}>
+        Hold these variables at:  <span style={{color:C.txtMuted, fontWeight:400, textTransform:"none", letterSpacing:0}}>
+          {slice.count} matching row{slice.count !== 1 ? "s" : ""}
+        </span>
+      </div>
+      <div style={{display:"flex", flexWrap:"wrap", gap:10}}>
+        {slice.held.map(h => {
+          const v = h.varSpec;
+          const u = unitFor(v, units);
+          const distinct = h.distinct || [];
+          // Find current selected index in distinct (by value match).
+          const selIdx = distinct.findIndex(d => _valuesMatch(d, h.value));
+          const sourceColor = h.source === "user"
+            ? C.accent2
+            : h.source === "baseline" ? C.txtDim : C.warm;
+          const sourceLabel = h.source === "user"
+            ? "picked"
+            : h.source === "baseline" ? "baseline" : "mode (baseline missed)";
+          return (
+            <div key={v.id} style={{display:"flex", flexDirection:"column", gap:2,
+              minWidth:160}}>
+              <div style={{display:"flex", alignItems:"baseline", gap:6}}>
+                <span style={{fontSize:10.5, color:C.txtDim, fontFamily:"'Barlow',sans-serif",
+                  fontWeight:600}}>{v.label}{u ? ` (${u})` : ""}</span>
+                <span style={{fontSize:8.5, color:sourceColor, fontStyle:"italic"}}>
+                  {sourceLabel}
+                </span>
+                {h.source === "user" && (
+                  <button onClick={() => reset(v.id)}
+                    style={{marginLeft:"auto", padding:"0 4px", fontSize:9,
+                      color:C.txtMuted, background:"transparent",
+                      border:`1px solid ${C.border}`, borderRadius:2, cursor:"pointer",
+                      fontFamily:"'Barlow Condensed',sans-serif"}}
+                    title="Restore baseline / mode default">↺</button>
+                )}
+              </div>
+              <select value={selIdx >= 0 ? selIdx : 0}
+                onChange={e => onChange(v.id, distinct, +e.target.value)}
+                style={{padding:"3px 6px", fontSize:11,
+                  background:C.bg, color:C.txt, border:`1px solid ${C.border}`,
+                  borderRadius:3, fontFamily:"monospace"}}>
+                {distinct.length === 0 && <option value={-1}>(no values)</option>}
+                {distinct.map((d, i) => (
+                  <option key={i} value={i}>{labelFor(v, d)}</option>
+                ))}
+              </select>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClose }){
   // varSpecs is the user's varied list (already filtered to active panels);
   // selectedOutputs is the captured-output catalog for those panels.
@@ -6593,11 +6735,36 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
   const [customGColorId, setCustomGColorId] = useState(null);
   const [customGShapeId, setCustomGShapeId] = useState(null);
   const [customLog, setCustomLog] = useState(false);
+  // Per-held-var overrides — when set, takes precedence over baseline/mode.
+  // Map<varId, value>. Reset whenever X/Y/grouping changes (the held set
+  // changes too, so old overrides may apply to vars that are no longer
+  // held). The reset is wired via useEffect below.
+  const [heldOverrides, setHeldOverrides] = useState(() => new Map());
 
   const xCol      = useMemo(() => allCols.find(c => c.id === customXId)      || null, [allCols, customXId]);
   const yCol      = useMemo(() => allCols.find(c => c.id === customYId)      || null, [allCols, customYId]);
   const gColorCol = useMemo(() => allCols.find(c => c.id === customGColorId) || null, [allCols, customGColorId]);
   const gShapeCol = useMemo(() => allCols.find(c => c.id === customGShapeId) || null, [allCols, customGShapeId]);
+
+  // When X/Y/grouping changes, drop any overrides for vars that ARE NOW
+  // free (so stale entries don't leak), but keep overrides for vars that
+  // are still held. The held set is recomputed lazily; here we just compute
+  // the free set and prune.
+  useEffect(() => {
+    const free = new Set();
+    if (xCol?.kind === "input") free.add(xCol.varId);
+    if (gColorCol)              free.add(gColorCol.varId);
+    if (gShapeCol)              free.add(gShapeCol.varId);
+    setHeldOverrides(prev => {
+      let changed = false;
+      const next = new Map();
+      for (const [k, v] of prev){
+        if (!free.has(k)) next.set(k, v);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [xCol, gColorCol, gShapeCol]);
 
   const customSliceData = useMemo(() => {
     if (!xCol || !yCol) return null;
@@ -6606,10 +6773,10 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
     if (xCol.kind === "input")      free.add(xCol.varId);
     if (gColorCol)                  free.add(gColorCol.varId);
     if (gShapeCol)                  free.add(gShapeCol.varId);
-    const slice = _findHeldSlice(varSpecs, baseline, results, free);
+    const slice = _findHeldSlice(varSpecs, baseline, results, free, heldOverrides);
     const sd = _buildSlicedSeries(results, varSpecs, xCol, yCol, gColorCol, gShapeCol, slice);
     return { ...sd, slice };
-  }, [results, varSpecs, baseline, xCol, yCol, gColorCol, gShapeCol]);
+  }, [results, varSpecs, baseline, xCol, yCol, gColorCol, gShapeCol, heldOverrides]);
 
   // ── Auto-plot grid ───────────────────────────────────────────────
   // For each captured output × each varied input X, generate:
@@ -6874,6 +7041,20 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
             onChange={setCustomGShapeId}
             allowNone={true} noneLabel="(no shape grouping)"/>
         </div>
+        {/* ── Held-constant value pickers ─────────────────────────────
+            One dropdown per held variable, populated with the distinct
+            values that appear in the matrix. Default selection = the
+            baseline value if it's in the matrix, else the most-common
+            value. Picking a value sets a user override that takes
+            precedence over baseline/mode and triggers a slice recompute. */}
+        {customSliceData && customSliceData.slice && customSliceData.slice.held.length > 0 && (
+          <HeldValuePicker
+            slice={customSliceData.slice}
+            units={units}
+            heldOverrides={heldOverrides}
+            setHeldOverrides={setHeldOverrides}
+          />
+        )}
         <div style={{display:"flex", alignItems:"center", gap:14, marginBottom:8, flexWrap:"wrap"}}>
           <label style={{display:"flex", alignItems:"center", gap:6, fontSize:11,
             color:C.txtDim, cursor:"pointer", fontFamily:"'Barlow',sans-serif"}}>
