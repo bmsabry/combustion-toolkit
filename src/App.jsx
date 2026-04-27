@@ -7847,7 +7847,11 @@ function AutomatePanel(props){
     <Step n={2} title="Pick variables to vary" done={selectedVarIds.length > 0}
       locked={selectedPanels.length === 0}>
       <div style={{fontSize:11, color:C.txtMuted, marginBottom:10, fontFamily:"'Barlow',sans-serif", lineHeight:1.5}}>
-        Only variables that affect a selected panel are shown. Everything else stays at its current sidebar value across every row.
+        Only variables that affect a selected panel are shown. The
+        <span style={{color:C.accent2, fontWeight:600}}> amber number </span>
+        is the <strong>baseline value</strong> the runner will use on every
+        row if you don't pick that variable to vary — the value currently
+        on your sidebar at the moment you opened this panel.
       </div>
       <div style={{maxHeight:320, overflowY:"auto", border:`1px solid ${C.border}`, borderRadius:6, padding:6}}>
         {(() => {
@@ -7865,8 +7869,30 @@ function AutomatePanel(props){
               <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))", gap:4, padding:4}}>
                 {vars.map(v => {
                   const isSel = selectedVarIds.includes(v.id);
+                  // Baseline value the runner will use if THIS variable is
+                  // NOT selected — pulled from the App's sidebar snapshot
+                  // captured when the user opened the Automate panel. Fuel
+                  // / oxidizer species are nested under .fuel / .ox by
+                  // species name; everything else is top-level on baseline.
+                  let baseRaw;
+                  if (v.kind === "fuel_species") baseRaw = baseline?.fuel?.[v.species];
+                  else if (v.kind === "ox_species") baseRaw = baseline?.ox?.[v.species];
+                  else baseRaw = baseline?.[v.id];
+                  // Convert to display units (K → °F etc.) then route
+                  // through the project-wide smart formatter so the same
+                  // rounding rules apply (T → integer, φ → 3 dec, …).
+                  let baseTxt;
+                  if (baseRaw == null || baseRaw === "") {
+                    baseTxt = "—";
+                  } else if (typeof baseRaw === "boolean") {
+                    baseTxt = baseRaw ? "true" : "false";
+                  } else if (typeof baseRaw === "number") {
+                    baseTxt = formatRowValue(toDisplay(v, baseRaw, units), unitFor(v, units), v.label);
+                  } else {
+                    baseTxt = String(baseRaw);
+                  }
                   return(
-                    <label key={v.id} title={v.desc}
+                    <label key={v.id} title={v.desc ? `${v.desc}\n\nBaseline: ${baseTxt}${unitFor(v, units) ? ` ${unitFor(v, units)}` : ""}` : `Baseline: ${baseTxt}`}
                       style={{display:"flex", alignItems:"center", gap:6, padding:"4px 6px",
                         cursor:"pointer", borderRadius:3,
                         background: isSel ? `${C.accent}14` : "transparent",
@@ -7875,7 +7901,18 @@ function AutomatePanel(props){
                         onChange={() => toggleVar(v.id)}
                         style={{accentColor:C.accent, cursor:"pointer", margin:0}}/>
                       <span style={{flex:1, color:C.txt}}>{v.label}</span>
-                      <span style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>
+                      {/* Baseline value — what the runner uses for this var
+                          when the user doesn't sweep it. Dimmed when the var
+                          IS selected (since then the user is overriding
+                          baseline with a swept range/list). */}
+                      <span style={{fontSize:10, color: isSel ? C.txtMuted : C.accent2,
+                        fontFamily:"monospace", opacity: isSel ? 0.5 : 1,
+                        whiteSpace:"nowrap"}}
+                        title={`Baseline: ${baseTxt}${unitFor(v, units) ? ` ${unitFor(v, units)}` : ""}`}>
+                        {baseTxt}
+                      </span>
+                      <span style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace",
+                        whiteSpace:"nowrap"}}>
                         {unitFor(v, units) || v.kind}
                       </span>
                     </label>
