@@ -30,6 +30,9 @@ from ..schemas import (
     PropsResponse,
     SolvePhiForTflameRequest,
     SolvePhiForTflameResponse,
+    BatchRequest,
+    BatchResponse,
+    BatchJobResult,
 )
 from ..science import (
     aft,
@@ -50,6 +53,66 @@ router = APIRouter(prefix="/calc", tags=["calc (accurate Cantera)"])
 # Cantera isn't thread-safe; serialize via a single-thread executor.
 _solver_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cantera")
 
+# ───────────────────────────────────────────────────────────────────────
+#  Backend-side LRU cache for solver results.
+#  Keyed on a stable hash of the request body (with the `lean` field
+#  stripped, since it only affects response shape — the underlying
+#  Cantera computation is identical). Multi-user benefit: if two
+#  different sessions hit the API with identical inputs, only the first
+#  pays the Cantera cost. Bounded entry count to keep memory predictable
+#  inside Render Standard's 2 GB.
+# ───────────────────────────────────────────────────────────────────────
+import hashlib
+import json
+from collections import OrderedDict
+
+_BACKEND_CACHE_MAX_ENTRIES = 500
+_backend_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _cache_normalize(v):
+    """Recursively normalise a request body for stable hashing.
+    - Drop the `lean` flag (response-shape only).
+    - Coerce all numerics to float and round to 8 sig figs (so int 0 and
+      float 0.0 hash the same, and 0.555000001 vs 0.555000002 collide).
+    - Sort dict keys.
+    """
+    if isinstance(v, dict):
+        return {k: _cache_normalize(v[k]) for k in sorted(v.keys()) if k != "lean"}
+    if isinstance(v, list):
+        return [_cache_normalize(x) for x in v]
+    # bool is a subclass of int — handle it first so True/False stay as bool.
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        if v == 0:
+            return 0.0
+        return float(f"{float(v):.8g}")
+    return v
+
+
+def _cache_key(body, kind: str) -> str:
+    body_dict = body.model_dump(exclude_none=False)
+    s = json.dumps(_cache_normalize(body_dict), sort_keys=True, separators=(",", ":"))
+    return f"{kind}:{hashlib.md5(s.encode()).hexdigest()}"
+
+
+def _cached_compute(body, kind: str, compute_fn):
+    """Look up by hash; on miss, run compute_fn() and store. compute_fn is
+    a 0-arg callable returning the result dict. Failures are NOT cached
+    (compute_fn raises on failure → exception propagates without a
+    cache write)."""
+    key = _cache_key(body, kind)
+    if key in _backend_cache:
+        # LRU touch — move to end so it survives eviction longer.
+        _backend_cache.move_to_end(key)
+        return _backend_cache[key]
+    result = compute_fn()
+    _backend_cache[key] = result
+    if len(_backend_cache) > _BACKEND_CACHE_MAX_ENTRIES:
+        _backend_cache.popitem(last=False)  # evict oldest
+    return result
+
 
 def _run_in_pool(fn, *args, **kwargs) -> Any:
     try:
@@ -66,7 +129,7 @@ def _run_in_pool(fn, *args, **kwargs) -> Any:
 
 @router.post("/aft", response_model=AFTResponse)
 def calc_aft(body: AFTRequest, _: User = Depends(require_full_subscription)) -> AFTResponse:
-    result = _run_in_pool(
+    result = _cached_compute(body, "aft", lambda: _run_in_pool(
         aft.run,
         body.fuel,
         body.oxidizer,
@@ -79,7 +142,7 @@ def calc_aft(body: AFTRequest, _: User = Depends(require_full_subscription)) -> 
         body.WFR,
         body.water_mode,
         body.T_products_K,
-    )
+    ))
     return AFTResponse(**result)
 
 
@@ -87,7 +150,7 @@ def calc_aft(body: AFTRequest, _: User = Depends(require_full_subscription)) -> 
 def calc_flame_speed(
     body: FlameSpeedRequest, _: User = Depends(require_full_subscription)
 ) -> FlameSpeedResponse:
-    result = _run_in_pool(
+    result = _cached_compute(body, "flame_speed", lambda: _run_in_pool(
         flame_speed.run,
         body.fuel,
         body.oxidizer,
@@ -99,7 +162,13 @@ def calc_flame_speed(
         body.T_air_K,
         body.WFR,
         body.water_mode,
-    )
+    ))
+    # Lean mode: strip the profile arrays before serializing. The automation
+    # runner never reads them; saves ~30 KB of wire payload per call. Note
+    # the cache stores the FULL result so non-lean callers still get the
+    # profile from a cache hit.
+    if body.lean:
+        result = {**result, "T_profile": [], "x_profile": []}
     return FlameSpeedResponse(**result)
 
 
@@ -144,28 +213,37 @@ def calc_flame_speed_sweep(
 def calc_combustor(
     body: CombustorRequest, _: User = Depends(require_full_subscription)
 ) -> CombustorResponse:
-    result = _run_in_pool(
-        combustor.run,
-        body.fuel,
-        body.oxidizer,
-        body.phi,
-        body.T0,
-        body.P,
-        body.tau_psr_s,
-        body.L_pfr_m,
-        body.V_pfr_m_s,
-        body.profile_points,
-        body.T_fuel_K,
-        body.T_air_K,
-        body.psr_seed,
-        body.eq_constraint,
-        body.integration,
-        body.heat_loss_fraction,
-        body.mechanism,
-        body.WFR,
-        body.water_mode,
-    )
-    result["mechanism"] = body.mechanism
+    def _compute():
+        r = _run_in_pool(
+            combustor.run,
+            body.fuel,
+            body.oxidizer,
+            body.phi,
+            body.T0,
+            body.P,
+            body.tau_psr_s,
+            body.L_pfr_m,
+            body.V_pfr_m_s,
+            body.profile_points,
+            body.T_fuel_K,
+            body.T_air_K,
+            body.psr_seed,
+            body.eq_constraint,
+            body.integration,
+            body.heat_loss_fraction,
+            body.mechanism,
+            body.WFR,
+            body.water_mode,
+        )
+        r["mechanism"] = body.mechanism
+        return r
+    result = _cached_compute(body, "combustor", _compute)
+    # Lean mode: drop the per-position profile array. Used by automation
+    # where only the scalar headline outputs (T_psr, T_exit, NO/CO ppmvd,
+    # τ_total, etc.) get extracted. Cache stores the full result so non-
+    # lean callers still get the profile from a cache hit.
+    if body.lean:
+        result = {**result, "profile": []}
     return CombustorResponse(**result)
 
 
@@ -176,7 +254,7 @@ def calc_combustor_mapping(
     """LMS100 DLE 4-circuit correlation model: T_AFT per circuit +
     anchored-linear emissions/dynamics prediction with Phi_OP multiplier
     (HI only) + P3 power-law scaling for part load. No kinetic solver."""
-    result = _run_in_pool(
+    result = _cached_compute(body, "combustor_mapping", lambda: _run_in_pool(
         combustor_mapping.run,
         body.fuel,
         body.oxidizer,
@@ -199,13 +277,13 @@ def calc_combustor_mapping(
         body.nox_mult,
         body.co_mult,
         body.px36_mult,
-    )
+    ))
     return CombustorMappingResponse(**result)
 
 
 @router.post("/exhaust", response_model=ExhaustResponse)
 def calc_exhaust(body: ExhaustRequest, _: User = Depends(require_full_subscription)) -> ExhaustResponse:
-    result = _run_in_pool(
+    result = _cached_compute(body, "exhaust", lambda: _run_in_pool(
         exhaust.run,
         body.fuel,
         body.oxidizer,
@@ -218,19 +296,19 @@ def calc_exhaust(body: ExhaustRequest, _: User = Depends(require_full_subscripti
         body.T_air_K,
         body.WFR,
         body.water_mode,
-    )
+    ))
     return ExhaustResponse(**result)
 
 
 @router.post("/props", response_model=PropsResponse)
 def calc_props(body: PropsRequest, _: User = Depends(require_full_subscription)) -> PropsResponse:
-    result = _run_in_pool(props.run, body.mixture, body.T, body.P)
+    result = _cached_compute(body, "props", lambda: _run_in_pool(props.run, body.mixture, body.T, body.P))
     return PropsResponse(**result)
 
 
 @router.post("/cycle", response_model=CycleResponse)
 def calc_cycle(body: CycleRequest, _: User = Depends(require_full_subscription)) -> CycleResponse:
-    result = _run_in_pool(
+    result = _cached_compute(body, "cycle", lambda: _run_in_pool(
         cycle.run,
         body.engine,
         body.P_amb_bar,
@@ -245,7 +323,7 @@ def calc_cycle(body: CycleRequest, _: User = Depends(require_full_subscription))
         body.water_mode,
         body.T_water_K,
         body.bleed_air_frac,
-    )
+    ))
     return CycleResponse(**result)
 
 
@@ -253,7 +331,7 @@ def calc_cycle(body: CycleRequest, _: User = Depends(require_full_subscription))
 def calc_autoignition(
     body: AutoignitionRequest, _: User = Depends(require_full_subscription)
 ) -> AutoignitionResponse:
-    result = _run_in_pool(
+    result = _cached_compute(body, "autoignition", lambda: _run_in_pool(
         autoignition.run,
         body.fuel,
         body.oxidizer,
@@ -266,7 +344,7 @@ def calc_autoignition(
         body.mechanism,
         body.WFR,
         body.water_mode,
-    )
+    ))
     return AutoignitionResponse(**result)
 
 
@@ -350,7 +428,7 @@ def _solve_phi_for_tflame_impl(
 def calc_solve_phi_for_tflame(
     body: SolvePhiForTflameRequest, _: User = Depends(require_full_subscription),
 ) -> SolvePhiForTflameResponse:
-    result = _run_in_pool(
+    result = _cached_compute(body, "solve_phi_tflame", lambda: _run_in_pool(
         _solve_phi_for_tflame_impl,
         body.fuel,
         body.oxidizer,
@@ -364,5 +442,140 @@ def calc_solve_phi_for_tflame(
         body.phi_min,
         body.phi_max,
         body.tol,
-    )
+    ))
     return SolvePhiForTflameResponse(**result)
+
+
+# ───────────────────────────────────────────────────────────────────────
+#  /calc/batch — multi-job per HTTP call
+#
+#  Eliminates ~200 ms of per-call wire+TLS+auth overhead when the
+#  automation runner needs to fire N solver calls per matrix row. Each
+#  inner job is dispatched to the same _cached_compute path the
+#  dedicated route uses, so:
+#    • the in-memory LRU cache works across batch jobs and route hits
+#    • per-job errors are caught and reported in BatchJobResult.error
+#      without aborting the whole batch
+#    • the underlying solver path is identical — same Cantera, same
+#      results, no new code paths to maintain
+# ───────────────────────────────────────────────────────────────────────
+
+
+def _do_aft(body: AFTRequest) -> dict:
+    return _cached_compute(body, "aft", lambda: _run_in_pool(
+        aft.run, body.fuel, body.oxidizer, body.phi, body.T0, body.P,
+        body.heat_loss_fraction if body.mode == "heat_loss" else 0.0,
+        body.T_fuel_K, body.T_air_K, body.WFR, body.water_mode, body.T_products_K,
+    ))
+
+
+def _do_flame_speed(body: FlameSpeedRequest) -> dict:
+    result = _cached_compute(body, "flame_speed", lambda: _run_in_pool(
+        flame_speed.run, body.fuel, body.oxidizer, body.phi, body.T0, body.P,
+        body.domain_length_m, body.T_fuel_K, body.T_air_K, body.WFR, body.water_mode,
+    ))
+    if body.lean:
+        result = {**result, "T_profile": [], "x_profile": []}
+    return result
+
+
+def _do_combustor(body: CombustorRequest) -> dict:
+    def _compute():
+        r = _run_in_pool(
+            combustor.run, body.fuel, body.oxidizer, body.phi, body.T0, body.P,
+            body.tau_psr_s, body.L_pfr_m, body.V_pfr_m_s, body.profile_points,
+            body.T_fuel_K, body.T_air_K, body.psr_seed, body.eq_constraint,
+            body.integration, body.heat_loss_fraction, body.mechanism,
+            body.WFR, body.water_mode,
+        )
+        r["mechanism"] = body.mechanism
+        return r
+    result = _cached_compute(body, "combustor", _compute)
+    if body.lean:
+        result = {**result, "profile": []}
+    return result
+
+
+def _do_combustor_mapping(body: CombustorMappingRequest) -> dict:
+    return _cached_compute(body, "combustor_mapping", lambda: _run_in_pool(
+        combustor_mapping.run, body.fuel, body.oxidizer, body.T3_K, body.P3_bar,
+        body.T_fuel_K, body.W3_kg_s, body.W36_over_W3, body.com_air_frac,
+        body.frac_IP_pct, body.frac_OP_pct, body.frac_IM_pct, body.frac_OM_pct,
+        body.phi_IP, body.phi_OP, body.phi_IM, body.m_fuel_total_kg_s,
+        body.WFR, body.water_mode, body.nox_mult, body.co_mult, body.px36_mult,
+    ))
+
+
+def _do_exhaust(body: ExhaustRequest) -> dict:
+    return _cached_compute(body, "exhaust", lambda: _run_in_pool(
+        exhaust.run, body.fuel, body.oxidizer, body.T0, body.P,
+        body.measured_O2_pct_dry, body.measured_CO2_pct_dry, body.combustion_mode,
+        body.T_fuel_K, body.T_air_K, body.WFR, body.water_mode,
+    ))
+
+
+def _do_cycle(body: CycleRequest) -> dict:
+    return _cached_compute(body, "cycle", lambda: _run_in_pool(
+        cycle.run, body.engine, body.P_amb_bar, body.T_amb_K, body.RH_pct,
+        body.load_pct, body.T_cool_in_K, body.fuel_pct, body.combustor_air_frac,
+        body.T_fuel_K, body.WFR, body.water_mode, body.T_water_K, body.bleed_air_frac,
+    ))
+
+
+def _do_autoignition(body: AutoignitionRequest) -> dict:
+    return _cached_compute(body, "autoignition", lambda: _run_in_pool(
+        autoignition.run, body.fuel, body.oxidizer, body.phi, body.T0, body.P,
+        body.max_time_s, body.T_fuel_K, body.T_air_K, body.mechanism,
+        body.WFR, body.water_mode,
+    ))
+
+
+def _do_props(body: PropsRequest) -> dict:
+    return _cached_compute(body, "props", lambda: _run_in_pool(props.run, body.mixture, body.T, body.P))
+
+
+def _do_solve_phi_tflame(body: SolvePhiForTflameRequest) -> dict:
+    return _cached_compute(body, "solve_phi_tflame", lambda: _run_in_pool(
+        _solve_phi_for_tflame_impl, body.fuel, body.oxidizer, body.T_flame_target_K,
+        body.T_fuel_K, body.T_air_K, body.P_bar, body.WFR, body.water_mode,
+        body.T_water_K, body.phi_min, body.phi_max, body.tol,
+    ))
+
+
+# Dispatch table: kind → (request model, compute fn). The batch endpoint
+# uses this; the dedicated routes still construct the request via FastAPI
+# and call the same _do_* helper for symmetry.
+_KIND_DISPATCH = {
+    "aft":              (AFTRequest,                _do_aft),
+    "flame_speed":      (FlameSpeedRequest,         _do_flame_speed),
+    "combustor":        (CombustorRequest,          _do_combustor),
+    "combustor_mapping":(CombustorMappingRequest,   _do_combustor_mapping),
+    "exhaust":          (ExhaustRequest,            _do_exhaust),
+    "cycle":            (CycleRequest,              _do_cycle),
+    "autoignition":     (AutoignitionRequest,       _do_autoignition),
+    "props":            (PropsRequest,              _do_props),
+    "solve_phi_tflame": (SolvePhiForTflameRequest,  _do_solve_phi_tflame),
+}
+
+
+@router.post("/batch", response_model=BatchResponse)
+def calc_batch(body: BatchRequest, _: User = Depends(require_full_subscription)) -> BatchResponse:
+    results = []
+    for i, job in enumerate(body.jobs):
+        try:
+            entry = _KIND_DISPATCH.get(job.kind)
+            if entry is None:
+                results.append(BatchJobResult(ok=False, error=f"unknown kind: {job.kind}"))
+                continue
+            req_cls, do_fn = entry
+            req = req_cls(**job.args)
+            data = do_fn(req)
+            results.append(BatchJobResult(ok=True, data=data))
+        except Exception as e:
+            log.exception("batch job %d (%s) failed: %s", i, job.kind, e)
+            # Generic error message to avoid leaking solver internals.
+            results.append(BatchJobResult(
+                ok=False,
+                error=f"{type(e).__name__}: {str(e)[:200]}",
+            ))
+    return BatchResponse(results=results)

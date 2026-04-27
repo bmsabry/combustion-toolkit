@@ -165,6 +165,10 @@ class FlameSpeedRequest(BaseCalcRequest):
     domain_length_m: float = Field(default=0.03, gt=0)
     T_fuel_K: Optional[float] = Field(default=None, gt=0, description="Fuel inlet T in K")
     T_air_K: Optional[float] = Field(default=None, gt=0, description="Air inlet T in K")
+    # When True, response omits the T_profile and x_profile arrays — they're
+    # ~30 KB each and the automation runner never reads them. Cuts wire
+    # payload ~80% for a single flame call.
+    lean: bool = Field(default=False, description="Skip profile arrays in response")
 
 
 class FlameSpeedResponse(BaseModel):
@@ -277,6 +281,9 @@ class CombustorRequest(BaseCalcRequest):
             "reactions, comprehensive N-chemistry, C1–C2 hydrocarbons; C3+ lumped to C2)."
         ),
     )
+    # When True, response replaces the per-point profile array with [].
+    # The automation runner doesn't read it; saves ~30 KB per call.
+    lean: bool = Field(default=False, description="Skip profile array in response")
 
 
 class CombustorProfilePoint(BaseModel):
@@ -570,6 +577,37 @@ class CycleResponse(BaseModel):
     water_mode: str = "liquid"
     # Humid-air composition (reference)
     oxidizer_humid_mol_pct: Dict[str, float]
+
+
+# ---------- batch endpoint (multi-job per HTTP call) ---------
+class BatchJobRequest(BaseModel):
+    """One job in a batch. `kind` selects the solver; `args` is the payload
+    that would normally go to /calc/<kind>. Per-job errors are caught and
+    surfaced in BatchJobResult.error without failing the whole batch."""
+
+    kind: str = Field(
+        pattern="^(aft|flame_speed|combustor|combustor_mapping|exhaust|cycle|autoignition|props|solve_phi_tflame)$",
+        description="Solver kind — same names used by the dedicated routes.",
+    )
+    args: Dict[str, Any] = Field(description="Request body for that solver")
+
+
+class BatchRequest(BaseModel):
+    """Run a list of solver jobs in one HTTP request. Saves ~200 ms × N
+    of round-trip overhead for a matrix run that would otherwise fire N
+    separate /calc/<kind> calls."""
+
+    jobs: List[BatchJobRequest] = Field(min_length=1, max_length=200, description="Up to 200 jobs per request")
+
+
+class BatchJobResult(BaseModel):
+    ok: bool
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
+class BatchResponse(BaseModel):
+    results: List[BatchJobResult]
 
 
 # ---------- solve-phi-for-tflame (Cantera bisection back-solver) ---------

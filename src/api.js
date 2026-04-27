@@ -174,6 +174,14 @@ export async function calcCombustorMapping(payload) {
 export async function calcSolvePhiForTflame(payload) {
   return request("/calc/solve-phi-for-tflame", { method: "POST", body: payload, auth: true });
 }
+// Multi-job batch endpoint. Saves ~200 ms × (N-1) of HTTP overhead per
+// matrix row. Server runs each job through the same _cached_compute path
+// the dedicated routes use (so the LRU cache is shared) and returns
+// per-job results in {ok, data?, error?} shape — failures don't abort
+// the batch.
+export async function calcBatch(payload) {
+  return request("/calc/batch", { method: "POST", body: payload, auth: true });
+}
 
 // ---- health ----
 export async function health() {

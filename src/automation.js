@@ -675,6 +675,74 @@ function enumerateValues(spec){
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+//  Reorder varSpecs for cache locality. The factorial cross-product in
+//  generateMatrix iterates so that the FIRST-listed variable changes
+//  SLOWEST and the LAST-listed changes FASTEST. By putting variables
+//  that drive the heaviest, cache-able backend calls FIRST, every
+//  fast-varying inner loop hits the cache for those calls.
+//
+//  Example: user sweeps T_amb (cycle-affecting) and L_PFR (combustor-
+//  only). Without reordering, if L_PFR is added first the outer loop
+//  is L_PFR, the inner loop is T_amb — every (L_PFR, T_amb) cell fires
+//  a fresh Cycle call (T_amb cycles through every L_PFR value, no
+//  cache reuse). With reordering, T_amb becomes outer, L_PFR inner —
+//  Cycle runs once per T_amb and gets cached for every L_PFR value
+//  inside that group.
+//
+//  The Excel/preview column order is unchanged (those iterate by the
+//  user's add-order activeVarSpecs); only the matrix row order changes.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Tier 1 (slowest-varying ideal): vars that affect the Cycle backend
+// call directly — Cycle is the heaviest single call (~3-5 s) and its
+// cache key doesn't include phi or panel-specific vars.
+const _TIER1_CYCLE_VARS = new Set([
+  "engine", "P_amb", "T_amb", "RH", "load_pct", "T_cool",
+  "com_air_frac", "T_fuel", "WFR", "water_mode",
+  "bleed_open_pct", "bleed_valve_size_pct", "emissionsMode",
+]);
+// Tier 2: vars that affect Mapping (which depends on Cycle outputs but
+// also has its own per-circuit args).
+const _TIER2_MAPPING_VARS = new Set([
+  "mapW36w3", "mapPhiIP", "mapPhiOP", "mapPhiIM",
+  "mapFracIP", "mapFracOP", "mapFracIM", "mapFracOM",
+]);
+// Tier 3: sidebar operating-point vars used by AFT, PSR, Flame Speed,
+// Exhaust. Includes the operating-point mutex group (phi/FAR/T_flame).
+const _TIER3_SIDEBAR_VARS = new Set([
+  "phi", "FAR", "T_flame", "T_air", "P",
+]);
+// Tier 4 (fastest-varying ideal): panel-specific vars — each only
+// affects one downstream call.
+const _TIER4_PANEL_VARS = new Set([
+  "tau_psr", "L_pfr", "V_pfr", "heatLossFrac",
+  "velocity", "Lchar", "Dfh", "Lpremix", "Vpremix",
+  "measO2", "measCO2",
+]);
+
+function _cacheLocalityTier(spec){
+  if (!spec) return 5;
+  // Fuel composition vars affect Cycle / Mapping / AFT etc. — Tier 1.
+  if (spec.kind === "fuel_species") return 1;
+  if (_TIER1_CYCLE_VARS.has(spec.id)) return 1;
+  if (_TIER2_MAPPING_VARS.has(spec.id)) return 2;
+  if (_TIER3_SIDEBAR_VARS.has(spec.id)) return 3;
+  if (_TIER4_PANEL_VARS.has(spec.id)) return 4;
+  return 5;  // unknown — sort to the end
+}
+
+export function reorderForCacheLocality(varSpecs){
+  if (!Array.isArray(varSpecs) || varSpecs.length < 2) return varSpecs;
+  // Stable sort: tier ascending (Tier 1 first = slowest-varying outer
+  // loop = best cache hits for the heavy Cycle/Mapping backend calls).
+  // Map to (tier, originalIndex) so vars within the same tier preserve
+  // the user's add order.
+  const indexed = varSpecs.map((s, i) => ({s, i, t: _cacheLocalityTier(s)}));
+  indexed.sort((a, b) => (a.t - b.t) || (a.i - b.i));
+  return indexed.map(x => x.s);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 //  Auto-include panel dependencies. Mapping needs Cycle internally.
 // ─────────────────────────────────────────────────────────────────────────
 export function expandPanelDeps(selectedPanels){

@@ -5,6 +5,7 @@ import {
   varsForPanels, outputsForPanels,
   generateMatrix, countMatrixSize, MAX_MATRIX_SIZE,
   expandPanelDeps, rebalanceFuel, formatRowValue,
+  reorderForCacheLocality,
   unitFor, toDisplay, toSi, toDisplayDelta, toSiDelta,
   outputUnitFor, outputDisplayValue,
 } from "./automation";
@@ -1333,13 +1334,38 @@ function bkClearCache(){
 // loop that calls api.calcCycle / api.calcAFT / api.calcCombustorMapping
 // in sequence). Identical {kind,args} returns instantly from the persisted
 // cache; concurrent identical requests share a single network call.
+// Build a cache key that's INSENSITIVE to harmless float jitter. Two args
+// that are physically identical (e.g. WFR=0 vs WFR=0.0 vs WFR=1e-12) used
+// to produce different cache keys and miss the cache. Round all numbers to
+// 8 significant figures (well below any meaningful physics resolution),
+// recurse into objects, sort object keys for stable output. Strings, bools,
+// nulls pass through unchanged.
+const _normalizeForCacheKey = (v) => {
+  if (v === null || v === undefined) return v;
+  if (typeof v === "number"){
+    if (!Number.isFinite(v)) return v;
+    if (v === 0) return 0;
+    // 8 sig figs via toPrecision then back to number to drop trailing zeros.
+    return +v.toPrecision(8);
+  }
+  if (Array.isArray(v)) return v.map(_normalizeForCacheKey);
+  if (typeof v === "object"){
+    const sorted = {};
+    for (const k of Object.keys(v).sort()) sorted[k] = _normalizeForCacheKey(v[k]);
+    return sorted;
+  }
+  return v;
+};
+const _bkCacheKey = (kind, args) =>
+  `${kind}:${JSON.stringify(_normalizeForCacheKey(args || {}))}`;
+
 async function bkCachedFetch(kind, args){
   const fn = {aft:api.calcAFT, flame:api.calcFlameSpeed, combustor:api.calcCombustor,
     exhaust:api.calcExhaust, props:api.calcProps, autoignition:api.calcAutoignition,
     cycle:api.calcCycle, combustor_mapping:api.calcCombustorMapping,
     solve_phi_tflame:api.calcSolvePhiForTflame}[kind];
   if(!fn) throw new Error(`bkCachedFetch: unknown kind ${kind}`);
-  const cacheKey = `${kind}:${JSON.stringify(args||{})}`;
+  const cacheKey = _bkCacheKey(kind, args);
   const cached = __bkCacheGet(cacheKey);
   if(cached) return cached;
   let promise = __BK_INFLIGHT.get(cacheKey);
@@ -1356,12 +1382,14 @@ async function bkCachedFetch(kind, args){
 function useBackendCalc(kind, args, enabled){
   const [data,setData]=useState(null);const[loading,setLoading]=useState(false);const[err,setErr]=useState(null);
   const {begin}=useContext(BusyCtx);
-  const key=JSON.stringify(args||{});
+  // Normalized key: shared with bkCachedFetch so React-driven and async-
+  // imperative calls hit the same cache entry. Prevents float-jitter misses.
+  const cacheKey = _bkCacheKey(kind, args);
+  const key = cacheKey;  // legacy alias: useEffect deps array uses `key`
   useEffect(()=>{
     if(!enabled){setData(null);setErr(null);setLoading(false);return;}
-    const fn={aft:api.calcAFT,flame:api.calcFlameSpeed,combustor:api.calcCombustor,exhaust:api.calcExhaust,props:api.calcProps,autoignition:api.calcAutoignition,cycle:api.calcCycle,combustor_mapping:api.calcCombustorMapping}[kind];
+    const fn={aft:api.calcAFT,flame:api.calcFlameSpeed,combustor:api.calcCombustor,exhaust:api.calcExhaust,props:api.calcProps,autoignition:api.calcAutoignition,cycle:api.calcCycle,combustor_mapping:api.calcCombustorMapping,solve_phi_tflame:api.calcSolvePhiForTflame}[kind];
     if(!fn){return;}
-    const cacheKey = `${kind}:${key}`;
     // ── Cache hit: serve immediately, no network call, no busy spinner ──
     const cached = __bkCacheGet(cacheKey);
     if(cached){ setData(cached); setLoading(false); setErr(null); return; }
@@ -4932,32 +4960,18 @@ async function runAutomationMatrix({
         }
       }
 
-      // ── Combustor Mapping (needs Cycle outputs) ──
-      if (selectedPanels.includes("mapping")){
-        rowState.map = await runMappingForAutomation(inputs, rowState.cycle, accurate);
-      }
-
-      // ── AFT (Flame Temp) ──
-      if (selectedPanels.includes("aft")){
-        rowState.aft = await runAFTForAutomation(inputs, accurate);
-      }
-
-      // ── Exhaust ──
-      if (selectedPanels.includes("exhaust")){
-        const both = await runExhaustForAutomation(inputs, accurate);
-        rowState.exh_o2  = both.o2;
-        rowState.exh_co2 = both.co2;
-      }
-
-      // ── PSR-PFR Combustor ──
-      if (selectedPanels.includes("combustor")){
-        rowState.psr = await runPSRForAutomation(inputs, accurate);
-      }
-
-      // ── Flame Speed & Blowoff ──
-      if (selectedPanels.includes("flame")){
-        rowState.flame = await runFlameForAutomation(inputs, accurate);
-      }
+      // ── Post-Cycle panels: try ONE batch HTTP call for all selected
+      //   panels at once. Falls back to per-panel calls if the batch
+      //   endpoint errors (older backend). All adapter logic mirrors the
+      //   per-call functions exactly — same args in, same shape out.
+      const postCyclePanels = selectedPanels.filter(p =>
+        p === "mapping" || p === "aft" || p === "exhaust" ||
+        p === "combustor" || p === "flame"
+      );
+      const batchOutcome = await _runPostCycleBatch(
+        postCyclePanels, inputs, rowState.cycle, accurate
+      );
+      Object.assign(rowState, batchOutcome);
 
       // Always compute fuel-property "derived" bundle for AFT outputs.
       rowState.derived = calcFuelProps(inputs.fuel, inputs.ox);
@@ -4998,6 +5012,307 @@ async function runAutomationMatrix({
 
 function override(row, key, fallback){
   return Object.prototype.hasOwnProperty.call(row, key) ? row[key] : fallback;
+}
+
+// ── Build the Cantera-side payload for each post-Cycle panel. Mirrors the
+//   `bkCachedFetch(...)` args used by the per-panel runners exactly so the
+//   batched call hits the SAME backend cache key as a per-panel call. Kept
+//   in one place so any args-tweak only needs to land in two spots
+//   (per-panel runner + here) instead of being scattered. ──
+function _buildPanelArgs(kind, inp, cycleResult){
+  if (kind === "combustor_mapping"){
+    if (!cycleResult) return null;
+    return {
+      fuel: nonzero(inp.fuel),
+      oxidizer: nonzero(cycleResult.oxidizer_humid_mol_pct || inp.ox),
+      T3_K: cycleResult.T3_K,
+      P3_bar: cycleResult.P3_bar,
+      T_fuel_K: inp.T_fuel,
+      W3_kg_s: cycleResult.mdot_air_post_bleed_kg_s || cycleResult.mdot_air_kg_s,
+      W36_over_W3: inp.mapW36w3,
+      com_air_frac: cycleResult.combustor_air_frac || inp.com_air_frac,
+      frac_IP_pct: inp.mapFracIP,
+      frac_OP_pct: inp.mapFracOP,
+      frac_IM_pct: inp.mapFracIM,
+      frac_OM_pct: inp.mapFracOM,
+      phi_IP: inp.mapPhiIP,
+      phi_OP: inp.mapPhiOP,
+      phi_IM: inp.mapPhiIM,
+      m_fuel_total_kg_s: cycleResult.mdot_fuel_kg_s,
+      WFR: inp.WFR,
+      water_mode: inp.water_mode,
+      nox_mult: 1.0, co_mult: 1.0, px36_mult: 1.0,
+    };
+  }
+  if (kind === "aft"){
+    return {
+      fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+      phi: inp.phi, T0: inp.T_air, P: atmToBar(inp.P),
+      mode: "adiabatic", heat_loss_fraction: 0,
+      T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+      WFR: inp.WFR, water_mode: inp.water_mode,
+    };
+  }
+  if (kind === "exhaust_o2"){
+    return {
+      fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+      T0: inp.T_air, P: atmToBar(inp.P),
+      measured_O2_pct_dry: inp.measO2,
+      combustion_mode: "equilibrium",
+      T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+      WFR: inp.WFR, water_mode: inp.water_mode,
+    };
+  }
+  if (kind === "exhaust_co2"){
+    return {
+      fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+      T0: inp.T_air, P: atmToBar(inp.P),
+      measured_CO2_pct_dry: inp.measCO2,
+      combustion_mode: "equilibrium",
+      T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+      WFR: inp.WFR, water_mode: inp.water_mode,
+    };
+  }
+  if (kind === "combustor"){
+    return {
+      fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+      phi: inp.phi, T0: inp.T_air, P: atmToBar(inp.P),
+      tau_psr_s: inp.tau_psr / 1000,
+      L_pfr_m: inp.L_pfr, V_pfr_m_s: inp.V_pfr,
+      profile_points: 30,
+      T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+      psr_seed: "cold_ignited", eq_constraint: "HP",
+      integration: "chunked",
+      heat_loss_fraction: inp.heatLossFrac,
+      mechanism: "gri30",
+      WFR: inp.WFR, water_mode: inp.water_mode,
+      lean: true,
+    };
+  }
+  if (kind === "flame_speed"){
+    return {
+      fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+      phi: inp.phi, T0: inp.T_air, P: atmToBar(inp.P),
+      domain_length_m: 0.03,
+      T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+      WFR: inp.WFR, water_mode: inp.water_mode,
+      lean: true,
+    };
+  }
+  return null;
+}
+
+// Adapt a raw backend response to the canonical shape the AUTO_OUTPUTS
+// pickers expect. Matches the inline adapters in the per-panel runners.
+function _adaptPanelResponse(slot, r, inp){
+  if (slot === "aft"){
+    const products = {};
+    for (const [sp, x] of Object.entries(r.mole_fractions || {})){
+      if (x > 1e-5) products[sp] = x * 100;
+    }
+    return { T_ad: r.T_ad, products, T_mixed_inlet_K: r.T_mixed_inlet_K };
+  }
+  if (slot === "exh_o2" || slot === "exh_co2"){
+    return { phi: r.phi, T_ad: r.T_ad, FAR_mass: r.FAR };
+  }
+  if (slot === "psr"){
+    return {
+      T_psr:        r.T_psr,
+      T_exit:       r.T_exit,
+      NO_ppm_psr:   r.NO_ppm_vd_psr,
+      NO_ppm_exit:  r.NO_ppm_vd_exit,
+      CO_ppm_psr:   r.CO_ppm_vd_psr,
+      CO_ppm_exit:  r.CO_ppm_vd_exit,
+      NO_ppm_15O2:  r.NO_ppm_15O2,
+      CO_ppm_15O2:  r.CO_ppm_15O2,
+      O2_pct:       r.O2_pct_dry_exit,
+      conv_psr:     r.conv_psr,
+      tau_pfr_ms:   r.tau_pfr_ms,
+      tau_total_ms: r.tau_total_ms,
+    };
+  }
+  if (slot === "flame"){
+    // Backend gives SL + alpha_th_u; the rest is JS post-processing
+    // (Damköhler, blowoff, ignition margin, flashback margin) that
+    // mirrors runFlameForAutomation exactly. Keep the two in lockstep.
+    const Tmix = mixT(inp.fuel, inp.ox, inp.phi, inp.T_fuel, inp.T_air);
+    const SL_cms = (r.SL || 0) * 100;
+    const SL_ms = SL_cms / 100;
+    const alpha_th_u = r.alpha_th_u;
+    const tau_chem = (alpha_th_u || 2e-5*Math.pow(Tmix/300,1.7)/inp.P) / Math.max(SL_ms*SL_ms, 1e-20);
+    const tau_flow = inp.Lchar / Math.max(inp.velocity, 1e-20);
+    const Da = tau_flow / tau_chem;
+    const blowoff_velocity = inp.Lchar / tau_chem;
+    const stable = Da > 1;
+    const tau_BO = inp.Dfh / Math.max(1.5 * SL_ms, 1e-20);
+    const alphaTh = alpha_th_u || (2e-5*Math.pow(Tmix/300,1.7)/inp.P);
+    const g_c = (SL_ms*SL_ms) / Math.max(alphaTh, 1e-20);
+    const tau_ign = (typeof calcTauIgnFree === "function") ? calcTauIgnFree(Tmix, inp.P) : NaN;
+    const tau_res = inp.Lpremix / Math.max(inp.Vpremix, 1e-20);
+    const ignition_safe = Number.isFinite(tau_ign) && (tau_ign / Math.max(tau_res, 1e-20)) >= 3;
+    const H2_frac = (inp.fuel.H2 || 0) / Math.max(Object.values(inp.fuel).reduce((a,b)=>a+(+b||0),0), 1e-9);
+    const S_T_est = SL_ms * (H2_frac > 0.30 ? 2.5 : 1.8);
+    const flashback_margin = inp.Vpremix / Math.max(S_T_est, 1e-20);
+    const core_flashback_safe = flashback_margin > 1/0.7;
+    const premixer_safe = ignition_safe && core_flashback_safe;
+    return {
+      SL_cms, tau_chem_ms: tau_chem * 1000, tau_flow_ms: tau_flow * 1000,
+      Da, blowoff_velocity, stable,
+      tau_BO_ms: tau_BO * 1000, alpha_th: alphaTh, g_c,
+      tau_ign_ms: Number.isFinite(tau_ign) ? tau_ign * 1000 : null,
+      tau_res_ms: tau_res * 1000, ignition_safe,
+      flashback_margin, core_flashback_safe, premixer_safe,
+    };
+  }
+  if (slot === "map"){
+    // mapping response goes through unchanged (picker reads raw fields).
+    return r;
+  }
+  return r;
+}
+
+// ── ONE batch HTTP call wraps all post-Cycle panel jobs for a single row.
+//   In Free mode there's nothing to batch (no network); just delegate to
+//   the per-panel runners. In Accurate mode we:
+//     1. Probe the client cache for each panel — skip jobs that hit.
+//     2. Send the misses as a single /calc/batch request.
+//     3. Adapt and write each response back into the client cache so
+//        downstream rows / re-runs see the same fast path.
+//     4. On batch failure (older backend / network error) fall back to
+//        per-panel calls — quality is identical, only the per-row HTTP
+//        overhead returns.
+//   Returns an object with the same keys the previous sequential block
+//   wrote into rowState: {map, aft, exh_o2, exh_co2, psr, flame}.
+async function _runPostCycleBatch(panels, inp, cycleResult, accurate){
+  // Free mode: per-panel JS calls, no network.
+  if (!accurate){
+    const out = {};
+    if (panels.includes("mapping")){
+      out.map = await runMappingForAutomation(inp, cycleResult, accurate);
+    }
+    if (panels.includes("aft")){
+      out.aft = await runAFTForAutomation(inp, accurate);
+    }
+    if (panels.includes("exhaust")){
+      const both = await runExhaustForAutomation(inp, accurate);
+      out.exh_o2  = both.o2;
+      out.exh_co2 = both.co2;
+    }
+    if (panels.includes("combustor")){
+      out.psr = await runPSRForAutomation(inp, accurate);
+    }
+    if (panels.includes("flame")){
+      out.flame = await runFlameForAutomation(inp, accurate);
+    }
+    return out;
+  }
+
+  // ── Accurate mode: assemble (slot, kind, args) tuples ──
+  // `kind` is the backend route name; `slot` is the rowState key the
+  // adapted response is assigned to. Skip mapping if cycle didn't run.
+  const planned = [];
+  if (panels.includes("mapping") && cycleResult){
+    planned.push({ slot: "map", kind: "combustor_mapping", argKind: "combustor_mapping" });
+  }
+  if (panels.includes("aft")){
+    planned.push({ slot: "aft", kind: "aft", argKind: "aft" });
+  }
+  if (panels.includes("exhaust")){
+    planned.push({ slot: "exh_o2",  kind: "exhaust", argKind: "exhaust_o2"  });
+    planned.push({ slot: "exh_co2", kind: "exhaust", argKind: "exhaust_co2" });
+  }
+  if (panels.includes("combustor")){
+    planned.push({ slot: "psr", kind: "combustor", argKind: "combustor" });
+  }
+  if (panels.includes("flame")){
+    planned.push({ slot: "flame", kind: "flame_speed", argKind: "flame_speed" });
+  }
+
+  if (planned.length === 0) return {};
+
+  // Resolve args + check the client cache. Build the misses-only batch.
+  // `bkKind` is the kind passed to bkCachedFetch (uses the legacy short
+  // name "flame" for the flame-speed cache, matching per-panel calls).
+  const _bkKindFor = (kind) => kind === "flame_speed" ? "flame" : kind;
+  const out = {};
+  const batchJobs = [];
+  const batchMeta = [];   // index-aligned with batchJobs
+  for (const p of planned){
+    const args = _buildPanelArgs(p.argKind, inp, cycleResult);
+    if (args === null){ continue; }
+    const cacheKey = _bkCacheKey(_bkKindFor(p.kind), args);
+    const cached = __bkCacheGet(cacheKey);
+    if (cached){
+      try { out[p.slot] = _adaptPanelResponse(p.slot, cached, inp); } catch (_) {}
+      continue;
+    }
+    batchJobs.push({ kind: p.kind, args });
+    batchMeta.push({ slot: p.slot, bkKind: _bkKindFor(p.kind), args });
+  }
+
+  if (batchJobs.length === 0) return out;
+
+  // Fire ONE HTTP call. On any exception fall back to per-panel runners
+  // for the misses — the sequential path is the previous baseline so
+  // quality is preserved.
+  let resp = null;
+  try {
+    resp = await api.calcBatch({ jobs: batchJobs });
+  } catch (e){
+    console.warn("[automation] batch endpoint failed, falling back to per-panel calls:", e);
+    return await _runPostCycleSequential(panels, inp, cycleResult, accurate, out);
+  }
+
+  const results = (resp && Array.isArray(resp.results)) ? resp.results : [];
+  if (results.length !== batchJobs.length){
+    console.warn(`[automation] batch returned ${results.length} results for ${batchJobs.length} jobs — falling back`);
+    return await _runPostCycleSequential(panels, inp, cycleResult, accurate, out);
+  }
+
+  // Assign each result. Per-job failures (e.g. one panel's args were
+  // invalid) DON'T abort the row — the slot is left undefined and the
+  // output picker returns null.
+  for (let i = 0; i < results.length; i++){
+    const r = results[i];
+    const m = batchMeta[i];
+    if (r && r.ok && r.data){
+      // Cache the raw response under the same key the per-panel call
+      // would use, so a later row with identical args hits the cache
+      // even outside of automation.
+      try { __bkCacheSet(_bkCacheKey(m.bkKind, m.args), r.data); } catch (_) {}
+      try { out[m.slot] = _adaptPanelResponse(m.slot, r.data, inp); }
+      catch (e){ console.warn(`[automation] adapter failed for ${m.slot}:`, e); }
+    } else {
+      console.warn(`[automation] batch job ${m.slot} failed:`, r && r.error);
+    }
+  }
+  return out;
+}
+
+// Fallback path: invoke the per-panel runners sequentially. Used when the
+// /calc/batch endpoint is unavailable or returns a malformed payload.
+// `partial` is the partial output already populated from cache hits — we
+// only re-run panels that aren't already in it.
+async function _runPostCycleSequential(panels, inp, cycleResult, accurate, partial){
+  const out = { ...(partial || {}) };
+  if (panels.includes("mapping") && !("map" in out)){
+    out.map = await runMappingForAutomation(inp, cycleResult, accurate);
+  }
+  if (panels.includes("aft") && !("aft" in out)){
+    out.aft = await runAFTForAutomation(inp, accurate);
+  }
+  if (panels.includes("exhaust") && !("exh_o2" in out) && !("exh_co2" in out)){
+    const both = await runExhaustForAutomation(inp, accurate);
+    out.exh_o2  = both.o2;
+    out.exh_co2 = both.co2;
+  }
+  if (panels.includes("combustor") && !("psr" in out)){
+    out.psr = await runPSRForAutomation(inp, accurate);
+  }
+  if (panels.includes("flame") && !("flame" in out)){
+    out.flame = await runFlameForAutomation(inp, accurate);
+  }
+  return out;
 }
 
 // ── Per-panel calculation wrappers — pick Free-mode JS or Accurate Cantera
@@ -5134,6 +5449,7 @@ async function runPSRForAutomation(inp, accurate){
       heat_loss_fraction: inp.heatLossFrac,
       mechanism: "gri30",
       WFR: inp.WFR, water_mode: inp.water_mode,
+      lean: true,  // automation never reads the profile — save ~30 KB / call
     });
     // ── Adapt the backend response to the canonical picker shape ──
     // Backend uses the verbose `_vd_` infix (volumetric dry) for ppm and
@@ -5176,6 +5492,7 @@ async function runFlameForAutomation(inp, accurate){
         domain_length_m: 0.03,
         T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
         WFR: inp.WFR, water_mode: inp.water_mode,
+        lean: true,  // skip T_profile + x_profile arrays in response
       });
       SL_cms = (r.SL || 0) * 100;
       alpha_th_u = r.alpha_th_u;
@@ -5499,9 +5816,18 @@ function AutomatePanel(props){
     [activeVarSpecs],
   );
   const matrixOversized = matrixSize > MAX_MATRIX_SIZE;
+  // Reorder varSpecs for cache locality before generating the matrix.
+  // The factorial cross-product puts FIRST-listed var as slowest-varying;
+  // reordering Tier-1 (Cycle) vars to the front maximizes cache hits for
+  // the heavy Cycle backend call when downstream vars sweep. Display order
+  // (preview table, Excel headers) still uses activeVarSpecs (user order).
+  const matrixSpecs = useMemo(
+    () => reorderForCacheLocality(activeVarSpecs),
+    [activeVarSpecs],
+  );
   const matrix = useMemo(
-    () => (activeVarSpecs.length && !matrixOversized) ? generateMatrix(activeVarSpecs) : [],
-    [activeVarSpecs, matrixOversized],
+    () => (matrixSpecs.length && !matrixOversized) ? generateMatrix(matrixSpecs) : [],
+    [matrixSpecs, matrixOversized],
   );
 
   // Estimated runtime (sum of typical-cost per panel, times matrix size).
@@ -5585,10 +5911,37 @@ function AutomatePanel(props){
     setErrMsg(null);
     setRunning(true);
     setResults(null);
-    setProgress({ done: 0, total: matrix.length, elapsed: 0, eta: 0, lastRow: null });
+    setProgress({ done: 0, total: matrix.length, elapsed: 0, eta: 0, lastRow: null, phase: "warmup" });
     abortRef.current = { aborted: false };
     const endBusy = beginBusy("Running automation matrix");
     try {
+      // ── Warm-up ping ────────────────────────────────────────────────
+      // The Render service auto-sleeps after ~15 min idle. The first
+      // request after sleep pays a 10-30 s wake penalty (FastAPI cold
+      // start + Cantera GRI-Mech load). Fire one cheap call BEFORE the
+      // matrix wall-time clock starts so that penalty doesn't show up
+      // as the first row taking 30 s. The call uses the baseline state
+      // so it's likely to be a cache hit on subsequent matrix calls
+      // anyway. Errors here are swallowed — if the warmup fails the
+      // matrix run will surface the real error on the first row.
+      if (accurate){
+        try {
+          await bkCachedFetch("aft", {
+            fuel: nonzero(baseline.fuel),
+            oxidizer: nonzero(baseline.ox),
+            phi: baseline.phi,
+            T0: baseline.T_air,
+            P: atmToBar(baseline.P),
+            mode: "adiabatic",
+            heat_loss_fraction: 0,
+            T_fuel_K: baseline.T_fuel,
+            T_air_K: baseline.T_air,
+            WFR: baseline.WFR,
+            water_mode: baseline.water_mode,
+          });
+        } catch (_) { /* warmup is best-effort */ }
+      }
+      setProgress({ done: 0, total: matrix.length, elapsed: 0, eta: 0, lastRow: null, phase: "running" });
       const out = await runAutomationMatrix({
         rows: matrix,
         selectedPanels: effectivePanels,
