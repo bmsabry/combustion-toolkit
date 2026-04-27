@@ -1072,6 +1072,33 @@ const BACKEND_CALC_TIMEOUT_MS = 300_000;
 // Call sites still pass `loading` for future flexibility, but nothing renders.
 function InlineBusyBanner(){ return null; }
 
+// Reusable per-panel control: "Stay activated when navigating away" checkbox.
+// The activation flag itself lives in App so it can survive tab nav; this
+// toggle stores the user preference (in localStorage, owned by App) so the
+// auto-deactivate-on-nav effect knows whether to skip itself for this panel.
+// Browser restart never persists the activation flag, only the preference.
+function KeepActivatedToggle({on,onChange,panelLabel="this panel"}){
+  return(<label
+    title={on
+      ? `STAY-ACTIVATED is ON. ${panelLabel} will keep its activation state when you switch tabs. Browser restart still resets it to deactivated.`
+      : `STAY-ACTIVATED is OFF (default). ${panelLabel} auto-deactivates when you switch tabs and you must click ACTIVATE again on return. Toggle on to keep it running across navigation.`}
+    style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px",
+      background:on?`${C.accent}10`:"transparent",
+      border:`1px solid ${on?C.accent+"60":C.border}`,
+      borderRadius:5,cursor:"pointer",userSelect:"none",
+      fontFamily:"'Barlow',sans-serif",fontSize:11,color:on?C.accent:C.txtDim}}>
+    <input type="checkbox" checked={on} onChange={e=>onChange&&onChange(e.target.checked)}
+      style={{accentColor:C.accent,cursor:"pointer",margin:0}}/>
+    <span style={{fontWeight:700,letterSpacing:".4px",fontFamily:"'Barlow Condensed',sans-serif",
+      textTransform:"uppercase",fontSize:10.5}}>
+      Stay activated when navigating away
+    </span>
+    <span style={{color:C.txtMuted,fontSize:10,fontStyle:"italic"}}>
+      {on ? "(survives tab switch · resets on browser restart)" : "(default — deactivates on tab switch)"}
+    </span>
+  </label>);
+}
+
 // Export button that auto-disables while any Cantera calculation is in flight
 // (reading BusyCtx.tasks). Prevents the user from exporting a stale snapshot
 // while inputs are still being re-calculated.
@@ -1420,7 +1447,11 @@ function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setC
       </div>
     </div></div>);}
 
-function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",velocity,setVelocity,Lchar,setLchar,Dfh,setDfh,Lpremix,setLpremix,Vpremix,setVpremix}){
+function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",velocity,setVelocity,Lchar,setLchar,Dfh,setDfh,Lpremix,setLpremix,Vpremix,setVpremix,
+  // Activation state is lifted to App so it survives tab nav when the user
+  // enables `keepActivated`. Both default to App-level useState(false), so
+  // a browser restart always opens the panel deactivated.
+  flameActive,setFlameActive,keepActivated,setKeepActivated}){
   // ─── HOOKS ─────────────────────────────────────────────────────────────
   // ALL hooks live above the activate-guard early return. Each does a
   // FULL no-op (returns a safe default, fires no backend call) when
@@ -1434,7 +1465,8 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const Tair=T0;
   // Cantera 1D FreeFlame is ~10–15 s per call; the autoignition reactor is
   // another 2–5 s. Off by default — the user clicks ACTIVATE to opt in.
-  const [flameActive,setFlameActive]=useState(false);
+  // (flameActive/setFlameActive now arrive as props from App so the state
+  //  survives tab nav when the user enables the keep-activated preference.)
   const [canteraSweeps,setCanteraSweeps]=useState(null);  // {hash, phi:[...], T:[...], P:[...]}
   const [sweepErr,setSweepErr]=useState(null);
   const [sweepRunning,setSweepRunning]=useState(false);
@@ -1504,6 +1536,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         <span style={{width:10,height:10,borderRadius:"50%",background:C.strong,boxShadow:`0 0 8px ${C.strong}`}}/>
         DEACTIVATED — click to fire Cantera Flame Speed + Autoignition (~12-20 s)
       </button>
+      <KeepActivatedToggle on={!!keepActivated} onChange={setKeepActivated} panelLabel="Flame Speed"/>
       <div style={{padding:"40px 24px",background:C.bg2,border:`1.5px dashed ${C.strong}60`,borderRadius:8,textAlign:"center",fontFamily:"'Barlow',sans-serif"}}>
         <div style={{fontSize:14,fontWeight:700,color:C.strong,letterSpacing:".5px",marginBottom:8,fontFamily:"'Barlow Condensed',sans-serif"}}>FLAME SPEED PANEL DEACTIVATED</div>
         <div style={{fontSize:12,color:C.txtDim,lineHeight:1.55,maxWidth:600,margin:"0 auto"}}>
@@ -1584,6 +1617,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       <span style={{width:10,height:10,borderRadius:"50%",background:C.good,boxShadow:`0 0 8px ${C.good}`}}/>
       ACTIVATED — Cantera Flame Speed + Autoignition running on every change
     </button>
+    <KeepActivatedToggle on={!!keepActivated} onChange={setKeepActivated} panelLabel="Flame Speed"/>
     <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works"><p style={{margin:"0 0 6px"}}><span style={hs.em}>Laminar Flame Speed (S_L)</span> is computed using Gülder/Metghalchi-Keck empirical correlations: S_L = S_L0 · f(φ) · (T_u/T_0)^α · (P/P_0)^β. For mixtures, species contributions are mole-fraction-weighted.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>Blowoff Analysis:</span> τ_chem = α_th / S_L² (chemical timescale), τ_flow = L_char / V (flow timescale). The <span style={hs.em}>Damköhler number Da = τ_flow / τ_chem</span>. When Da &lt; 1, the flame cannot sustain itself and blows off.</p><p style={{margin:0}}><span style={hs.warn}>V_ref</span> is your reference approach velocity. <span style={hs.warn}>L_char</span> is the characteristic recirculation length (typically flameholder diameter or step height).</p></HelpBox>
     <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}</div>
       <div style={{...S.row,gap:8,marginBottom:10}}>
@@ -1665,13 +1699,16 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       <div style={S.card}><div style={S.cardT}>Flame Speed vs Unburned Temperature</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>S_L increases strongly with preheat temperature (exponent α ≈ 1.5–2.0).</div><Chart data={tSw} xK="T" yK="SL" xL={`Unburned Temperature (${uu(units,"T")})`} yL={`Flame Speed (${uu(units,"SL")})`} color={C.accent}/></div>
     </div></div>);}
 
-function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,setTfuel,WFR=0,waterMode="liquid",psrSeed,setPsrSeed,eqConstraint,setEqConstraint,integration,setIntegration,heatLossFrac,setHeatLossFrac,mechanism,setMechanism}){
+function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,setTfuel,WFR=0,waterMode="liquid",psrSeed,setPsrSeed,eqConstraint,setEqConstraint,integration,setIntegration,heatLossFrac,setHeatLossFrac,mechanism,setMechanism,
+  // Activation state lifted to App so it survives tab nav when keepActivated.
+  psrActive,setPsrActive,keepActivated,setKeepActivated}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   // Cantera PSR+PFR is the slowest backend call (~3-5 s). Off by default —
   // user clicks the green ACTIVATE button to fire it. While inactive, the
   // panel stays dimmed so the user knows nothing is being computed.
-  const[psrActive,setPsrActive]=useState(false);
+  // (psrActive/setPsrActive arrive as props from App so the state survives
+  //  tab nav when the user enables the keep-activated preference.)
   // Air inlet T = T0 (sidebar "Air Temperature"); fuel inlet T = Tfuel (sidebar "Fuel Temperature").
   const Tair=T0;
   // PSR reactor options are lifted to App (so exportToExcel can see them).
@@ -1733,6 +1770,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
       <span style={{width:10,height:10,borderRadius:"50%",background:psrActive?C.good:C.strong,boxShadow:`0 0 8px ${psrActive?C.good:C.strong}`}}/>
       {psrActive?"ACTIVATED — PSR+PFR running on every change":"DEACTIVATED — click to fire Cantera PSR+PFR (~3-5 s)"}
     </button>
+    <KeepActivatedToggle on={!!keepActivated} onChange={setKeepActivated} panelLabel="Combustor PSR→PFR"/>
     {/* When deactivated, render a static placeholder INSTEAD of the panel cards.
         Nothing below this line mounts until psrActive=true — no Cantera, no local
         PSR/PFR, no φ-sweep, no charts, no SVG, no DOM cost on parameter change. */}
@@ -4864,6 +4902,29 @@ export default function App(){
     return 5;
   });
   useEffect(()=>{try{localStorage.setItem("ctk.loadStepPct.v1",String(loadStepPct));}catch(e){}},[loadStepPct]);
+
+  // ── Heavy-panel activation state, lifted to App so it survives tab nav.
+  // Two pieces per panel:
+  //   * <panel>Active        — boolean activation flag (session-only useState
+  //                            in App; intentionally NOT persisted, so a
+  //                            browser restart always starts deactivated).
+  //   * keep<Panel>Activated — user preference (persisted via localStorage)
+  //                            to skip the auto-deactivate-on-nav-away.
+  // The auto-deactivate effect below watches `tab` and clears the active
+  // flag when the user navigates AWAY from the owning panel UNLESS the
+  // matching keep* preference is on.
+  const[flameActive,setFlameActive]=useState(false);
+  const[psrActive,setPsrActive]=useState(false);
+  const[keepFlameActivated,setKeepFlameActivated]=useState(()=>{
+    try{return localStorage.getItem("ctk.keepFlameActivated.v1")==="1";}catch(e){return false;}
+  });
+  const[keepPsrActivated,setKeepPsrActivated]=useState(()=>{
+    try{return localStorage.getItem("ctk.keepPsrActivated.v1")==="1";}catch(e){return false;}
+  });
+  useEffect(()=>{try{localStorage.setItem("ctk.keepFlameActivated.v1",keepFlameActivated?"1":"0");}catch(e){}},[keepFlameActivated]);
+  useEffect(()=>{try{localStorage.setItem("ctk.keepPsrActivated.v1",keepPsrActivated?"1":"0");}catch(e){}},[keepPsrActivated]);
+  // (auto-deactivate-on-tab-change effect lives further down, AFTER `tab` is
+  // declared, to avoid a temporal-dead-zone reference.)
   // ── Combustor-Mapping panel inputs (lifted to App so Operations Summary
   // can reuse the same correlation result — /calc/combustor_mapping is
   // fired once in App and the bkMap handle is passed to both panels).
@@ -4953,6 +5014,16 @@ export default function App(){
   useEffect(()=>{if(!TABS.some(t=>t.id===tab))setTab("summary");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[cycleEngine]);
+  // Auto-deactivate the heavy panels when the user navigates AWAY from them,
+  // unless they've opted into "stay activated" via the per-panel preference.
+  // Default keeps the original UX (deactivate on nav away) — opt-in survives
+  // navigation but never survives a browser restart (state lives in App
+  // useState, not localStorage; see initializers).
+  useEffect(()=>{
+    if(tab!=="flame" && flameActive && !keepFlameActivated) setFlameActive(false);
+    if(tab!=="combustor" && psrActive && !keepPsrActivated) setPsrActive(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[tab]);
   const initF={};FUEL_SP.forEach(s=>initF[s]=0);Object.assign(initF,FUEL_PRESETS["Pipeline NG (US)"]);
   const initO={};OX_SP.forEach(s=>initO[s]=0);Object.assign(initO,OX_PRESETS["Humid Air (60%RH 25°C)"]);
   const[fuel,setFuel]=useState(initF);const[ox,setOx]=useState(initO);
@@ -5375,8 +5446,12 @@ export default function App(){
               result={cycleResult} loading={bkCycle.loading} err={bkCycle.err}
             />}
             {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} combMode={combMode} setCombMode={setCombMode} T4_K={cycleResult?.T4_K}/>}
-            {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar} Dfh={Dfh} setDfh={setDfh} Lpremix={Lpremix} setLpremix={setLpremix} Vpremix={Vpremix} setVpremix={setVpremix}/>}
-            {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}/>}
+            {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar} Dfh={Dfh} setDfh={setDfh} Lpremix={Lpremix} setLpremix={setLpremix} Vpremix={Vpremix} setVpremix={setVpremix}
+              flameActive={flameActive} setFlameActive={setFlameActive}
+              keepActivated={keepFlameActivated} setKeepActivated={setKeepFlameActivated}/>}
+            {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}
+              psrActive={psrActive} setPsrActive={setPsrActive}
+              keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="props"&&<PropsPanel/>}
             {tab==="assumptions"&&<AssumptionsPanel/>}
