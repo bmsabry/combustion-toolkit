@@ -1062,16 +1062,15 @@ function MultiSeriesChart({
         const path = pts.map((d,i) =>
           `${i ? 'L' : 'M'}${xToPx(d.x).toFixed(1)},${yToPx(d.y).toFixed(1)}`
         ).join(' ');
+        const marker = s.marker || "circle";
         return (
           <g key={`s${sIdx}`}>
             {pts.length >= 2 && (
               <path d={path} fill="none" stroke={s.color} strokeWidth="1.8"
                 strokeLinejoin="round" strokeLinecap="round" opacity="0.85"/>
             )}
-            {pts.map((d,i) => (
-              <circle key={i} cx={xToPx(d.x).toFixed(1)} cy={yToPx(d.y).toFixed(1)}
-                r="3" fill={s.color} stroke={C.bg} strokeWidth="1"/>
-            ))}
+            {pts.map((d,i) => _renderMarker(marker,
+              xToPx(d.x), yToPx(d.y), 3.5, s.color, C.bg, `pt${sIdx}_${i}`))}
           </g>
         );
       })}
@@ -1091,10 +1090,11 @@ function MultiSeriesChart({
         const r = Math.floor(i / legendCols), c = i % legendCols;
         const lx = p.l + c * colW + 2;
         const ly = h - legendH + 6 + r * 18;
+        const marker = s.marker || "circle";
         return (
           <g key={`lg${i}`}>
             <line x1={lx} y1={ly} x2={lx + 18} y2={ly} stroke={s.color} strokeWidth="2.5"/>
-            <circle cx={lx + 9} cy={ly} r="3" fill={s.color} stroke={C.bg} strokeWidth="1"/>
+            {_renderMarker(marker, lx + 9, ly, 3.5, s.color, C.bg, `lgm${i}`)}
             <text x={lx + 24} y={ly + 3.5} fill={C.txtDim} fontSize="10"
               fontFamily="'Barlow',sans-serif">{s.name}</text>
           </g>
@@ -1102,6 +1102,54 @@ function MultiSeriesChart({
       })}
     </svg>
   );
+}
+
+// Render a marker shape at (cx, cy) with radius r. Returns a JSX element.
+// Uses simple geometric shapes that read clearly at 3-4 px size and stay
+// distinguishable in PNG export at 2x pixel ratio. Filled shapes get a
+// thin contrasting stroke so they pop on busy gridlines; stroke-only
+// shapes (plus, cross) use the series color directly.
+function _renderMarker(shape, cx, cy, r, color, bgColor, key){
+  const cxs = (typeof cx === "number") ? cx.toFixed(1) : cx;
+  const cys = (typeof cy === "number") ? cy.toFixed(1) : cy;
+  switch (shape){
+    case "square":
+      return (<rect key={key} x={cx - r} y={cy - r} width={2*r} height={2*r}
+        fill={color} stroke={bgColor} strokeWidth="0.8"/>);
+    case "triangle":
+      return (<polygon key={key}
+        points={`${cxs},${(cy - r).toFixed(1)} ${(cx - r).toFixed(1)},${(cy + r * 0.85).toFixed(1)} ${(cx + r).toFixed(1)},${(cy + r * 0.85).toFixed(1)}`}
+        fill={color} stroke={bgColor} strokeWidth="0.8"/>);
+    case "diamond":
+      return (<polygon key={key}
+        points={`${cxs},${(cy - r).toFixed(1)} ${(cx + r).toFixed(1)},${cys} ${cxs},${(cy + r).toFixed(1)} ${(cx - r).toFixed(1)},${cys}`}
+        fill={color} stroke={bgColor} strokeWidth="0.8"/>);
+    case "plus":
+      return (<g key={key}>
+        <line x1={cx - r} y1={cy} x2={cx + r} y2={cy} stroke={color} strokeWidth="2"/>
+        <line x1={cx} y1={cy - r} x2={cx} y2={cy + r} stroke={color} strokeWidth="2"/>
+      </g>);
+    case "cross":
+      return (<g key={key}>
+        <line x1={cx - r * 0.85} y1={cy - r * 0.85} x2={cx + r * 0.85} y2={cy + r * 0.85} stroke={color} strokeWidth="2"/>
+        <line x1={cx - r * 0.85} y1={cy + r * 0.85} x2={cx + r * 0.85} y2={cy - r * 0.85} stroke={color} strokeWidth="2"/>
+      </g>);
+    case "star": {
+      // 5-point star inscribed in circle of radius r.
+      const pts = [];
+      for (let i = 0; i < 10; i++){
+        const ang = (Math.PI / 2) + (i * Math.PI / 5);
+        const rr = (i % 2 === 0) ? r : r * 0.45;
+        pts.push(`${(cx + rr * Math.cos(ang)).toFixed(1)},${(cy - rr * Math.sin(ang)).toFixed(1)}`);
+      }
+      return (<polygon key={key} points={pts.join(" ")}
+        fill={color} stroke={bgColor} strokeWidth="0.6"/>);
+    }
+    case "circle":
+    default:
+      return (<circle key={key} cx={cxs} cy={cys} r={r}
+        fill={color} stroke={bgColor} strokeWidth="0.8"/>);
+  }
 }
 
 /* ══════════════════ UI COMPONENTS ══════════════════ */
@@ -6110,6 +6158,11 @@ async function _svgStringToPngBlob(svgString, w, h, scale=2){
 // Format a single column value for use as a group-key label. Uses
 // formatRowValue for nice numeric rounding, falls back to String() for
 // enums/bools that are already strings/booleans.
+// Marker palette — used as the SHAPE dimension when the user picks a
+// second grouping variable. Order matters: shapes farthest apart visually
+// come first so a typical 2-3 level group is maximally distinguishable.
+const PLOT_MARKERS = ["circle", "square", "triangle", "diamond", "plus", "cross", "star"];
+
 function _plotFmtVal(col, raw){
   if (raw == null) return "—";
   if (col.isCategorical) return String(raw);
@@ -6118,12 +6171,36 @@ function _plotFmtVal(col, raw){
   return String(disp);
 }
 
-// Build a stable, human-readable group-key label from the OTHER (non-X)
-// varied inputs in a row. The key includes column labels so the user can
-// tell which combination produced this series.
-function _plotGroupKey(row, groupCols){
-  if (groupCols.length === 0) return "all data";
-  return groupCols.map(c => `${c.label}=${_plotFmtVal(c, row.__inputs__?.[c.varId])}`).join(" · ");
+// Read the per-row raw value for a varSpec column. Fuel and oxidizer
+// species live nested in row.__inputs__.fuel / .ox (Excel writer reads the
+// same way). Plain inputs (phi, T_air, …) are top-level on inputs.
+function _readRowVarValue(row, col){
+  const inp = row.__inputs__;
+  if (!inp) return undefined;
+  if (col.kindRaw === "fuel_species") return inp.fuel ? inp.fuel[col.varId] : undefined;
+  if (col.kindRaw === "ox_species")   return inp.ox   ? inp.ox[col.varId]   : undefined;
+  return inp[col.varId];
+}
+
+// Pull the baseline value for a varSpec from the App-level baseline
+// snapshot. Same nesting rule as _readRowVarValue.
+function _readBaselineVar(baseline, varSpec){
+  if (!baseline) return undefined;
+  if (varSpec.kind === "fuel_species") return baseline.fuel ? baseline.fuel[varSpec.id] : undefined;
+  if (varSpec.kind === "ox_species")   return baseline.ox   ? baseline.ox[varSpec.id]   : undefined;
+  return baseline[varSpec.id];
+}
+
+// Numeric / categorical equality with a sane tolerance. Used to pin a row
+// to a specific value of a held-constant variable.
+function _valuesMatch(a, b){
+  if (a == null || b == null) return false;
+  if (typeof a === "number" && typeof b === "number"){
+    if (a === b) return true;
+    const tol = Math.max(Math.abs(a), Math.abs(b), 1) * 1e-6;
+    return Math.abs(a - b) < tol;
+  }
+  return String(a) === String(b);
 }
 
 // Compile the full set of plottable columns once per (varSpecs, outputs,
@@ -6132,14 +6209,18 @@ function _plotGroupKey(row, groupCols){
 function _buildPlotColumns(varSpecs, outputs, units){
   const cols = [];
   for (const v of varSpecs){
-    const isCat = v.kind === "enum" || v.kind === "bool" || v.kind === "fuel_species" || v.kind === "ox_species";
+    const isFuelSp = v.kind === "fuel_species";
+    const isOxSp   = v.kind === "ox_species";
+    const isCat    = v.kind === "enum" || v.kind === "bool";
     cols.push({
       id: `in:${v.id}`, kind: "input", varId: v.id,
+      kindRaw: v.kind,                // tag so _readRowVarValue can dispatch
       label: v.label,
       unit: unitFor(v, units),
-      isCategorical: isCat && v.kind !== "fuel_species" && v.kind !== "ox_species",
-      // Species columns ARE numeric (mol %), so don't tag them categorical.
-      raw: row => row.__inputs__?.[v.id],
+      isCategorical: isCat,
+      raw: row => isFuelSp ? row.__inputs__?.fuel?.[v.id]
+              : isOxSp     ? row.__inputs__?.ox?.[v.id]
+              : row.__inputs__?.[v.id],
       toDisp: raw => toDisplay(v, raw, units),
     });
   }
@@ -6147,6 +6228,7 @@ function _buildPlotColumns(varSpecs, outputs, units){
     const isCat = o.unit === "bool";
     cols.push({
       id: `out:${o.id}`, kind: "output",
+      kindRaw: "output",
       label: o.label,
       unit: outputUnitFor(o, units),
       isCategorical: isCat,
@@ -6157,24 +6239,110 @@ function _buildPlotColumns(varSpecs, outputs, units){
   return cols;
 }
 
-// Build the chart's series array. Sorts the rows by X ascending so lines
-// trace cleanly left-to-right, splits them into series keyed by the
-// `groupCols` value combination, and assigns a palette color to each
-// series. Returns {series, xCategorical, xLabels?} ready for
-// MultiSeriesChart.
-function _buildSeries(rows, xCol, yCol, groupCols){
-  // Build a list of {row, x, y, gKey} after dropping invalid points.
-  const pts = [];
-  let xIsCat = !!xCol.isCategorical;
-  // For categorical X, build a list of distinct values in row-encounter order.
+// ─────────────────────────────────────────────────────────────────────────
+//  Hold-constant slice resolution.
+//
+//  When the user plots "Y vs X grouped by G1, G2", every OTHER varied
+//  input must be pinned to ONE value or the resulting curve is a smear
+//  of unrelated data points. Standard DOE analysis practice: hold all
+//  non-axis non-group factors at a single canonical value (here: the
+//  user's baseline state from the sidebar at run time). If no row matches
+//  the baseline (because the user swept the baseline OUT of the matrix),
+//  fall back to the most-common (mode) value of each held variable —
+//  that maximizes the number of plottable points and is the classic
+//  "Y on X | most-frequent slice" fallback in DOE plotting.
+// ─────────────────────────────────────────────────────────────────────────
+function _findHeldSlice(varSpecs, baseline, results, freeVarIds){
+  // Held vars = every varSpec that isn't free (X axis if input, or any
+  // grouping variable). For each, pick a canonical value.
+  const held = [];        // [{varSpec, value, source: "baseline"|"mode"}]
+  for (const v of varSpecs){
+    if (freeVarIds.has(v.id)) continue;
+    const baseVal = _readBaselineVar(baseline, v);
+    held.push({ varSpec: v, value: baseVal, source: "baseline" });
+  }
+  // Verify the baseline slice has rows in the matrix.
+  let count = _countMatchingRows(results, varSpecs, held, freeVarIds);
+  if (count >= 2) return { held, count, fallback: false };
+  // Baseline misses — find the most-common value for each held var
+  // ACROSS the rows, take that as the canonical slice instead.
+  const fallbackHeld = held.map(h => {
+    const vals = new Map();   // raw → count
+    for (const r of results){
+      if (r.__error__) continue;
+      const col = { kindRaw: h.varSpec.kind, varId: h.varSpec.id };
+      const raw = _readRowVarValue(r, col);
+      if (raw == null) continue;
+      // Round numeric to 8 sig figs so float jitter doesn't fragment counts.
+      const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
+      vals.set(k, (vals.get(k) || 0) + 1);
+    }
+    let bestK = null, bestN = 0;
+    for (const [k, n] of vals){
+      if (n > bestN){ bestK = k; bestN = n; }
+    }
+    return { varSpec: h.varSpec, value: bestK, source: "mode" };
+  });
+  count = _countMatchingRows(results, varSpecs, fallbackHeld, freeVarIds);
+  return { held: fallbackHeld, count, fallback: true };
+}
+function _countMatchingRows(results, varSpecs, held, freeVarIds){
+  if (held.length === 0) return results.filter(r => !r.__error__).length;
+  let n = 0;
+  for (const r of results){
+    if (r.__error__) continue;
+    let ok = true;
+    for (const h of held){
+      const col = { kindRaw: h.varSpec.kind, varId: h.varSpec.id };
+      if (!_valuesMatch(_readRowVarValue(r, col), h.value)){ ok = false; break; }
+    }
+    if (ok) n++;
+  }
+  return n;
+}
+
+// Build chart series with proper DOE slicing.
+//
+//   xCol   — independent axis (input OR output)
+//   yCol   — dependent axis
+//   gColor — optional grouping column (color dimension); must be input
+//   gShape — optional second grouping column (shape dimension); must be input
+//   slice  — { held, fallback } from _findHeldSlice
+//
+// Rows that don't match every held value are FILTERED OUT (this is the
+// fix for the "vertical stack" bug). Within the filtered set, points are
+// bucketed by (gColor value, gShape value), each bucket becomes one
+// series with a unique (color, marker) combination, points are sorted by
+// X ascending so lines trace left-to-right.
+function _buildSlicedSeries(rows, varSpecs, xCol, yCol, gColor, gShape, slice){
+  const xIsCat = !!xCol.isCategorical;
   const catOrder = [];
   const catIdx = new Map();
+  // Pre-index series buckets keyed by (colorKey, shapeKey).
+  // We store colorKey separately so we can assign palette colors after
+  // bucketing (so order-of-encounter doesn't drive color assignment).
+  const buckets = new Map();   // bucketKey → {colorKey, shapeKey, points}
+
+  // Track distinct color and shape keys for legend ordering.
+  const colorKeys = [];
+  const colorSeen = new Set();
+  const shapeKeys = [];
+  const shapeSeen = new Set();
+
+  const heldValues = slice ? slice.held : [];
+
+  rowLoop:
   for (const row of rows){
     if (row.__error__) continue;
-    let xRaw = xCol.raw(row);
-    let yRaw = yCol.raw(row);
+    // Hold-constant filter
+    for (const h of heldValues){
+      const col = { kindRaw: h.varSpec.kind, varId: h.varSpec.id };
+      if (!_valuesMatch(_readRowVarValue(row, col), h.value)) continue rowLoop;
+    }
+    // Read X
+    const xRaw = xCol.raw(row);
+    const yRaw = yCol.raw(row);
     if (xRaw == null || yRaw == null) continue;
-    // For categorical: stable integer index from the first-seen value.
     let x;
     if (xIsCat){
       const k = String(xRaw);
@@ -6187,26 +6355,68 @@ function _buildSeries(rows, xCol, yCol, groupCols){
     let y = yCol.toDisp(yRaw);
     if (typeof y === "boolean") y = y ? 1 : 0;
     if (typeof y !== "number" || !Number.isFinite(y)) continue;
-    pts.push({ x, y, gKey: _plotGroupKey(row, groupCols) });
+    // Determine series identity
+    const colorRaw = gColor ? gColor.raw(row) : null;
+    const shapeRaw = gShape ? gShape.raw(row) : null;
+    const colorKey = gColor ? _plotFmtVal(gColor, colorRaw) : "__all__";
+    const shapeKey = gShape ? _plotFmtVal(gShape, shapeRaw) : "__one__";
+    if (gColor && !colorSeen.has(colorKey)){ colorSeen.add(colorKey); colorKeys.push({key: colorKey, raw: colorRaw}); }
+    if (gShape && !shapeSeen.has(shapeKey)){ shapeSeen.add(shapeKey); shapeKeys.push({key: shapeKey, raw: shapeRaw}); }
+    const bucketKey = `${colorKey}||${shapeKey}`;
+    if (!buckets.has(bucketKey)){
+      buckets.set(bucketKey, { colorKey, shapeKey, points: [] });
+    }
+    buckets.get(bucketKey).points.push({ x, y });
   }
-  // Bucket by group key.
-  const buckets = new Map();
-  for (const p of pts){
-    if (!buckets.has(p.gKey)) buckets.set(p.gKey, []);
-    buckets.get(p.gKey).push({ x: p.x, y: p.y });
-  }
+
+  // Sort color and shape keys by their underlying numeric value when
+  // possible (so a swept variable's series appear low-to-high in the
+  // legend). Strings sort alphabetically.
+  const sortKeys = (arr) => {
+    arr.sort((a, b) => {
+      const av = (typeof a.raw === "number") ? a.raw : null;
+      const bv = (typeof b.raw === "number") ? b.raw : null;
+      if (av != null && bv != null) return av - bv;
+      return String(a.key).localeCompare(String(b.key));
+    });
+  };
+  sortKeys(colorKeys);
+  sortKeys(shapeKeys);
+
+  // Assign palette colors and markers based on sorted key order, so the
+  // colors match the natural order of the swept variable.
+  const colorByKey = new Map();
+  colorKeys.forEach((c, i) => colorByKey.set(c.key, PLOT_PALETTE[i % PLOT_PALETTE.length]));
+  const markerByKey = new Map();
+  shapeKeys.forEach((s, i) => markerByKey.set(s.key, PLOT_MARKERS[i % PLOT_MARKERS.length]));
+
+  // Default color/marker for ungrouped axes.
+  const defaultColor  = PLOT_PALETTE[0];
+  const defaultMarker = "circle";
+
+  // Build the final series list. Ordering: color-first, then shape, so
+  // the legend reads "[color1·shape1, color1·shape2, color2·shape1, …]".
   const series = [];
-  let i = 0;
-  for (const [name, points] of buckets){
-    points.sort((a,b) => a.x - b.x);
-    series.push({ name, color: PLOT_PALETTE[i % PLOT_PALETTE.length], points });
-    i++;
+  const cKeys = colorKeys.length > 0 ? colorKeys.map(c => c.key) : ["__all__"];
+  const sKeys = shapeKeys.length > 0 ? shapeKeys.map(s => s.key) : ["__one__"];
+  for (const cK of cKeys){
+    for (const sK of sKeys){
+      const b = buckets.get(`${cK}||${sK}`);
+      if (!b || b.points.length === 0) continue;
+      b.points.sort((a, p) => a.x - p.x);
+      // Build human-readable legend label
+      const parts = [];
+      if (gColor) parts.push(`${gColor.label} = ${cK}${gColor.unit ? ` ${gColor.unit}` : ""}`);
+      if (gShape) parts.push(`${gShape.label} = ${sK}${gShape.unit ? ` ${gShape.unit}` : ""}`);
+      const name = parts.length > 0 ? parts.join(" · ") : "data";
+      series.push({
+        name,
+        color:  gColor ? colorByKey.get(cK)  : defaultColor,
+        marker: gShape ? markerByKey.get(sK) : defaultMarker,
+        points: b.points,
+      });
+    }
   }
-  // Sort series by name for predictable ordering & color stability across
-  // re-renders that produce the same group keys.
-  series.sort((a,b) => a.name.localeCompare(b.name));
-  // Re-assign colors after sort.
-  series.forEach((s, k) => { s.color = PLOT_PALETTE[k % PLOT_PALETTE.length]; });
   return { series, xCategorical: xIsCat, xLabels: xIsCat ? catOrder : null };
 }
 
@@ -6299,7 +6509,35 @@ function _autoChartSpec(ch, useLog){
   };
 }
 
-function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
+// Build a one-line "Held constant: var1 = v1, var2 = v2, …" caption from
+// a slice's held-vars list. Truncated if the list is long; suffix shows
+// the data source (baseline vs. mode fallback) and how many rows the
+// slice actually pinned in the matrix.
+function _heldSliceCaption(slice, units){
+  if (!slice || slice.held.length === 0) {
+    return `Held constant: nothing — every varied input is in use as an axis or grouping.`;
+  }
+  const parts = slice.held.map(h => {
+    const v = h.varSpec;
+    if (h.value == null) return `${v.label} = —`;
+    let dispVal;
+    if (v.kind === "fuel_species" || v.kind === "ox_species" || v.kind === "enum" || v.kind === "bool"){
+      dispVal = String(h.value);
+    } else if (typeof h.value === "number") {
+      dispVal = formatRowValue(toDisplay(v, h.value, units));
+    } else {
+      dispVal = String(h.value);
+    }
+    const u = unitFor(v, units);
+    return `${v.label} = ${dispVal}${u ? ` ${u}` : ""}`;
+  });
+  const note = slice.fallback
+    ? ` (baseline missed the matrix — using mode values; ${slice.count} matching rows)`
+    : ` (${slice.count} rows match the baseline slice)`;
+  return `Held constant: ${parts.join(" · ")}${note}`;
+}
+
+function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClose }){
   // varSpecs is the user's varied list (already filtered to active panels);
   // selectedOutputs is the captured-output catalog for those panels.
   const allCols = useMemo(
@@ -6309,8 +6547,8 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
   const inputCols  = useMemo(() => allCols.filter(c => c.kind === "input"),  [allCols]);
   const outputCols = useMemo(() => allCols.filter(c => c.kind === "output"), [allCols]);
 
-  // Custom-plot defaults: first input as X (most-important by combustion
-  // priority — usually φ), highest-priority output as Y, no group.
+  // Combustion-priority sorted lists — used as defaults and as the
+  // canonical X/Y order in the auto plots.
   const sortedInputs = useMemo(() => {
     return [...inputCols].sort((a, b) => {
       const av = varSpecs.find(v => v.id === a.varId);
@@ -6326,31 +6564,45 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
     });
   }, [outputCols, selectedOutputs]);
 
+  // ── Custom plot state ──
+  // X, Y can be any column. Color and Shape grouping must be inputs (we
+  // use them to discriminate held-vs-free). Both groupings are optional;
+  // X being an input means it's also "free" (so it joins the freeVarIds).
   const [customXId, setCustomXId] = useState(() => sortedInputs[0]?.id || allCols[0]?.id || null);
   const [customYId, setCustomYId] = useState(() => sortedOutputs[0]?.id || outputCols[0]?.id || null);
-  const [customGId, setCustomGId] = useState(null);
+  const [customGColorId, setCustomGColorId] = useState(null);
+  const [customGShapeId, setCustomGShapeId] = useState(null);
   const [customLog, setCustomLog] = useState(false);
 
-  const xCol = useMemo(() => allCols.find(c => c.id === customXId) || null, [allCols, customXId]);
-  const yCol = useMemo(() => allCols.find(c => c.id === customYId) || null, [allCols, customYId]);
-  const gCol = useMemo(() => allCols.find(c => c.id === customGId) || null, [allCols, customGId]);
+  const xCol      = useMemo(() => allCols.find(c => c.id === customXId)      || null, [allCols, customXId]);
+  const yCol      = useMemo(() => allCols.find(c => c.id === customYId)      || null, [allCols, customYId]);
+  const gColorCol = useMemo(() => allCols.find(c => c.id === customGColorId) || null, [allCols, customGColorId]);
+  const gShapeCol = useMemo(() => allCols.find(c => c.id === customGShapeId) || null, [allCols, customGShapeId]);
 
-  const customSeriesData = useMemo(() => {
+  const customSliceData = useMemo(() => {
     if (!xCol || !yCol) return null;
-    const groupCols = gCol ? [{ ...gCol, varId: gCol.varId }] : [];
-    return _buildSeries(results, xCol, yCol, groupCols);
-  }, [results, xCol, yCol, gCol]);
+    // Free vars: X (if input) + both groupings (always inputs).
+    const free = new Set();
+    if (xCol.kind === "input")      free.add(xCol.varId);
+    if (gColorCol)                  free.add(gColorCol.varId);
+    if (gShapeCol)                  free.add(gShapeCol.varId);
+    const slice = _findHeldSlice(varSpecs, baseline, results, free);
+    const sd = _buildSlicedSeries(results, varSpecs, xCol, yCol, gColorCol, gShapeCol, slice);
+    return { ...sd, slice };
+  }, [results, varSpecs, baseline, xCol, yCol, gColorCol, gShapeCol]);
 
   // ── Auto-plot grid ───────────────────────────────────────────────
-  //   For every captured output × every varied input as the X axis, build
-  //   a multi-series chart whose series are bucketed by the OTHER varied
-  //   inputs combined. Then:
-  //     1. Drop charts where Y is effectively constant (filter clutter).
-  //     2. Sort by combustion priority — emissions first, then flame
-  //        temps, then stability, etc. — so the most decision-relevant
-  //        plots show at the top of the page.
-  //     3. Tag each chart with its category (used for ZIP folder name)
-  //        and a sanitized filename for individual / bulk export.
+  // For each captured output × each varied input X, generate:
+  //   (a) a "main effect" plot — no grouping, every other varied input
+  //       held at baseline (or mode fallback)
+  //   (b) for each OTHER varied input as G_color, ONE color-grouped
+  //       variant (other-other vars still held)
+  // Charts where Y is essentially constant after slicing are dropped —
+  // they'd just be flat lines.
+  // Each chart is ranked by combustion priority (yRank, xRank) for
+  // sort + multi-select default selection; the top-priority "main effect"
+  // plots come first, then color-grouped variants, then less-important
+  // outputs.
   const autoCharts = useMemo(() => {
     if (inputCols.length === 0 || outputCols.length === 0) return [];
     const out = [];
@@ -6361,33 +6613,64 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
       for (const xc of inputCols){
         const xVarDef = varSpecs.find(v => v.id === xc.varId);
         const xRank = xVarDef ? _inputRank(xVarDef) : 9999;
-        const groupCols = inputCols
-          .filter(c => c.varId !== xc.varId)
-          .map(c => ({ ...c, varId: c.varId }));
-        const sd = _buildSeries(results, xc, yc, groupCols);
-        if (sd.series.length === 0) continue;
-        // Skip plots where Y never moves — they're just flat horizontals.
-        if (_isYConstant(sd.series)) continue;
-        const baseName = `${_sanitizeFilename(yc.label)}_vs_${_sanitizeFilename(xc.label)}`;
-        out.push({
-          key: `${yc.id}__vs__${xc.id}`,
-          title: `${yc.label} vs ${xc.label}`,
-          xCol: xc, yCol: yc, data: sd,
-          logHint: _shouldLogAxis(sd.series),
-          yRank, xRank, category: yCategory,
-          filename: `${baseName}.png`,
-        });
+
+        // (a) Main-effect plot — no grouping. Free = X only.
+        {
+          const free = new Set([xc.varId]);
+          const slice = _findHeldSlice(varSpecs, baseline, results, free);
+          const sd = _buildSlicedSeries(results, varSpecs, xc, yc, null, null, slice);
+          if (sd.series.length > 0 && !_isYConstant(sd.series)){
+            const baseName = `${_sanitizeFilename(yc.label)}_vs_${_sanitizeFilename(xc.label)}`;
+            out.push({
+              key: `${yc.id}__vs__${xc.id}`,
+              title: `${yc.label} vs ${xc.label}`,
+              xCol: xc, yCol: yc, gColorCol: null, gShapeCol: null,
+              data: sd, slice,
+              logHint: _shouldLogAxis(sd.series),
+              yRank, xRank, gRank: 0,
+              category: yCategory,
+              filename: `${baseName}.png`,
+            });
+          }
+        }
+
+        // (b) One color-grouped variant per OTHER varied input.
+        for (const gColor of inputCols){
+          if (gColor.varId === xc.varId) continue;
+          const gVarDef = varSpecs.find(v => v.id === gColor.varId);
+          const gRank = gVarDef ? _inputRank(gVarDef) : 9999;
+          const free = new Set([xc.varId, gColor.varId]);
+          const slice = _findHeldSlice(varSpecs, baseline, results, free);
+          const sd = _buildSlicedSeries(results, varSpecs, xc, yc, gColor, null, slice);
+          if (sd.series.length === 0 || _isYConstant(sd.series)) continue;
+          // Skip if every series collapses to a single point — usually
+          // means slicing was so tight no variation in X is preserved
+          // for any group key.
+          const totalPts = sd.series.reduce((acc, s) => acc + s.points.length, 0);
+          if (totalPts < sd.series.length * 2) continue;
+          const baseName = `${_sanitizeFilename(yc.label)}_vs_${_sanitizeFilename(xc.label)}_by_${_sanitizeFilename(gColor.label)}`;
+          out.push({
+            key: `${yc.id}__vs__${xc.id}__by__${gColor.id}`,
+            title: `${yc.label} vs ${xc.label} · colored by ${gColor.label}`,
+            xCol: xc, yCol: yc, gColorCol: gColor, gShapeCol: null,
+            data: sd, slice,
+            logHint: _shouldLogAxis(sd.series),
+            yRank, xRank, gRank,
+            category: yCategory,
+            filename: `${baseName}.png`,
+          });
+        }
       }
     }
-    // Stable sort: yRank (output importance) → xRank (X importance) →
-    // alpha title for ties.
+    // Sort: yRank → xRank → gRank (no-grouping first since gRank=0) → title.
     out.sort((a, b) =>
       (a.yRank - b.yRank) ||
       (a.xRank - b.xRank) ||
+      (a.gRank - b.gRank) ||
       a.title.localeCompare(b.title)
     );
     return out;
-  }, [results, inputCols, outputCols, varSpecs, selectedOutputs]);
+  }, [results, inputCols, outputCols, varSpecs, selectedOutputs, baseline]);
 
   const [logFlags, setLogFlags] = useState({});
 
@@ -6416,24 +6699,25 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
   const [exporting, setExporting] = useState(null);  // null | "custom" | "zip"
 
   const exportCustomPlot = useCallback(async () => {
-    if (!xCol || !yCol || !customSeriesData) return;
+    if (!xCol || !yCol || !customSliceData) return;
     setExporting("custom");
     try {
       const props = {
-        series: customSeriesData.series,
+        series: customSliceData.series,
         xLabel: `${xCol.label}${xCol.unit ? ` (${xCol.unit})` : ""}`,
         yLabel: `${yCol.label}${yCol.unit ? ` (${yCol.unit})` : ""}`,
-        w: 960, h: 560,
-        xCategorical: customSeriesData.xCategorical,
-        xLabels: customSeriesData.xLabels,
-        yLog: customLog && _seriesAllPositive(customSeriesData.series),
-        legendCols: customSeriesData.series.length > 6 ? 3 : 2,
+        w: 960, h: 600,
+        xCategorical: customSliceData.xCategorical,
+        xLabels: customSliceData.xLabels,
+        yLog: customLog && _seriesAllPositive(customSliceData.series),
+        legendCols: customSliceData.series.length > 6 ? 3 : 2,
       };
       const svg = _chartSpecToSvgString(props);
       const png = await _svgStringToPngBlob(svg, props.w, props.h);
-      const groupSuffix = gCol ? `_by_${_sanitizeFilename(gCol.label)}` : "";
+      const colSuf = gColorCol ? `_color_${_sanitizeFilename(gColorCol.label)}` : "";
+      const shpSuf = gShapeCol ? `_shape_${_sanitizeFilename(gShapeCol.label)}` : "";
       const logSuffix = props.yLog ? "_logy" : "";
-      const fname = `${_sanitizeFilename(yCol.label)}_vs_${_sanitizeFilename(xCol.label)}${groupSuffix}${logSuffix}.png`;
+      const fname = `${_sanitizeFilename(yCol.label)}_vs_${_sanitizeFilename(xCol.label)}${colSuf}${shpSuf}${logSuffix}.png`;
       _triggerBlobDownload(png, fname);
     } catch (e){
       console.error("custom plot export failed:", e);
@@ -6441,7 +6725,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
     } finally {
       setExporting(null);
     }
-  }, [xCol, yCol, gCol, customSeriesData, customLog]);
+  }, [xCol, yCol, gColorCol, gShapeCol, customSliceData, customLog]);
 
   const exportSingleAuto = useCallback(async (ch) => {
     setExporting(ch.key);
@@ -6547,14 +6831,28 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
         border:`1px solid ${C.border}`}}>
         <div style={{fontSize:11, fontWeight:700, color:C.txtDim,
           fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".6px",
-          textTransform:"uppercase", marginBottom:8}}>
-          Custom plot — pick any X, Y, and (optional) group-by
+          textTransform:"uppercase", marginBottom:6}}>
+          Custom plot — every other varied input is held at baseline
         </div>
-        <div style={{display:"flex", gap:14, flexWrap:"wrap", marginBottom:10}}>
+        <div style={{fontSize:10, color:C.txtMuted, marginBottom:10,
+          fontFamily:"'Barlow',sans-serif", lineHeight:1.5}}>
+          Pick X, Y, and up to two grouping inputs. <strong>Color</strong> grouping splits
+          series by the first grouping variable; <strong>Shape</strong> grouping changes
+          marker shape per value of the second. Every other varied input is
+          held at its baseline value (or the most-common matrix value if
+          baseline isn't in the swept range).
+        </div>
+        <div style={{display:"grid",
+          gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",
+          gap:12, marginBottom:10}}>
           <ColPicker label="X axis" cols={allCols} value={customXId} onChange={setCustomXId}/>
           <ColPicker label="Y axis" cols={allCols} value={customYId} onChange={setCustomYId}/>
-          <ColPicker label="Group by" cols={inputCols} value={customGId} onChange={setCustomGId}
-            allowNone={true} noneLabel="(no grouping — single series)"/>
+          <ColPicker label="Group by COLOR" cols={inputCols} value={customGColorId}
+            onChange={setCustomGColorId}
+            allowNone={true} noneLabel="(no color grouping)"/>
+          <ColPicker label="Group by SHAPE" cols={inputCols} value={customGShapeId}
+            onChange={setCustomGShapeId}
+            allowNone={true} noneLabel="(no shape grouping)"/>
         </div>
         <div style={{display:"flex", alignItems:"center", gap:14, marginBottom:8, flexWrap:"wrap"}}>
           <label style={{display:"flex", alignItems:"center", gap:6, fontSize:11,
@@ -6563,37 +6861,44 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
             Y log scale
           </label>
           <button onClick={exportCustomPlot}
-            disabled={!xCol || !yCol || !customSeriesData || customSeriesData.series.length === 0 || exporting === "custom"}
+            disabled={!xCol || !yCol || !customSliceData || customSliceData.series.length === 0 || exporting === "custom"}
             style={{marginLeft:"auto", padding:"5px 12px", fontSize:11, fontWeight:700,
               color: C.bg, background: C.accent2, border: "none", borderRadius:4,
-              cursor: (!xCol || !yCol || !customSeriesData || customSeriesData.series.length === 0) ? "not-allowed" : "pointer",
-              opacity: (!xCol || !yCol || !customSeriesData || customSeriesData.series.length === 0) ? 0.4 : 1,
+              cursor: (!xCol || !yCol || !customSliceData || customSliceData.series.length === 0) ? "not-allowed" : "pointer",
+              opacity: (!xCol || !yCol || !customSliceData || customSliceData.series.length === 0) ? 0.4 : 1,
               fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px"}}>
             {exporting === "custom" ? "⏳ EXPORTING…" : "📥 EXPORT PNG"}
           </button>
         </div>
-        {xCol && yCol && customSeriesData && customSeriesData.series.length > 0 ? (
+        {xCol && yCol && customSliceData && customSliceData.series.length > 0 ? (
           <div style={{background:C.bg2, borderRadius:6, padding:8}}>
-            <div style={{fontSize:12, color:C.txt, marginBottom:6, fontWeight:600,
+            <div style={{fontSize:12, color:C.txt, marginBottom:4, fontWeight:600,
               fontFamily:"'Barlow',sans-serif"}}>
               {yCol.label}{yCol.unit ? ` (${yCol.unit})` : ""} vs {xCol.label}{xCol.unit ? ` (${xCol.unit})` : ""}
-              {gCol ? ` — grouped by ${gCol.label}` : ""}
+              {gColorCol ? ` · color by ${gColorCol.label}` : ""}
+              {gShapeCol ? ` · shape by ${gShapeCol.label}` : ""}
+            </div>
+            <div style={{fontSize:10, color: customSliceData.slice?.fallback ? C.warm : C.txtMuted,
+              marginBottom:6, fontFamily:"'Barlow',sans-serif", lineHeight:1.4}}>
+              {_heldSliceCaption(customSliceData.slice, units)}
             </div>
             <MultiSeriesChart
-              series={customSeriesData.series}
+              series={customSliceData.series}
               xLabel={`${xCol.label}${xCol.unit ? ` (${xCol.unit})` : ""}`}
               yLabel={`${yCol.label}${yCol.unit ? ` (${yCol.unit})` : ""}`}
-              w={760} h={380}
-              xCategorical={customSeriesData.xCategorical}
-              xLabels={customSeriesData.xLabels}
-              yLog={customLog && _seriesAllPositive(customSeriesData.series)}
-              legendCols={customSeriesData.series.length > 6 ? 3 : 2}
+              w={760} h={420}
+              xCategorical={customSliceData.xCategorical}
+              xLabels={customSliceData.xLabels}
+              yLog={customLog && _seriesAllPositive(customSliceData.series)}
+              legendCols={customSliceData.series.length > 6 ? 3 : 2}
             />
           </div>
         ) : (
           <div style={{padding:14, color:C.txtMuted, fontSize:12, fontStyle:"italic",
             fontFamily:"monospace", textAlign:"center"}}>
-            Pick an X and Y column above to build a custom plot.
+            {(!xCol || !yCol)
+              ? "Pick an X and Y column above to build a custom plot."
+              : "No rows match the held-constant slice. Try changing X / grouping or remove a grouping variable."}
           </div>
         )}
       </div>
@@ -6649,15 +6954,22 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
             return (
               <div key={ch.key} style={{background:C.bg, padding:8, borderRadius:6,
                 border:`1px solid ${C.border}`}}>
-                <div style={{display:"flex", alignItems:"center", marginBottom:4, gap:8}}>
-                  <span style={{fontSize:11.5, fontWeight:700, color:C.txt,
-                    fontFamily:"'Barlow',sans-serif"}}>
-                    {ch.yCol.label}{ch.yCol.unit ? ` (${ch.yCol.unit})` : ""} vs {ch.xCol.label}{ch.xCol.unit ? ` (${ch.xCol.unit})` : ""}
-                  </span>
+                <div style={{display:"flex", alignItems:"flex-start", marginBottom:4, gap:8}}>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{fontSize:11.5, fontWeight:700, color:C.txt,
+                      fontFamily:"'Barlow',sans-serif"}}>
+                      {ch.yCol.label}{ch.yCol.unit ? ` (${ch.yCol.unit})` : ""} vs {ch.xCol.label}{ch.xCol.unit ? ` (${ch.xCol.unit})` : ""}
+                      {ch.gColorCol ? <span style={{color:C.accent, marginLeft:6, fontWeight:600, fontSize:10}}>· color: {ch.gColorCol.label}</span> : null}
+                    </div>
+                    <div style={{fontSize:9.5, color: ch.slice?.fallback ? C.warm : C.txtMuted,
+                      marginTop:2, fontFamily:"'Barlow',sans-serif", lineHeight:1.35}}>
+                      {_heldSliceCaption(ch.slice, units)}
+                    </div>
+                  </div>
                   {canLog && (
-                    <label style={{marginLeft:"auto", display:"flex", alignItems:"center", gap:4,
+                    <label style={{display:"flex", alignItems:"center", gap:4,
                       fontSize:10, color: ch.logHint ? C.accent2 : C.txtMuted, cursor:"pointer",
-                      fontFamily:"'Barlow',sans-serif"}}
+                      fontFamily:"'Barlow',sans-serif", whiteSpace:"nowrap"}}
                       title={ch.logHint ? "Wide y-range — log scale recommended" : "Toggle log y axis"}>
                       <input type="checkbox" checked={useLog}
                         onChange={e => setLogFlags(f => ({...f, [ch.key]: e.target.checked}))}/>
@@ -6666,11 +6978,11 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, onClose }){
                   )}
                   <button onClick={() => exportSingleAuto(ch)}
                     disabled={exporting === ch.key}
-                    style={{marginLeft: canLog ? 0 : "auto",
-                      padding:"2px 8px", fontSize:10, fontWeight:700,
+                    style={{padding:"2px 8px", fontSize:10, fontWeight:700,
                       color: C.txtDim, background: "transparent",
                       border: `1px solid ${C.border}`, borderRadius:3, cursor:"pointer",
-                      fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".4px"}}
+                      fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".4px",
+                      whiteSpace:"nowrap"}}
                     title="Export this plot as a PNG file">
                     {exporting === ch.key ? "⏳" : "📥 PNG"}
                   </button>
@@ -7500,6 +7812,7 @@ function AutomatePanel(props){
           varSpecs={activeVarSpecs}
           selectedOutputs={effectiveOutputs}
           units={units}
+          baseline={baseline}
           onClose={() => setShowPlots(false)}
         />
       )}
