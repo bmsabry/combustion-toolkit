@@ -6172,22 +6172,37 @@ function _plotFmtVal(col, raw){
 }
 
 // Read the per-row raw value for a varSpec column. Fuel and oxidizer
-// species live nested in row.__inputs__.fuel / .ox (Excel writer reads the
-// same way). Plain inputs (phi, T_air, …) are top-level on inputs.
+// species live nested in row.__inputs__.fuel / .ox keyed by the SPECIES
+// name (e.g. "H2", "CH4") — NOT by the catalog var-id which prefixes
+// "fuel." / "ox." for namespacing (e.g. "fuel.H2"). The Excel writer
+// uses v.species the same way; we mirror that here so plotting / slicing
+// reads the right value. Plain inputs (phi, T_air, …) are top-level.
 function _readRowVarValue(row, col){
   const inp = row.__inputs__;
   if (!inp) return undefined;
-  if (col.kindRaw === "fuel_species") return inp.fuel ? inp.fuel[col.varId] : undefined;
-  if (col.kindRaw === "ox_species")   return inp.ox   ? inp.ox[col.varId]   : undefined;
+  if (col.kindRaw === "fuel_species") {
+    const key = col.species || col.varId;
+    return inp.fuel ? inp.fuel[key] : undefined;
+  }
+  if (col.kindRaw === "ox_species") {
+    const key = col.species || col.varId;
+    return inp.ox ? inp.ox[key] : undefined;
+  }
   return inp[col.varId];
 }
 
 // Pull the baseline value for a varSpec from the App-level baseline
-// snapshot. Same nesting rule as _readRowVarValue.
+// snapshot. Same species-name vs var-id distinction as _readRowVarValue.
 function _readBaselineVar(baseline, varSpec){
   if (!baseline) return undefined;
-  if (varSpec.kind === "fuel_species") return baseline.fuel ? baseline.fuel[varSpec.id] : undefined;
-  if (varSpec.kind === "ox_species")   return baseline.ox   ? baseline.ox[varSpec.id]   : undefined;
+  if (varSpec.kind === "fuel_species") {
+    const key = varSpec.species || varSpec.id;
+    return baseline.fuel ? baseline.fuel[key] : undefined;
+  }
+  if (varSpec.kind === "ox_species") {
+    const key = varSpec.species || varSpec.id;
+    return baseline.ox ? baseline.ox[key] : undefined;
+  }
   return baseline[varSpec.id];
 }
 
@@ -6212,14 +6227,19 @@ function _buildPlotColumns(varSpecs, outputs, units){
     const isFuelSp = v.kind === "fuel_species";
     const isOxSp   = v.kind === "ox_species";
     const isCat    = v.kind === "enum" || v.kind === "bool";
+    // Species are keyed by v.species (e.g. "H2") inside row.__inputs__.fuel /
+    // .ox; the catalog v.id is namespaced ("fuel.H2") and would miss the
+    // dict. Plain inputs are top-level under the catalog id.
+    const speciesKey = (isFuelSp || isOxSp) ? (v.species || v.id) : null;
     cols.push({
       id: `in:${v.id}`, kind: "input", varId: v.id,
-      kindRaw: v.kind,                // tag so _readRowVarValue can dispatch
+      kindRaw: v.kind,
+      species: speciesKey,
       label: v.label,
       unit: unitFor(v, units),
       isCategorical: isCat,
-      raw: row => isFuelSp ? row.__inputs__?.fuel?.[v.id]
-              : isOxSp     ? row.__inputs__?.ox?.[v.id]
+      raw: row => isFuelSp ? row.__inputs__?.fuel?.[speciesKey]
+              : isOxSp     ? row.__inputs__?.ox?.[speciesKey]
               : row.__inputs__?.[v.id],
       toDisp: raw => toDisplay(v, raw, units),
     });
