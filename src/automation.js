@@ -387,6 +387,13 @@ const bar_to_psia = b => b * 14.5038;
 const kgs_to_lbs  = k => k * 2.20462;
 const ms_to_fts   = v => v * 3.28084;
 const m2s_to_ft2s = a => a * 10.7639;
+// Heating value: MJ/kg → BTU/lb. 1 MJ/kg = 1000 kJ/kg ÷ 2.326 kJ/kg per
+// BTU/lb = 429.923 BTU/lb.
+const MJkg_to_BTUlb  = e => e * 429.923;
+// Volumetric heating value / Wobbe: MJ/m³ → BTU/scf at 60 °F / 1 atm.
+// 1 BTU = 1055.06 J; 1 scf = 0.02832 m³  →  1 BTU/scf = 37 252 J/m³
+// → 1 MJ/m³ = 26.839 BTU/scf.
+const MJm3_to_BTUscf = e => e * 26.839;
 
 export const AUTO_OUTPUTS = [
   // ── Cycle ──
@@ -438,11 +445,17 @@ export const AUTO_OUTPUTS = [
   // ── AFT (Flame Temp & Properties) ──
   { id: "T_ad",               label: "T_ad (adiabatic)", panel: "aft", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_ad },
   { id: "T_mixed",            label: "T_mixed (3-stream)", panel: "aft", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_mixed_inlet_K },
-  { id: "LHV_mass",           label: "LHV (mass)",   panel: "aft", unit: "MJ/kg",     pick: r => r.derived?.LHV_mass },
-  { id: "LHV_vol",            label: "LHV (vol)",    panel: "aft", unit: "MJ/m³",     pick: r => r.derived?.LHV_vol },
+  { id: "LHV_mass",           label: "LHV (mass)",   panel: "aft",
+    unit_si: "MJ/kg", unit_en: "BTU/lb", siToEn: MJkg_to_BTUlb,
+    pick: r => r.derived?.LHV_mass },
+  { id: "LHV_vol",            label: "LHV (vol)",    panel: "aft",
+    unit_si: "MJ/m³", unit_en: "BTU/scf", siToEn: MJm3_to_BTUscf,
+    pick: r => r.derived?.LHV_vol },
   { id: "MW_fuel",            label: "Fuel MW",      panel: "aft", unit: "g/mol",     pick: r => r.derived?.MW_fuel },
   { id: "SG",                 label: "Specific Gravity", panel: "aft", unit: "—",     pick: r => r.derived?.SG },
-  { id: "WI",                 label: "Wobbe Index",  panel: "aft", unit: "MJ/m³",     pick: r => r.derived?.WI },
+  { id: "WI",                 label: "Wobbe Index",  panel: "aft",
+    unit_si: "MJ/m³", unit_en: "BTU/scf", siToEn: MJm3_to_BTUscf,
+    pick: r => r.derived?.WI },
   { id: "AFR_mass",           label: "Stoich AFR (mass)", panel: "aft", unit: "—",    pick: r => r.derived?.AFR_mass },
   { id: "X_CO2",              label: "X_CO₂ (wet)",  panel: "aft", unit: "%",         pick: r => r.aft?.products?.CO2 },
   { id: "X_H2O",              label: "X_H₂O (wet)",  panel: "aft", unit: "%",         pick: r => r.aft?.products?.H2O },
