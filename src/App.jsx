@@ -5352,25 +5352,32 @@ function _adaptPanelResponse(slot, r, inp){
     for (const [sp, x] of Object.entries(r.mole_fractions || {})){
       if (x > 1e-5) products[sp] = x * 100;
     }
-    return { T_ad: r.T_ad, products, T_mixed_inlet_K: r.T_mixed_inlet_K };
+    return {
+      T_ad: r.T_ad,
+      T_ad_complete: r.T_ad_complete,    // Cantera complete-combustion T_ad
+      products,
+      T_mixed_inlet_K: r.T_mixed_inlet_K,
+    };
   }
   if (slot === "exh_o2" || slot === "exh_co2"){
     return { phi: r.phi, T_ad: r.T_ad, FAR_mass: r.FAR };
   }
   if (slot === "psr"){
     return {
-      T_psr:        r.T_psr,
-      T_exit:       r.T_exit,
-      NO_ppm_psr:   r.NO_ppm_vd_psr,
-      NO_ppm_exit:  r.NO_ppm_vd_exit,
-      CO_ppm_psr:   r.CO_ppm_vd_psr,
-      CO_ppm_exit:  r.CO_ppm_vd_exit,
-      NO_ppm_15O2:  r.NO_ppm_15O2,
-      CO_ppm_15O2:  r.CO_ppm_15O2,
-      O2_pct:       r.O2_pct_dry_exit,
-      conv_psr:     r.conv_psr,
-      tau_pfr_ms:   r.tau_pfr_ms,
-      tau_total_ms: r.tau_total_ms,
+      T_psr:           r.T_psr,
+      T_exit:          r.T_exit,
+      T_ad_equilibrium: r.T_ad_equilibrium,   // Cantera HP equilibrium reference
+      T_ad_complete:    r.T_ad_complete,      // Cantera complete-combustion reference
+      NO_ppm_psr:      r.NO_ppm_vd_psr,
+      NO_ppm_exit:     r.NO_ppm_vd_exit,
+      CO_ppm_psr:      r.CO_ppm_vd_psr,
+      CO_ppm_exit:     r.CO_ppm_vd_exit,
+      NO_ppm_15O2:     r.NO_ppm_15O2,
+      CO_ppm_15O2:     r.CO_ppm_15O2,
+      O2_pct:          r.O2_pct_dry_exit,
+      conv_psr:        r.conv_psr,
+      tau_pfr_ms:      r.tau_pfr_ms,
+      tau_total_ms:    r.tau_total_ms,
     };
   }
   if (slot === "flame"){
@@ -5635,12 +5642,22 @@ async function runAFTForAutomation(inp, accurate){
     for (const [sp, x] of Object.entries(r.mole_fractions || {})){
       if (x > 1e-5) products[sp] = x * 100;
     }
-    return { T_ad: r.T_ad, products, T_mixed_inlet_K: r.T_mixed_inlet_K };
+    return {
+      T_ad: r.T_ad,
+      T_ad_complete: r.T_ad_complete,        // Cantera complete-combustion T_ad
+      products,
+      T_mixed_inlet_K: r.T_mixed_inlet_K,
+    };
   }
   // Free mode: the JS HP equilibrium solver
   const Tmix = mixT(inp.fuel, inp.ox, inp.phi, inp.T_fuel, inp.T_air);
   const r = calcAFT_EQ(inp.fuel, inp.ox, inp.phi, Tmix, inp.P);
-  return { T_ad: r.T_ad, products: r.products, T_mixed_inlet_K: Tmix };
+  // Free-mode T_ad_complete: use calcTflameComplete (closed-form) so the
+  // automation user can plot it even without Accurate mode.
+  const T_ad_complete = (typeof calcTflameComplete === "function")
+    ? calcTflameComplete(inp.fuel, inp.ox, inp.phi, inp.T_fuel, inp.T_air)
+    : null;
+  return { T_ad: r.T_ad, T_ad_complete, products: r.products, T_mixed_inlet_K: Tmix };
 }
 
 async function runExhaustForAutomation(inp, accurate){
@@ -5699,14 +5716,16 @@ async function runPSRForAutomation(inp, accurate){
     // AUTO_OUTPUTS pickers stay simple and free-mode aligned. Same pattern
     // the existing CombustorPanel uses (App.jsx ~1791 backendNet).
     return {
-      T_psr:        r.T_psr,
-      T_exit:       r.T_exit,
-      NO_ppm_psr:   r.NO_ppm_vd_psr,
-      NO_ppm_exit:  r.NO_ppm_vd_exit,
-      CO_ppm_psr:   r.CO_ppm_vd_psr,
-      CO_ppm_exit:  r.CO_ppm_vd_exit,
-      NO_ppm_15O2:  r.NO_ppm_15O2,
-      CO_ppm_15O2:  r.CO_ppm_15O2,
+      T_psr:           r.T_psr,
+      T_exit:          r.T_exit,
+      T_ad_equilibrium: r.T_ad_equilibrium,   // Cantera HP equilibrium reference
+      T_ad_complete:    r.T_ad_complete,      // Cantera complete-combustion reference
+      NO_ppm_psr:      r.NO_ppm_vd_psr,
+      NO_ppm_exit:     r.NO_ppm_vd_exit,
+      CO_ppm_psr:      r.CO_ppm_vd_psr,
+      CO_ppm_exit:     r.CO_ppm_vd_exit,
+      NO_ppm_15O2:     r.NO_ppm_15O2,
+      CO_ppm_15O2:     r.CO_ppm_15O2,
       O2_pct:       r.O2_pct_dry_exit,  // post-burnout dry O2
       conv_psr:     r.conv_psr,
       tau_pfr_ms:   r.tau_pfr_ms,
@@ -6071,8 +6090,9 @@ const _OUTPUT_PRIORITY = {
   "exit_NO_ppm": 120, "exit_CO_ppm": 121,
   "psr_NO_ppm": 130, "psr_CO_ppm": 131,
   // ── Tier 2: Flame / combustion temperatures ──
-  "T_ad": 200, "Tflame": 210,
+  "T_ad": 200, "T_ad_complete": 201, "Tflame": 210,
   "T_psr": 220, "T_exit": 221,
+  "T_ad_equilibrium": 222, "T_ad_complete_comb": 223,
   "T_AFT_IP": 230, "T_AFT_OP": 231, "T_AFT_IM": 232, "T_AFT_OM": 233,
   "T_Bulk": 240, "T4": 241,
   // ── Tier 3: Flame stability / blowoff (S_L, BOT, Da, etc.) ──
@@ -6095,6 +6115,9 @@ const _OUTPUT_PRIORITY = {
   "eta_LHV_pct": 510, "HR": 511,
   "T1": 520, "T2": 521, "T2c": 522, "T3": 523, "T5": 524,
   "W_turb_MW": 530, "W_comp_MW": 531,
+  "intercooler_duty": 540,
+  "combustor_air_frac": 550,
+  "rho_amb": 560,
   // ── Tier 6: Mapping correlations (PX36, ΔT) ──
   "PX36_SEL": 600, "PX36_SEL_HI": 601,
   "DT_Main": 610, "C3_eff_pct": 611,
@@ -6102,15 +6125,19 @@ const _OUTPUT_PRIORITY = {
   // ── Tier 7: Mass flows ──
   "mdot_air": 700, "mdot_fuel": 701, "mdot_bleed": 702, "mdot_water": 703,
   // ── Tier 8: φ / FAR ──
-  "phi4": 800, "FAR4": 801, "phi_Bulk": 802, "phi_OM": 803,
+  "phi4": 800, "FAR4": 801, "phi_Bulk": 802, "FAR_Bulk": 803, "phi_OM": 804,
   "exh_phi_from_O2": 810, "exh_phi_from_CO2": 811,
+  "exh_AFR_from_O2": 815, "exh_AFR_from_CO2": 816,
   // ── Tier 9: Pressures ──
   "P3": 900, "P_exhaust": 901,
   // ── Tier 10: Fuel properties ──
-  "LHV_mass": 1000, "LHV_vol": 1001, "MW_fuel": 1002, "SG": 1003,
-  "AFR_mass": 1004, "WI": 1005,
-  "MWI_BTUscf_R": 1010, "MWI_status": 1011, "MWI_derate_pct": 1012,
-  "FAR_stoich": 1020,
+  "LHV_mass": 1000, "LHV_vol": 1001, "HHV_mass": 1002, "HHV_vol": 1003,
+  "MW_fuel": 1004, "SG": 1005,
+  "AFR_mass": 1006, "AFR_vol": 1007, "stoichO2": 1008,
+  "WI": 1009, "MWI": 1010,
+  "LHV_fuel_cycle": 1015,
+  "MWI_BTUscf_R": 1020, "MWI_status": 1021, "MWI_derate_pct": 1022,
+  "FAR_stoich": 1030,
   // ── Tier 11: Mixed inlet temp & transport ──
   "T_mixed": 1100, "alpha_th": 1110,
   // ── Tier 12: Mole fractions (interesting species first) ──

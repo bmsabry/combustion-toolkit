@@ -465,6 +465,22 @@ export const AUTO_OUTPUTS = [
   { id: "phi4",         label: "φ4 (combustor exit)", panel: "cycle", unit: "—",     pick: r => r.cycle?.phi4 },
   { id: "FAR4",         label: "FAR4",              panel: "cycle", unit: "—",        pick: r => r.cycle?.FAR4 },
   { id: "phi_Bulk",     label: "φ_Bulk",            panel: "cycle", unit: "—",        pick: r => r.cycle?.phi_Bulk },
+  // FAR_Bulk = FAR4 / combustor_air_frac — flame-zone fuel-air ratio
+  { id: "FAR_Bulk",     label: "FAR_Bulk",          panel: "cycle", unit: "—",        pick: r => r.cycle?.FAR_Bulk },
+  // Combustor dilution — fraction of W3 entering the flame zone
+  { id: "combustor_air_frac", label: "Combustor air frac", panel: "cycle", unit: "—",  pick: r => r.cycle?.combustor_air_frac },
+  // Fuel LHV that the cycle calculation actually used (after composition
+  // normalization). Same units as AFT LHV but read from cycle response.
+  { id: "LHV_fuel_cycle", label: "LHV (fuel, cycle)", panel: "cycle",
+    unit_si: "MJ/kg", unit_en: "BTU/lb", siToEn: MJkg_to_BTUlb,
+    pick: r => r.cycle?.LHV_fuel_MJ_per_kg },
+  // Ambient density (drives mass flow capacity)
+  { id: "rho_amb",      label: "ρ ambient",          panel: "cycle",
+    unit_si: "kg/m³", unit_en: "lb/ft³",
+    siToEn: x => x * 0.062428,
+    pick: r => r.cycle?.rho_amb_kg_m3 },
+  // Intercooler heat duty (LMS100 only, 0 for LM6000)
+  { id: "intercooler_duty", label: "Intercooler duty", panel: "cycle", unit: "MW",     pick: r => r.cycle?.intercooler_duty_MW },
   { id: "W_turb_MW",    label: "W_turbine",         panel: "cycle", unit: "MW",       pick: r => r.cycle?.W_turbine_MW },
   { id: "W_comp_MW",    label: "W_compressor",      panel: "cycle", unit: "MW",       pick: r => r.cycle?.W_compressor_MW },
   { id: "bleed_air_frac", label: "Bleed air fraction", panel: "cycle", unit: "—",     pick: r => r.cycle?.bleed_air_frac },
@@ -516,6 +532,15 @@ export const AUTO_OUTPUTS = [
     unit_si: "MJ/m³", unit_en: "BTU/scf", siToEn: MJm3_to_BTUscf,
     pick: r => r.derived?.HHV_vol },
   { id: "AFR_mass",           label: "Stoich AFR (mass)", panel: "aft", unit: "—",    pick: r => r.derived?.AFR_mass },
+  // Cantera complete-combustion T_ad (no dissociation reference). In
+  // free mode this comes from the JS calcTflameComplete closed-form
+  // helper; in accurate mode from the backend's complete_combustion.run.
+  { id: "T_ad_complete",      label: "T_ad (complete combustion)", panel: "aft",
+    unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_ad_complete },
+  // Stoichiometric AFR on a volumetric (molar) basis.
+  { id: "AFR_vol",            label: "Stoich AFR (vol)",   panel: "aft", unit: "—",   pick: r => r.derived?.AFR_vol },
+  // Stoichiometric O₂ demand per mole of fuel (atom-balance derived).
+  { id: "stoichO2",           label: "Stoich O₂ demand",   panel: "aft", unit: "mol/mol fuel", pick: r => r.derived?.stoichO2 },
   { id: "X_CO2",              label: "X_CO₂ (wet)",  panel: "aft", unit: "%",         pick: r => r.aft?.products?.CO2 },
   { id: "X_H2O",              label: "X_H₂O (wet)",  panel: "aft", unit: "%",         pick: r => r.aft?.products?.H2O },
   { id: "X_O2",               label: "X_O₂ (wet)",   panel: "aft", unit: "%",         pick: r => r.aft?.products?.O2 },
@@ -530,6 +555,11 @@ export const AUTO_OUTPUTS = [
   { id: "exh_phi_from_CO2",   label: "φ from CO₂",        panel: "exhaust", unit: "—", pick: r => r.exh_co2?.phi },
   { id: "exh_T_ad_from_CO2",  label: "T_ad from CO₂",     panel: "exhaust", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.exh_co2?.T_ad },
   { id: "exh_FAR_from_CO2",   label: "FAR (mass) from CO₂", panel: "exhaust", unit: "—", pick: r => r.exh_co2?.FAR_mass },
+  // Air/Fuel inverses — analyst convenience (= 1 / FAR_mass).
+  { id: "exh_AFR_from_O2",    label: "AFR (mass) from O₂",  panel: "exhaust", unit: "—",
+    pick: r => { const f = r.exh_o2?.FAR_mass; return (f && f > 0) ? 1 / f : null; } },
+  { id: "exh_AFR_from_CO2",   label: "AFR (mass) from CO₂", panel: "exhaust", unit: "—",
+    pick: r => { const f = r.exh_co2?.FAR_mass; return (f && f > 0) ? 1 / f : null; } },
 
   // ── PSR-PFR Combustor ──
   // The runner normalizes both Free (calcCombustorNetwork) and Accurate
@@ -549,6 +579,13 @@ export const AUTO_OUTPUTS = [
   { id: "conv_psr_pct",       label: "PSR conversion", panel: "combustor", unit: "%", pick: r => r.psr?.conv_psr },
   { id: "tau_pfr_ms",         label: "τ_PFR",        panel: "combustor", unit: "ms",  pick: r => r.psr?.tau_pfr_ms },
   { id: "tau_total_ms",       label: "τ_total",      panel: "combustor", unit: "ms",  pick: r => r.psr?.tau_total_ms },
+  // Adiabatic flame temperatures — full Cantera HP equilibrium AND no-
+  // dissociation complete-combustion. Reference values shown alongside
+  // the kinetic T_psr / T_exit on the panel.
+  { id: "T_ad_equilibrium",   label: "T_ad (equilibrium, ref)", panel: "combustor",
+    unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.psr?.T_ad_equilibrium },
+  { id: "T_ad_complete_comb", label: "T_ad (complete, ref)",    panel: "combustor",
+    unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.psr?.T_ad_complete },
 
   // ── Flame Speed & Blowoff ──
   // S_L conventionally reported in cm/s globally — keep single unit.
