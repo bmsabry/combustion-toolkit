@@ -80,11 +80,29 @@ const fps_to_mps = v => v / 3.28084;
 
 export const AUTO_VARS = [
   // ── Operating point (sidebar; used by every combustion panel) ──
+  // φ, FAR, and T_flame are MUTUALLY DEPENDENT (group: "operating_point").
+  // Pick any ONE to vary in automation; the picker hides the other two
+  // because varying multiple would specify the same physical quantity twice
+  // and produce inconsistent rows.
   { id: "phi", label: "Equivalence Ratio (φ)",
     panels: ["aft", "combustor", "flame"], kind: "number",
     default: 0.555, range: [0.30, 1.50], step: 0.05, unit_si: "—", unit_en: "—",
-    linkage: "linkFAR",
-    desc: "Sidebar φ. Drives AFT, PSR-PFR, Flame Speed. If Cycle is selected and you vary φ, the φ_Bulk linkage is auto-broken." },
+    linkage: "linkFAR", group: "operating_point",
+    desc: "Sidebar φ. Drives AFT, PSR-PFR, Flame Speed. If Cycle is selected and you vary φ, the φ_Bulk linkage is auto-broken. Mutually exclusive with FAR and T_flame." },
+
+  { id: "FAR", label: "Fuel/Air Ratio (mass)",
+    panels: ["aft", "combustor", "flame"], kind: "number",
+    default: 0.0339, range: [0.005, 0.10], step: 0.002, unit_si: "—", unit_en: "—",
+    linkage: "linkFAR", group: "operating_point",
+    desc: "Mass-basis FAR. Runner converts to φ per row via φ = FAR / FAR_stoich (FAR_stoich depends on the fuel + ox composition). Mutually exclusive with φ and T_flame." },
+
+  { id: "T_flame", label: "T_flame (adiabatic, complete combustion)",
+    panels: ["aft", "combustor", "flame"], kind: "number",
+    default: 1900, range: [1500, 2400], step: 50,
+    unit_si: "K", unit_en: "°F",
+    siToEn: K_to_F, enToSi: F_to_K,
+    linkage: "linkFAR", group: "operating_point",
+    desc: "Target adiabatic flame temperature (complete combustion, no dissociation) at the 3-stream mixed inlet. Runner back-solves the lean φ that produces this T_flame given the current fuel, oxidizer, T_fuel, T_air. Mutually exclusive with φ and FAR." },
 
   { id: "T_air", label: "Air Inlet Temperature",
     panels: ["aft", "combustor", "flame"], kind: "number",

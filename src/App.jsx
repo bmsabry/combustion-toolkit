@@ -150,6 +150,56 @@ function calcFuelProps(fuel,ox){const hv=calcHeatingValues(fuel);const MW_air=mi
 function calcAFT(fuel,ox,phi,T0){const ft=Object.values(fuel).reduce((a,b)=>a+b,0);const ot=Object.values(ox).reduce((a,b)=>a+b,0);if(ft===0||ot===0)return{T_ad:T0,products:{}};const fN={},oN={};for(const k in fuel)fN[k]=fuel[k]/ft;for(const k in ox)oN[k]=ox[k]/ot;const sO2=stoichO2(fuel);const oxO2f=oN.O2||0.2095;const oxMols=sO2/(oxO2f*phi);const reactants={};for(const[sp,xi]of Object.entries(fN))reactants[sp]=(reactants[sp]||0)+xi;for(const[sp,xi]of Object.entries(oN))reactants[sp]=(reactants[sp]||0)+xi*oxMols;const products={};for(const sp of["N2","Ar"])products[sp]=reactants[sp]||0;products.H2O=reactants.H2O||0;products.CO2=reactants.CO2||0;let O2_used=0;for(const[sp,xi]of Object.entries(fN)){const d=SP[sp];if(!d||(d.C===0&&d.H===0&&sp!=="CO"))continue;products.CO2=(products.CO2||0)+xi*d.C;products.H2O=(products.H2O||0)+xi*d.H/2;O2_used+=xi*o2_per_mol(sp);}const O2_avail=oxMols*oxO2f;if(phi<=1){products.O2=O2_avail-O2_used;}else{const deficit=O2_used-O2_avail;const shift=Math.min(deficit,products.CO2||0);products.CO=shift;products.CO2=Math.max(0,(products.CO2||0)-shift);if(deficit>shift){const hS=(deficit-shift)*2;products.H2=hS;products.H2O=Math.max(0,(products.H2O||0)-hS);}products.O2=0;}let H_react=0;for(const[sp,n]of Object.entries(reactants)){if(!SP[sp])continue;H_react+=n*h_mol(sp,T0);}let T_ad=T0+1800;for(let i=0;i<200;i++){let H_prod=0;for(const[sp,n]of Object.entries(products)){if(!SP[sp]||n<=0)continue;H_prod+=n*h_mol(sp,T_ad);}let Cp=0;const Tm=(T0+T_ad)/2;for(const[sp,n]of Object.entries(products)){if(!SP[sp]||n<=0)continue;Cp+=n*cp_mol(sp,Tm);}if(Cp<1)break;const err=H_react-H_prod;const T_n=T_ad+err/Cp*0.6;if(Math.abs(T_n-T_ad)<0.2){T_ad=T_n;break;}T_ad=T_n;}T_ad=Math.max(T0,Math.min(T_ad,5500));const pT=Object.values(products).reduce((a,b)=>a+Math.max(0,b),0);const pPct={};for(const[sp,n]of Object.entries(products)){if(n>0.001)pPct[sp]=n/pT*100;}return{T_ad,products:pPct};}
 function sweepAFT(fuel,ox,T0,P,mode){const r=[];for(let phi=0.3;phi<=1.01;phi+=0.02){const a=calcAFTx(fuel,ox,phi,T0,P,mode);r.push({phi:+phi.toFixed(2),T_ad:a.T_ad});}return r;}
 
+// ─────────────────────────────────────────────────────────────────────────
+//  Complete-combustion adiabatic flame T using the 3-stream mixed inlet.
+//  This is the canonical T_flame definition in the OPERATING CONDITIONS
+//  card: complete combustion (no dissociation), at the inlet T that the
+//  fuel + air streams adiabatically mix to under the current phi.
+// ─────────────────────────────────────────────────────────────────────────
+function calcTflameComplete(fuel, ox, phi, T_fuel, T_air){
+  if (!Number.isFinite(phi) || phi <= 0) return NaN;
+  const Tmix = mixT(fuel, ox, phi, T_fuel, T_air);
+  const r = calcAFT(fuel, ox, phi, Tmix);
+  return r?.T_ad;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Inverse: given a target T_flame, bisect on phi over the LEAN range
+//  [0.05, 1.0] to find the phi that produces T_target under complete
+//  combustion. Returns the unique lean solution.
+//
+//  Why lean only: T_flame_complete(phi) is non-monotonic — it rises with
+//  phi up to a peak near phi ≈ 1, then falls on the rich side. A target
+//  within the achievable range typically has TWO solutions (one lean, one
+//  rich). For GT applications the operationally-meaningful one is the
+//  lean side. If T_target is above the peak (achievable maximum), this
+//  saturates at phi ≈ 1.
+// ─────────────────────────────────────────────────────────────────────────
+function solvePhiForTflame(fuel, ox, T_target, T_fuel, T_air){
+  if (!Number.isFinite(T_target) || T_target <= 0) return 1.0;
+  // Compute T_flame at phi=1 to know the peak; if target exceeds it,
+  // there is no lean solution — clamp.
+  const TmixPeak = mixT(fuel, ox, 1.0, T_fuel, T_air);
+  const peak = calcAFT(fuel, ox, 1.0, TmixPeak)?.T_ad ?? 0;
+  if (T_target >= peak) return 1.0;
+  // Compute T_flame at phi=0.05 — sets the lower bound. If the target is
+  // below this, clamp to the lean limit.
+  const TmixLow = mixT(fuel, ox, 0.05, T_fuel, T_air);
+  const low = calcAFT(fuel, ox, 0.05, TmixLow)?.T_ad ?? T_target;
+  if (T_target <= low) return 0.05;
+  // Bisection on lean side. T_flame(phi) is monotonic-increasing here.
+  let lo = 0.05, hi = 1.0;
+  for (let i = 0; i < 60; i++){
+    const mid = (lo + hi) / 2;
+    const Tmix = mixT(fuel, ox, mid, T_fuel, T_air);
+    const T = calcAFT(fuel, ox, mid, Tmix)?.T_ad ?? 0;
+    if (T < T_target) lo = mid;
+    else hi = mid;
+    if (hi - lo < 1e-5) break;
+  }
+  return (lo + hi) / 2;
+}
+
 /* ══════════ EQUILIBRIUM SOLVER — Newton-Raphson on 6 reaction extents ══════════
    Most accurate solution: solves 6 independent dissociation reactions simultaneously
    via Newton-Raphson with finite-difference Jacobian, backtracking line search, and
@@ -4789,6 +4839,25 @@ async function runAutomationMatrix({
       ox:   baseline.ox,
     };
 
+    // ── Operating-point mutex resolution ──
+    // φ, FAR, and T_flame are mutually dependent. The catalog's mutex
+    // group prevents the user from varying more than one, but we still
+    // need to back-solve the canonical phi for whichever the user did
+    // pick. After this block, inputs.phi is the truth and downstream
+    // panels read from it.
+    if (Object.prototype.hasOwnProperty.call(row, "FAR")){
+      const fp = calcFuelProps(inputs.fuel, inputs.ox);
+      const FAR_st = fp.AFR_mass > 0 ? (1 / fp.AFR_mass) : 0.06;
+      inputs.phi = (+row.FAR) / Math.max(FAR_st, 1e-9);
+    } else if (Object.prototype.hasOwnProperty.call(row, "T_flame")){
+      // Bisect for the lean phi that produces the target T_flame under
+      // complete combustion at the current 3-stream mixed inlet.
+      inputs.phi = solvePhiForTflame(
+        inputs.fuel, inputs.ox, +row.T_flame,
+        inputs.T_fuel, inputs.T_air,
+      );
+    }
+
     let rowState = {};
     let rowError = null;
 
@@ -5414,10 +5483,39 @@ function AutomatePanel(props){
       ? prev.filter(p => p !== pid)
       : [...prev, pid]);
   };
+  // Toast for transient user-facing notes (e.g. mutex group hits). Auto-clears
+  // after 5 s. Only one toast at a time.
+  const [toast, setToast] = useState(null);
+  const toastTimerRef = useRef(null);
+  const showToast = (msg) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(msg);
+    toastTimerRef.current = setTimeout(() => setToast(null), 5000);
+  };
+  useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
+
   const toggleVar = (vid) => {
-    setSelectedVarIds(prev => prev.includes(vid)
-      ? prev.filter(v => v !== vid)
-      : [...prev, vid]);
+    setSelectedVarIds(prev => {
+      if (prev.includes(vid)) return prev.filter(v => v !== vid);
+      // ── Mutex groups: variables tagged with the same `group` are
+      // physically redundant. Adding one removes any others in the same
+      // group and surfaces a 5-second note explaining why.
+      const def = AUTO_VARS.find(v => v.id === vid);
+      if (def?.group){
+        const conflicting = prev.filter(otherId => {
+          const otherDef = AUTO_VARS.find(v => v.id === otherId);
+          return otherDef?.group === def.group;
+        });
+        if (conflicting.length > 0){
+          const conflictLabels = conflicting
+            .map(id => AUTO_VARS.find(v => v.id === id)?.label)
+            .filter(Boolean).join(", ");
+          showToast(`Removed ${conflictLabels} — only one of these variables can be varied at a time because they are mutually dependent (set one, the others are determined).`);
+          return [...prev.filter(id => !conflicting.includes(id)), vid];
+        }
+      }
+      return [...prev, vid];
+    });
   };
   const updateVarSpec = (vid, patch) => {
     setVarSpecs(prev => ({...prev, [vid]: {...(prev[vid]||{}), ...patch}}));
@@ -5499,6 +5597,15 @@ function AutomatePanel(props){
       <p style={{margin:"0 0 6px"}}>Pick <strong>Combustor Mapping</strong> and Cycle is auto-included (Mapping needs T3, P3, mdot_air from the cycle deck). Vary a sidebar variable that's normally Cycle-linked (T_air, P, φ) and the corresponding linkage is <strong>auto-broken</strong> for this run so your swept values actually take effect — restored after.</p>
       <p style={{margin:0}}><span style={hs.warn}>Cycle and Combustor Mapping require Accurate Mode</span> (Cantera backend). The other panels run in either mode.</p>
     </HelpBox>
+    {/* Transient toast — surfaces mutex / validation notes for ~5 s. */}
+    {toast && (
+      <div style={{padding:"8px 14px", background:`${C.accent2}18`, border:`1.5px solid ${C.accent2}`,
+        borderRadius:6, fontSize:11.5, color:C.txt, fontFamily:"'Barlow',sans-serif",
+        lineHeight:1.5, display:"flex", alignItems:"center", gap:10}}>
+        <span style={{color:C.accent2, fontSize:14}}>ⓘ</span>
+        <span>{toast}</span>
+      </div>
+    )}
 
     {/* ────────── STEP 1 — PANELS ────────── */}
     <Step n={1} title="Pick the panels to automate" done={selectedPanels.length > 0}>
@@ -6638,6 +6745,49 @@ export default function App(){
                 <input type="range" min={0.3*FAR_stoich} max={FAR_stoich} step={FAR_stoich/1000} value={FAR} onChange={e=>setFAR(+e.target.value)} style={{width:"100%",accentColor:C.accent2}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>Stoichiometric FAR = {FAR_stoich.toFixed(5)} (kg fuel / kg air)</div>
               </div>
+              {/* ── Tflame (adiabatic, complete combustion) — third equivalent
+                   way to express the operating point. φ, FAR, and T_flame are
+                   all interdependent: setting any one determines the other
+                   two given the fuel + ox composition and inlet temps. We
+                   compute T_flame from the current phi and let the user
+                   override it (back-solver finds the lean phi that hits the
+                   target). The displayed value is "live" — recomputes on
+                   every render, so changes to fuel / ox / T_fuel / T_air
+                   are reflected immediately. ── */}
+              {(() => {
+                const tflame_K = calcTflameComplete(fuel, ox, phi, T_fuel, T0);
+                const tflame_disp = Number.isFinite(tflame_K)
+                  ? +uv(units, "T", tflame_K).toFixed(2) : NaN;
+                const onTflameCommit = (v) => {
+                  const T_target_K = uvI(units, "T", +v);
+                  if (!Number.isFinite(T_target_K) || T_target_K <= 0) return;
+                  const phi_solved = solvePhiForTflame(fuel, ox, T_target_K, T_fuel, T0);
+                  setPhiClamped(phi_solved);
+                };
+                return (
+                  <div style={{marginBottom:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                      <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}
+                        title="Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Setting this back-solves φ — pick the φ that produces this T_flame given the current fuel, oxidizer, T_fuel, and T_air. Lean solution only.">
+                        T_flame ({uu(units,"T")}) — complete combustion
+                      </label>
+                      <NumField value={tflame_disp} decimals={1} onCommit={onTflameCommit}
+                        title="Type a target T_flame; the lean φ that produces it (under complete combustion at the current inlet conditions) is back-solved automatically."
+                        style={{width:82,padding:"3px 6px",fontFamily:"monospace",color:C.warm,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.warm}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+                    </div>
+                    <input type="range"
+                      min={units==="SI" ? 1500 : Math.round((1500-273.15)*9/5+32)}
+                      max={units==="SI" ? 2400 : Math.round((2400-273.15)*9/5+32)}
+                      step={units==="SI" ? 5 : 10}
+                      value={Number.isFinite(tflame_disp) ? tflame_disp : 1900}
+                      onChange={e => onTflameCommit(+e.target.value)}
+                      style={{width:"100%",accentColor:C.warm}}/>
+                    <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>
+                      Mutually dependent with φ and FAR — changing one updates the others.
+                    </div>
+                  </div>
+                );
+              })()}
               <div style={{marginBottom:10}}>
                 <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, Cantera mixes this with T_fuel adiabatically (mass-weighted enthalpy balance with T-dependent NASA polynomials) to get the actual PSR inlet T.">Air Temperature ({uu(units,"T")})</label>
                 <NumField value={uv(units,"T",T0)} decimals={2} onCommit={v=>setT0(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.accent3}55`}}/>
