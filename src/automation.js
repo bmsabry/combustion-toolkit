@@ -543,6 +543,46 @@ export function outputsForPanels(panels){
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+//  Matrix size cap. The full factorial of 4 variables with default step
+//  sizes can explode to 2 M+ rows (e.g. T_air × H2 × τ_PSR × L_PFR =
+//  66 × 21 × 40 × 40 ≈ 2.2 M). Even Free-mode JS would freeze the tab for
+//  minutes; Accurate mode would take days. Cap at 10 000 rows — beyond
+//  that the user must narrow ranges or remove variables.
+// ─────────────────────────────────────────────────────────────────────────
+export const MAX_MATRIX_SIZE = 10000;
+
+// Cheaply compute the cross-product row count WITHOUT enumerating any
+// values. Used by the UI to display the count + gate matrix generation
+// before it blocks the main thread.
+export function countMatrixSize(varSpecs){
+  if (!varSpecs || varSpecs.length === 0) return 0;
+  let total = 1;
+  for (const s of varSpecs){
+    const n = countValues(s);
+    if (n === 0) return 0;
+    total *= n;
+    // Bail early if we're already orders of magnitude past the cap — keeps
+    // total from overflowing Number.MAX_SAFE_INTEGER on insane configs.
+    if (total > MAX_MATRIX_SIZE * 1000) return total;
+  }
+  return total;
+}
+
+function countValues(spec){
+  if (spec.kind === "enum" || spec.kind === "bool"){
+    return Array.isArray(spec.list) ? spec.list.length : 0;
+  }
+  if (spec.mode === "list" && Array.isArray(spec.list)){
+    return spec.list.length;
+  }
+  const min = +spec.min, max = +spec.max, step = +spec.step;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(step) || step <= 0) return 0;
+  if (max < min) return 1;
+  // Same +1 endpoint inclusion logic as enumerateValues so counts agree.
+  return Math.floor((max - min) / step + 1e-9) + 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 //  generateMatrix(varSpecs)
 //  Full-factorial cross-product over per-variable value lists.
 //
@@ -554,8 +594,16 @@ export function outputsForPanels(panels){
 //  Returns: [{varId: value, ...}, ...] one entry per variable per row.
 //  For fuel_species vars, also captures balanceSpecies onto each row so the
 //  runner knows how to renormalise.
+//
+//  HARD GUARD: returns [] if the cross product would exceed
+//  MAX_MATRIX_SIZE. Caller must check countMatrixSize() first and surface
+//  an error to the user before the matrix-too-large state propagates.
 // ─────────────────────────────────────────────────────────────────────────
 export function generateMatrix(varSpecs){
+  // Refuse to enumerate anything past the cap. This is the single line
+  // that prevents the 2.2-M-row tab freeze.
+  if (countMatrixSize(varSpecs) > MAX_MATRIX_SIZE) return [];
+
   const valuesPerVar = varSpecs.map(s => ({
     spec: s,
     values: enumerateValues(s),

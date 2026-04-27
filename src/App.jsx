@@ -3,7 +3,8 @@ import * as XLSX from "xlsx";
 import {
   AUTOMATABLE_PANELS, AUTO_VARS, AUTO_OUTPUTS,
   varsForPanels, outputsForPanels,
-  generateMatrix, expandPanelDeps, rebalanceFuel, formatRowValue,
+  generateMatrix, countMatrixSize, MAX_MATRIX_SIZE,
+  expandPanelDeps, rebalanceFuel, formatRowValue,
   unitFor, toDisplay, toSi, toDisplayDelta, toSiDelta,
   outputUnitFor, outputDisplayValue,
 } from "./automation";
@@ -5250,20 +5251,30 @@ function AutomatePanel(props){
     });
   }, [selectedVarIds, varSpecs]);
 
-  // Build the matrix preview
-  const matrix = useMemo(
-    () => activeVarSpecs.length ? generateMatrix(activeVarSpecs) : [],
+  // Compute the matrix size FIRST (cheap — just multiplies per-var counts).
+  // The actual matrix is only enumerated if the size is reasonable. Without
+  // this guard, picking 4 variables with default ranges generates millions
+  // of rows synchronously and freezes the tab.
+  const matrixSize = useMemo(
+    () => countMatrixSize(activeVarSpecs),
     [activeVarSpecs],
   );
+  const matrixOversized = matrixSize > MAX_MATRIX_SIZE;
+  const matrix = useMemo(
+    () => (activeVarSpecs.length && !matrixOversized) ? generateMatrix(activeVarSpecs) : [],
+    [activeVarSpecs, matrixOversized],
+  );
 
-  // Estimated runtime (sum of typical-cost per panel, times matrix size)
+  // Estimated runtime (sum of typical-cost per panel, times matrix size).
+  // Uses matrixSize (not matrix.length) so the estimate stays accurate even
+  // when the matrix is oversized and not enumerated.
   const estimatedSec = useMemo(() => {
     const perRow = effectivePanels.reduce((sum, pid) => {
       const def = AUTOMATABLE_PANELS.find(p => p.id === pid);
       return sum + (def?.typicalCost || 1);
     }, 0);
-    return Math.round(matrix.length * perRow * (accurate ? 1 : 0.05));
-  }, [effectivePanels, matrix.length, accurate]);
+    return Math.round(matrixSize * perRow * (accurate ? 1 : 0.05));
+  }, [effectivePanels, matrixSize, accurate]);
 
   // Any auto-broken linkages?
   const brokenLinkages = useMemo(() => {
@@ -5295,6 +5306,10 @@ function AutomatePanel(props){
 
   const startRun = async () => {
     if (matrix.length === 0) return;
+    if (matrixOversized){
+      setErrMsg(`Matrix size (${matrixSize.toLocaleString()}) exceeds the ${MAX_MATRIX_SIZE.toLocaleString()} cap. Narrow your ranges before running.`);
+      return;
+    }
     if (cycleRequiresAccurate){
       setErrMsg("Cycle (and Combustor Mapping) require Accurate Mode. Turn it on in the header.");
       return;
@@ -5547,8 +5562,32 @@ function AutomatePanel(props){
     </Step>
 
     {/* ────────── STEP 4 — PREVIEW ────────── */}
-    <Step n={4} title={`Review matrix (${matrix.length} runs · est. ${formatRuntime(estimatedSec)})`}
-      done={results !== null} locked={matrix.length === 0}>
+    <Step n={4}
+      title={`Review matrix (${matrixSize.toLocaleString()} runs · est. ${formatRuntime(estimatedSec)})`}
+      done={results !== null}
+      locked={matrixSize === 0}>
+      {/* Hard-stop banner when the cross product would explode. Shown
+          BEFORE matrix enumeration so the tab doesn't freeze. */}
+      {matrixOversized && (
+        <div style={{padding:"10px 14px", background:`${C.strong}18`,
+          border:`2px solid ${C.strong}`, borderRadius:6, fontSize:12,
+          color:C.txt, marginBottom:10, fontFamily:"'Barlow',sans-serif", lineHeight:1.55}}>
+          <div style={{fontSize:13, fontWeight:700, color:C.strong,
+            fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px",
+            marginBottom:4, textTransform:"uppercase"}}>
+            ⚠ MATRIX TOO LARGE — {matrixSize.toLocaleString()} ROWS
+          </div>
+          The full factorial of your variables would produce <strong>{matrixSize.toLocaleString()}</strong> runs.
+          The cap is <strong>{MAX_MATRIX_SIZE.toLocaleString()}</strong>. Even at a few seconds per row this would take days
+          and consume gigabytes of memory. Narrow the ranges (increase the
+          step size) or remove a variable, then come back to this step.
+          <div style={{marginTop:6, fontSize:11, color:C.txtMuted, fontFamily:"monospace"}}>
+            Tip: each variable contributes a multiplier. T_air at 250–900 K step 10
+            = 66 points; H₂ at 0–100 % step 5 = 21; tau_PSR at 0.5–20 ms step 0.5
+            = 40. The cross product is the product of these.
+          </div>
+        </div>
+      )}
       {brokenLinkages.length > 0 && (
         <div style={{padding:"6px 10px", background:`${C.accent2}12`, border:`1px solid ${C.accent2}50`,
           borderRadius:4, fontSize:11, color:C.txtDim, marginBottom:8, fontFamily:"'Barlow',sans-serif"}}>
@@ -5570,19 +5609,23 @@ function AutomatePanel(props){
         </div>
       )}
       <div style={{display:"flex", gap:14, marginBottom:8, flexWrap:"wrap", fontSize:11, fontFamily:"'Barlow',sans-serif"}}>
-        <Stat label="Runs"            value={matrix.length}/>
+        <Stat label="Runs"            value={matrixSize.toLocaleString()}
+          color={matrixOversized ? C.strong : C.txt}/>
         <Stat label="Inputs / row"    value={selectedVarIds.length}/>
         <Stat label="Outputs / row"   value={effectiveOutputs.length}/>
         <Stat label="Mode"            value={accurate ? "Accurate" : "Simple"}
           color={accurate ? C.accent : C.txtDim}/>
-        <Stat label="Est. runtime"    value={formatRuntime(estimatedSec)}/>
+        <Stat label="Est. runtime"    value={formatRuntime(estimatedSec)}
+          color={matrixOversized ? C.strong : C.txt}/>
       </div>
       {/* Preview table — first 8 rows. Values shown in current units.
           Columns auto-size to their content (no forced 100% width) so the
           table hugs the data instead of stretching to fill the viewport.
           Wrapper is inline-block to shrink to the table's natural width;
           horizontal scroll appears only if user picks more columns than
-          fit on screen. */}
+          fit on screen. Suppressed entirely when the matrix is oversized
+          (no rows enumerated → nothing to preview). */}
+      {!matrixOversized && (
       <div style={{maxHeight:180, overflow:"auto", border:`1px solid ${C.border}`, borderRadius:4,
         fontFamily:"monospace", fontSize:10, background:C.bg, display:"inline-block",
         maxWidth:"100%"}}>
@@ -5612,14 +5655,15 @@ function AutomatePanel(props){
           </tbody>
         </table>
       </div>
+      )}
     </Step>
 
     {/* ────────── STEP 5 — RUN ────────── */}
     <Step n={5} title="Run the matrix" done={results !== null}
-      locked={matrix.length === 0 || cycleRequiresAccurate}>
+      locked={matrix.length === 0 || cycleRequiresAccurate || matrixOversized}>
       {!running && !results && (
         <button onClick={startRun}
-          disabled={matrix.length === 0 || cycleRequiresAccurate}
+          disabled={matrix.length === 0 || cycleRequiresAccurate || matrixOversized}
           style={{padding:"10px 24px", fontSize:13, fontWeight:700,
             color:C.bg, background:C.good, border:"none", borderRadius:6,
             cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif",
