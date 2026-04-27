@@ -5540,10 +5540,16 @@ function AutomatePanel(props){
           color={accurate ? C.accent : C.txtDim}/>
         <Stat label="Est. runtime"    value={formatRuntime(estimatedSec)}/>
       </div>
-      {/* Tiny preview table — first 8 rows. Values shown in current units. */}
+      {/* Preview table — first 8 rows. Values shown in current units.
+          Columns auto-size to their content (no forced 100% width) so the
+          table hugs the data instead of stretching to fill the viewport.
+          Wrapper is inline-block to shrink to the table's natural width;
+          horizontal scroll appears only if user picks more columns than
+          fit on screen. */}
       <div style={{maxHeight:180, overflow:"auto", border:`1px solid ${C.border}`, borderRadius:4,
-        fontFamily:"monospace", fontSize:10, background:C.bg}}>
-        <table style={{width:"100%", borderCollapse:"collapse"}}>
+        fontFamily:"monospace", fontSize:10, background:C.bg, display:"inline-block",
+        maxWidth:"100%"}}>
+        <table style={{borderCollapse:"collapse", width:"auto"}}>
           <thead>
             <tr>
               <th style={previewHeaderStyle}>#</th>
@@ -5555,8 +5561,8 @@ function AutomatePanel(props){
           <tbody>
             {matrix.slice(0, 8).map((r, i) => (
               <tr key={i} style={{borderTop:`1px solid ${C.border}40`}}>
-                <td style={previewCellStyle}>{i+1}</td>
-                {activeVarSpecs.map(s => <td key={s.id} style={previewCellStyle}>
+                <td style={{...previewCellStyle, textAlign:"right"}}>{i+1}</td>
+                {activeVarSpecs.map(s => <td key={s.id} style={{...previewCellStyle, textAlign:"right"}}>
                   {formatRowValue(toDisplay(s, r[s.id], units))}
                 </td>)}
               </tr>
