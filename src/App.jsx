@@ -1,5 +1,10 @@
 import { Fragment, useState, useMemo, useCallback, useEffect, useRef, createContext, useContext } from "react";
 import * as XLSX from "xlsx";
+import {
+  AUTOMATABLE_PANELS, AUTO_VARS, AUTO_OUTPUTS,
+  varsForPanels, outputsForPanels,
+  generateMatrix, expandPanelDeps, rebalanceFuel, formatRowValue,
+} from "./automation";
 import { useAuth, AuthModal } from "./auth.jsx";
 import { AccountPanel } from "./AccountPanel.jsx";
 import * as api from "./api.js";
@@ -4687,6 +4692,953 @@ function OperationsSummaryPanel({
   </div>);
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   AUTOMATION RUNNER
+   ──────────────────────────────────────────────────────────────────────────
+   Per-row execution of the user-defined DoE matrix. Pure async function;
+   the panel UI calls it with a config bundle and gets back per-row results.
+
+   For each matrix row:
+     1. Apply variable overrides on top of the baseline App state.
+     2. Rebalance fuel composition if any fuel.* vars are varied.
+     3. Run the selected panels in dependency order (Cycle first, then
+        Mapping, then everything else). Cycle's outputs feed downstream
+        panels' T3/P3/W3 (this is the "auto-break linkage" behavior — the
+        runner replaces sidebar T_air/P with Cycle outputs unless the user
+        is varying them, in which case the user's swept values win).
+     4. Collect the requested outputs into a flat row dict.
+
+   Errors are caught per-row, never abort the whole matrix. Failed rows go
+   into the Excel sheet with an `__error__` column populated.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+async function runAutomationMatrix({
+  rows, selectedPanels, selectedOutputs, baseline, varSpecs,
+  accurate, onProgress, abortRef,
+}){
+  // Build a quick id→spec map for the variable list (used to look up linkage,
+  // unit conversions, etc.).
+  const specMap = {};
+  for (const s of varSpecs) specMap[s.id] = s;
+
+  // Determine which sidebar variables are being USER-VARIED. When Cycle is
+  // selected, the runner normally consumes Cycle's T3/P3/φ_Bulk for the
+  // downstream sidebar values — but if the user is sweeping (say) T_air,
+  // we honour the user's swept value instead and skip Cycle's T3 override.
+  // This is the "auto-break linkage" behaviour.
+  const userVarying = new Set(varSpecs.map(s => s.id));
+  const breaksLinkT3  = userVarying.has("T_air");
+  const breaksLinkP3  = userVarying.has("P");
+  const breaksLinkFAR = userVarying.has("phi");
+
+  const results = [];
+  const t0 = Date.now();
+  for (let i = 0; i < rows.length; i++){
+    if (abortRef?.current?.aborted) break;
+
+    const row = rows[i];
+
+    // ── Compose the per-row inputs from baseline + overrides ──
+    const inputs = {
+      // sidebar
+      phi:      override(row, "phi",      baseline.phi),
+      T_air:    override(row, "T_air",    baseline.T_air),
+      T_fuel:   override(row, "T_fuel",   baseline.T_fuel),
+      P:        override(row, "P",        baseline.P),
+      WFR:      override(row, "WFR",      baseline.WFR),
+      water_mode: override(row, "water_mode", baseline.water_mode),
+      // cycle
+      engine:   override(row, "engine",   baseline.engine),
+      P_amb:    override(row, "P_amb",    baseline.P_amb),
+      T_amb:    override(row, "T_amb",    baseline.T_amb),
+      RH:       override(row, "RH",       baseline.RH),
+      load_pct: override(row, "load_pct", baseline.load_pct),
+      T_cool:   override(row, "T_cool",   baseline.T_cool),
+      com_air_frac: override(row, "com_air_frac", baseline.com_air_frac),
+      bleed_open_pct: override(row, "bleed_open_pct", baseline.bleed_open_pct),
+      emissionsMode:  override(row, "emissionsMode",  baseline.emissionsMode),
+      // mapping
+      mapW36w3:  override(row, "mapW36w3",  baseline.mapW36w3),
+      mapPhiIP:  override(row, "mapPhiIP",  baseline.mapPhiIP),
+      mapPhiOP:  override(row, "mapPhiOP",  baseline.mapPhiOP),
+      mapPhiIM:  override(row, "mapPhiIM",  baseline.mapPhiIM),
+      mapFracIP: override(row, "mapFracIP", baseline.mapFracIP),
+      mapFracOP: override(row, "mapFracOP", baseline.mapFracOP),
+      // psr-pfr
+      tau_psr: override(row, "tau_psr", baseline.tau_psr),
+      L_pfr:   override(row, "L_pfr",   baseline.L_pfr),
+      V_pfr:   override(row, "V_pfr",   baseline.V_pfr),
+      heatLossFrac: override(row, "heatLossFrac", baseline.heatLossFrac),
+      // flame speed
+      velocity: override(row, "velocity", baseline.velocity),
+      Lchar:    override(row, "Lchar",    baseline.Lchar),
+      Dfh:      override(row, "Dfh",      baseline.Dfh),
+      Lpremix:  override(row, "Lpremix",  baseline.Lpremix),
+      Vpremix:  override(row, "Vpremix",  baseline.Vpremix),
+      // exhaust
+      measO2:  override(row, "measO2",  baseline.measO2),
+      measCO2: override(row, "measCO2", baseline.measCO2),
+      // composition
+      fuel: rebalanceFuel(baseline.fuel, row, row.__fuelBalance),
+      ox:   baseline.ox,
+    };
+
+    let rowState = {};
+    let rowError = null;
+
+    try {
+      // ── Run Cycle (always, if it's in the panel set; auto-included
+      //   when Mapping is selected). ──
+      if (selectedPanels.includes("cycle")){
+        rowState.cycle = await runCycleForAutomation(inputs, accurate);
+        // Override sidebar T_air, P from Cycle outputs UNLESS the user is
+        // varying those — that's the "auto-break linkage" behaviour.
+        if (rowState.cycle){
+          if (!breaksLinkT3 && Number.isFinite(rowState.cycle.T3_K)){
+            inputs.T_air = rowState.cycle.T3_K;
+          }
+          if (!breaksLinkP3 && Number.isFinite(rowState.cycle.P3_bar)){
+            inputs.P = rowState.cycle.P3_bar / 1.01325;  // bar → atm
+          }
+          if (!breaksLinkFAR && Number.isFinite(rowState.cycle.phi_Bulk)){
+            inputs.phi = rowState.cycle.phi_Bulk;
+          }
+        }
+      }
+
+      // ── Combustor Mapping (needs Cycle outputs) ──
+      if (selectedPanels.includes("mapping")){
+        rowState.map = await runMappingForAutomation(inputs, rowState.cycle, accurate);
+      }
+
+      // ── AFT (Flame Temp) ──
+      if (selectedPanels.includes("aft")){
+        rowState.aft = await runAFTForAutomation(inputs, accurate);
+      }
+
+      // ── Exhaust ──
+      if (selectedPanels.includes("exhaust")){
+        const both = await runExhaustForAutomation(inputs, accurate);
+        rowState.exh_o2  = both.o2;
+        rowState.exh_co2 = both.co2;
+      }
+
+      // ── PSR-PFR Combustor ──
+      if (selectedPanels.includes("combustor")){
+        rowState.psr = await runPSRForAutomation(inputs, accurate);
+      }
+
+      // ── Flame Speed & Blowoff ──
+      if (selectedPanels.includes("flame")){
+        rowState.flame = await runFlameForAutomation(inputs, accurate);
+      }
+
+      // Always compute fuel-property "derived" bundle for AFT outputs.
+      rowState.derived = calcFuelProps(inputs.fuel, inputs.ox);
+    } catch (e){
+      rowError = e?.message || String(e);
+      console.warn(`[automation] row ${i+1} failed:`, e);
+    }
+
+    // ── Pick the requested outputs into a flat row ──
+    const outRow = { __row__: i + 1 };
+    // Add all input columns up front
+    for (const s of varSpecs){
+      const v = row[s.id];
+      outRow[`in.${s.id}`] = v;
+    }
+    // Then the output columns
+    for (const out of selectedOutputs){
+      outRow[`out.${out.id}`] = rowError ? null : out.pick(rowState);
+    }
+    if (rowError) outRow.__error__ = rowError;
+    results.push(outRow);
+
+    // Progress callback
+    const elapsed = (Date.now() - t0) / 1000;
+    const eta = i+1 < rows.length ? elapsed * (rows.length / (i+1) - 1) : 0;
+    onProgress && onProgress({
+      done: i + 1, total: rows.length,
+      elapsed, eta, lastRow: outRow,
+    });
+  }
+  return results;
+}
+
+function override(row, key, fallback){
+  return Object.prototype.hasOwnProperty.call(row, key) ? row[key] : fallback;
+}
+
+// ── Per-panel calculation wrappers — pick Free-mode JS or Accurate Cantera
+//   based on the `accurate` flag. Each returns a result object whose shape
+//   matches what the AUTO_OUTPUTS pickers expect. ──
+
+async function runCycleForAutomation(inp, accurate){
+  if (!accurate) {
+    // Free mode: cycle is Cantera-only. Return a stub so downstream picks
+    // still work; the user is told in the UI that Cycle requires Accurate.
+    return null;
+  }
+  return await bkCachedFetch("cycle", {
+    engine: inp.engine,
+    P_amb_bar: inp.P_amb,
+    T_amb_K:   inp.T_amb,
+    RH_pct:    inp.RH,
+    load_pct:  inp.load_pct,
+    T_cool_in_K: inp.T_cool,
+    fuel_pct:  nonzero(inp.fuel),
+    T_fuel_K:  inp.T_fuel,
+    combustor_air_frac: inp.com_air_frac,
+    WFR:       inp.WFR,
+    water_mode: inp.water_mode,
+    T_water_K: 288.15,
+    bleed_air_frac: 0,  // server resolves bleed from valve schedule
+  });
+}
+
+async function runMappingForAutomation(inp, cycleResult, accurate){
+  if (!accurate || !cycleResult) return null;
+  return await bkCachedFetch("combustor_mapping", {
+    fuel: nonzero(inp.fuel),
+    oxidizer: nonzero(cycleResult.oxidizer_humid_mol_pct || inp.ox),
+    T3_K:    cycleResult.T3_K,
+    P3_bar:  cycleResult.P3_bar,
+    T_fuel_K: inp.T_fuel,
+    W3_kg_s: cycleResult.mdot_air_post_bleed_kg_s || cycleResult.mdot_air_kg_s,
+    W36_over_W3: inp.mapW36w3,
+    com_air_frac: cycleResult.combustor_air_frac || inp.com_air_frac,
+    frac_IP_pct: inp.mapFracIP,
+    frac_OP_pct: inp.mapFracOP,
+    frac_IM_pct: 39.9,
+    frac_OM_pct: 100 - inp.mapFracIP - inp.mapFracOP - 39.9,
+    phi_IP: inp.mapPhiIP,
+    phi_OP: inp.mapPhiOP,
+    phi_IM: inp.mapPhiIM,
+    m_fuel_total_kg_s: cycleResult.mdot_fuel_kg_s,
+    WFR: inp.WFR,
+    water_mode: inp.water_mode,
+    nox_mult: 1.0, co_mult: 1.0, px36_mult: 1.0,
+  });
+}
+
+async function runAFTForAutomation(inp, accurate){
+  if (accurate){
+    const r = await bkCachedFetch("aft", {
+      fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+      phi: inp.phi, T0: inp.T_air, P: atmToBar(inp.P),
+      mode: "adiabatic", heat_loss_fraction: 0,
+      T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+      WFR: inp.WFR, water_mode: inp.water_mode,
+    });
+    // Adapt to the same shape calcAFT_EQ returns (products in mol %).
+    const products = {};
+    for (const [sp, x] of Object.entries(r.mole_fractions || {})){
+      if (x > 1e-5) products[sp] = x * 100;
+    }
+    return { T_ad: r.T_ad, products, T_mixed_inlet_K: r.T_mixed_inlet_K };
+  }
+  // Free mode: the JS HP equilibrium solver
+  const Tmix = mixT(inp.fuel, inp.ox, inp.phi, inp.T_fuel, inp.T_air);
+  const r = calcAFT_EQ(inp.fuel, inp.ox, inp.phi, Tmix, inp.P);
+  return { T_ad: r.T_ad, products: r.products, T_mixed_inlet_K: Tmix };
+}
+
+async function runExhaustForAutomation(inp, accurate){
+  if (accurate){
+    const r1 = await bkCachedFetch("exhaust", {
+      fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+      T0: inp.T_air, P: atmToBar(inp.P),
+      measured_O2_pct_dry: inp.measO2,
+      combustion_mode: "equilibrium",
+      T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+      WFR: inp.WFR, water_mode: inp.water_mode,
+    });
+    const r2 = await bkCachedFetch("exhaust", {
+      fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+      T0: inp.T_air, P: atmToBar(inp.P),
+      measured_CO2_pct_dry: inp.measCO2,
+      combustion_mode: "equilibrium",
+      T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+      WFR: inp.WFR, water_mode: inp.water_mode,
+    });
+    return {
+      o2:  { phi: r1.phi, T_ad: r1.T_ad, FAR_mass: r1.FAR },
+      co2: { phi: r2.phi, T_ad: r2.T_ad, FAR_mass: r2.FAR },
+    };
+  }
+  // Free mode: 2-pass JS inversion
+  const Tmix0 = mixT(inp.fuel, inp.ox, 0.6, inp.T_fuel, inp.T_air);
+  const o2_p0 = calcExhaustFromO2(inp.fuel, inp.ox, inp.measO2, Tmix0, inp.P, "equilibrium");
+  const Tmix1 = mixT(inp.fuel, inp.ox, o2_p0.phi, inp.T_fuel, inp.T_air);
+  const o2 = calcExhaustFromO2(inp.fuel, inp.ox, inp.measO2, Tmix1, inp.P, "equilibrium");
+  const c0 = calcExhaustFromCO2(inp.fuel, inp.ox, inp.measCO2, Tmix0, inp.P, "equilibrium");
+  const Tmix2 = mixT(inp.fuel, inp.ox, c0.phi, inp.T_fuel, inp.T_air);
+  const co2 = calcExhaustFromCO2(inp.fuel, inp.ox, inp.measCO2, Tmix2, inp.P, "equilibrium");
+  return { o2, co2 };
+}
+
+async function runPSRForAutomation(inp, accurate){
+  if (accurate){
+    return await bkCachedFetch("combustor", {
+      fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+      phi: inp.phi, T0: inp.T_air, P: atmToBar(inp.P),
+      tau_psr_s: inp.tau_psr / 1000,
+      L_pfr_m: inp.L_pfr, V_pfr_m_s: inp.V_pfr,
+      profile_points: 30,
+      T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+      psr_seed: "cold_ignited", eq_constraint: "HP",
+      integration: "chunked",
+      heat_loss_fraction: inp.heatLossFrac,
+      mechanism: "gri30",
+      WFR: inp.WFR, water_mode: inp.water_mode,
+    });
+  }
+  // Free mode: the JS reduced-order PSR-PFR
+  return calcCombustorNetwork(
+    inp.fuel, inp.ox, inp.phi, inp.T_air, inp.P,
+    inp.tau_psr, inp.L_pfr, inp.V_pfr, inp.T_fuel, inp.T_air,
+  );
+}
+
+async function runFlameForAutomation(inp, accurate){
+  const Tmix = mixT(inp.fuel, inp.ox, inp.phi, inp.T_fuel, inp.T_air);
+  let SL_cms, alpha_th_u;
+  if (accurate){
+    try {
+      const r = await bkCachedFetch("flame", {
+        fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
+        phi: inp.phi, T0: inp.T_air, P: atmToBar(inp.P),
+        domain_length_m: 0.03,
+        T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
+        WFR: inp.WFR, water_mode: inp.water_mode,
+      });
+      SL_cms = (r.SL || 0) * 100;
+      alpha_th_u = r.alpha_th_u;
+    } catch (_) {
+      SL_cms = calcSL(inp.fuel, inp.phi, Tmix, inp.P) * 100;
+    }
+  } else {
+    SL_cms = calcSL(inp.fuel, inp.phi, Tmix, inp.P) * 100;
+  }
+  const SL_ms = SL_cms / 100;
+  const tau_chem = (alpha_th_u || 2e-5*Math.pow(Tmix/300,1.7)/inp.P) / Math.max(SL_ms*SL_ms, 1e-20);
+  const tau_flow = inp.Lchar / Math.max(inp.velocity, 1e-20);
+  const Da = tau_flow / tau_chem;
+  const blowoff_velocity = inp.Lchar / tau_chem;
+  const stable = Da > 1;
+  const tau_BO = inp.Dfh / Math.max(1.5 * SL_ms, 1e-20);
+  const alphaTh = alpha_th_u || (2e-5*Math.pow(Tmix/300,1.7)/inp.P);
+  const g_c = (SL_ms*SL_ms) / Math.max(alphaTh, 1e-20);
+  // Autoignition: free correlation only (skip Cantera 0D in automation —
+  // it's a separate slow call; user can run combustor panel for τ_ign).
+  const tau_ign = (typeof calcTauIgnFree === "function") ? calcTauIgnFree(Tmix, inp.P) : NaN;
+  const tau_res = inp.Lpremix / Math.max(inp.Vpremix, 1e-20);
+  const ignition_safe = Number.isFinite(tau_ign) && (tau_ign / Math.max(tau_res, 1e-20)) >= 3;
+  // Flashback margin: V/S_T  with S_T ≈ 1.8 × S_L (or 2.5× for H2-rich)
+  const H2_frac = (inp.fuel.H2 || 0) / Math.max(Object.values(inp.fuel).reduce((a,b)=>a+(+b||0),0), 1e-9);
+  const S_T_est = SL_ms * (H2_frac > 0.30 ? 2.5 : 1.8);
+  const flashback_margin = inp.Vpremix / Math.max(S_T_est, 1e-20);
+  const core_flashback_safe = flashback_margin > 1/0.7;
+  const premixer_safe = ignition_safe && core_flashback_safe;
+  return {
+    SL_cms, tau_chem_ms: tau_chem * 1000, tau_flow_ms: tau_flow * 1000,
+    Da, blowoff_velocity, stable,
+    tau_BO_ms: tau_BO * 1000, alpha_th: alphaTh, g_c,
+    tau_ign_ms: Number.isFinite(tau_ign) ? tau_ign * 1000 : null,
+    tau_res_ms: tau_res * 1000, ignition_safe,
+    flashback_margin, core_flashback_safe, premixer_safe,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Excel writer for automation results.
+//  ONE sheet, columns = inputs first then outputs, one row per matrix point.
+// ─────────────────────────────────────────────────────────────────────────
+function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
+  if (!results || results.length === 0) return;
+  const wb = XLSX.utils.book_new();
+
+  // ── Header rows: column name, unit, panel ──
+  const inCols  = varSpecs.map(s => ({
+    key: `in.${s.id}`,
+    name: s.label,
+    unit: s.unit_si || "",
+    panel: "INPUT",
+  }));
+  const outCols = selectedOutputs.map(o => ({
+    key: `out.${o.id}`,
+    name: o.label,
+    unit: o.unit || "",
+    panel: o.panel.toUpperCase(),
+  }));
+  const allCols = [
+    {key: "__row__", name: "Run #", unit: "", panel: "META"},
+    ...inCols,
+    ...outCols,
+    {key: "__error__", name: "Error", unit: "", panel: "META"},
+  ];
+
+  // Three-row header: panel, metric name, unit. Then data rows.
+  const header1 = allCols.map(c => c.panel);
+  const header2 = allCols.map(c => c.name);
+  const header3 = allCols.map(c => c.unit ? `(${c.unit})` : "");
+  const dataRows = results.map(r => allCols.map(c => formatRowValue(r[c.key])));
+
+  const aoa = [header1, header2, header3, ...dataRows];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = allCols.map(c => ({ wch: Math.max(10, c.name.length + 2) }));
+  // Freeze the three header rows.
+  ws["!freeze"] = { xSplit: inCols.length + 1, ySplit: 3 };
+  XLSX.utils.book_append_sheet(wb, ws, "Automation Results");
+
+  // ── Run definition sheet — captures what was run ──
+  const def = [
+    ["AUTOMATION RUN — Definition"],
+    [""],
+    ["Generated", new Date().toISOString().slice(0,19)],
+    ["Mode", runMeta.accurate ? "Accurate (Cantera)" : "Simple (in-browser JS)"],
+    ["Panels selected", runMeta.selectedPanels.join(", ")],
+    ["Matrix size", `${results.length} runs`],
+    [""],
+    ["Variables varied"],
+    ["Variable", "Mode", "Min", "Max", "Step", "List", "Balance species"],
+    ...varSpecs.map(s => [
+      s.id, s.mode || (s.kind === "enum" || s.kind === "bool" ? "list" : "range"),
+      s.mode === "list" ? "" : (s.min ?? ""),
+      s.mode === "list" ? "" : (s.max ?? ""),
+      s.mode === "list" ? "" : (s.step ?? ""),
+      Array.isArray(s.list) ? s.list.join(", ") : "",
+      s.balanceSpecies || "",
+    ]),
+    [""],
+    ["Outputs captured"],
+    ["Output", "Panel", "Unit"],
+    ...selectedOutputs.map(o => [o.label, o.panel, o.unit || ""]),
+  ];
+  const wsDef = XLSX.utils.aoa_to_sheet(def);
+  wsDef["!cols"] = [{wch:36},{wch:14},{wch:12},{wch:12},{wch:12},{wch:36},{wch:18}];
+  XLSX.utils.book_append_sheet(wb, wsDef, "Run Definition");
+
+  const filename = `ProReadyEngineer_Automation_${new Date().toISOString().slice(0,16).replace(/[:T-]/g,"")}.xlsx`;
+  XLSX.writeFile(wb, filename);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   AUTOMATION PANEL (tab UI)
+   ──────────────────────────────────────────────────────────────────────────
+   Five-step wizard:
+     1. PANELS    — pick which calculation panels to run
+     2. VARIABLES — pick which inputs to vary (filtered by selected panels)
+     3. DOE       — set min/max/step (or list, balance species) per variable
+     4. PREVIEW   — review the matrix size, estimated runtime, broken linkages
+     5. RUN       — go button + progress + Excel download
+   Each step is collapsible; the user can move back and edit any step.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+function AutomatePanel(props){
+  const units = useContext(UnitCtx);
+  const { accurate } = useContext(AccurateCtx);
+  const { begin: beginBusy } = useContext(BusyCtx);
+
+  // Snapshot the App's baseline state for use as the "everything else fixed"
+  // value in each row. Pass via props so we don't re-grab on every render.
+  const baseline = props.baseline;
+
+  // ── Wizard state ──
+  const [selectedPanels, setSelectedPanels] = useState([]);
+  const [selectedVarIds, setSelectedVarIds] = useState([]);
+  const [varSpecs, setVarSpecs] = useState({});  // {varId: {mode, min, max, step, list, balanceSpecies}}
+  const [selectedOutputIds, setSelectedOutputIds] = useState(null);  // null = all-of-panel
+  const [running, setRunning]   = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [results, setResults]   = useState(null);
+  const [errMsg, setErrMsg]     = useState(null);
+  const abortRef = useRef({aborted:false});
+
+  // Auto-include dependency panels (mapping → cycle)
+  const effectivePanels = useMemo(
+    () => expandPanelDeps(selectedPanels),
+    [selectedPanels],
+  );
+  const autoIncluded = effectivePanels.filter(p => !selectedPanels.includes(p));
+
+  // Variables relevant to the selected panels
+  const relevantVars = useMemo(
+    () => varsForPanels(effectivePanels),
+    [effectivePanels],
+  );
+
+  // Outputs that will be captured (default = all outputs from selected panels)
+  const candidateOutputs = useMemo(
+    () => outputsForPanels(effectivePanels),
+    [effectivePanels],
+  );
+  const effectiveOutputs = useMemo(() => {
+    if (!selectedOutputIds) return candidateOutputs;
+    const set = new Set(selectedOutputIds);
+    return candidateOutputs.filter(o => set.has(o.id));
+  }, [candidateOutputs, selectedOutputIds]);
+
+  // Build the active varSpecs (only those the user selected, with their config)
+  const activeVarSpecs = useMemo(() => {
+    return selectedVarIds.map(id => {
+      const def = AUTO_VARS.find(v => v.id === id);
+      const cfg = varSpecs[id] || {};
+      const baseSpec = {
+        ...def,
+        mode: cfg.mode || (def.kind === "enum" || def.kind === "bool" ? "list" : "range"),
+        min: cfg.min ?? def.range?.[0] ?? 0,
+        max: cfg.max ?? def.range?.[1] ?? 1,
+        step: cfg.step ?? def.step ?? 0.1,
+        list: cfg.list ?? (def.kind === "enum" ? def.choices.map(c => c.value)
+                          : def.kind === "bool" ? [true, false]
+                          : null),
+        balanceSpecies: cfg.balanceSpecies,
+      };
+      return baseSpec;
+    });
+  }, [selectedVarIds, varSpecs]);
+
+  // Build the matrix preview
+  const matrix = useMemo(
+    () => activeVarSpecs.length ? generateMatrix(activeVarSpecs) : [],
+    [activeVarSpecs],
+  );
+
+  // Estimated runtime (sum of typical-cost per panel, times matrix size)
+  const estimatedSec = useMemo(() => {
+    const perRow = effectivePanels.reduce((sum, pid) => {
+      const def = AUTOMATABLE_PANELS.find(p => p.id === pid);
+      return sum + (def?.typicalCost || 1);
+    }, 0);
+    return Math.round(matrix.length * perRow * (accurate ? 1 : 0.05));
+  }, [effectivePanels, matrix.length, accurate]);
+
+  // Any auto-broken linkages?
+  const brokenLinkages = useMemo(() => {
+    if (!effectivePanels.includes("cycle")) return [];
+    const out = [];
+    for (const id of selectedVarIds){
+      const def = AUTO_VARS.find(v => v.id === id);
+      if (def?.linkage) out.push({ var: id, linkage: def.linkage });
+    }
+    return out;
+  }, [selectedVarIds, effectivePanels]);
+
+  // ── Cycle requires Accurate Mode ──
+  const cycleRequiresAccurate = effectivePanels.includes("cycle") && !accurate;
+
+  const togglePanel = (pid) => {
+    setSelectedPanels(prev => prev.includes(pid)
+      ? prev.filter(p => p !== pid)
+      : [...prev, pid]);
+  };
+  const toggleVar = (vid) => {
+    setSelectedVarIds(prev => prev.includes(vid)
+      ? prev.filter(v => v !== vid)
+      : [...prev, vid]);
+  };
+  const updateVarSpec = (vid, patch) => {
+    setVarSpecs(prev => ({...prev, [vid]: {...(prev[vid]||{}), ...patch}}));
+  };
+
+  const startRun = async () => {
+    if (matrix.length === 0) return;
+    if (cycleRequiresAccurate){
+      setErrMsg("Cycle (and Combustor Mapping) require Accurate Mode. Turn it on in the header.");
+      return;
+    }
+    setErrMsg(null);
+    setRunning(true);
+    setResults(null);
+    setProgress({ done: 0, total: matrix.length, elapsed: 0, eta: 0, lastRow: null });
+    abortRef.current = { aborted: false };
+    const endBusy = beginBusy("Running automation matrix");
+    try {
+      const out = await runAutomationMatrix({
+        rows: matrix,
+        selectedPanels: effectivePanels,
+        selectedOutputs: effectiveOutputs,
+        baseline,
+        varSpecs: activeVarSpecs,
+        accurate,
+        onProgress: (p) => setProgress(p),
+        abortRef,
+      });
+      setResults(out);
+    } catch (e){
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setRunning(false);
+      endBusy();
+    }
+  };
+  const cancelRun = () => { abortRef.current.aborted = true; };
+  const downloadExcel = () => {
+    if (!results) return;
+    writeAutomationExcel(results, activeVarSpecs, effectiveOutputs, {
+      accurate, selectedPanels: effectivePanels,
+    });
+  };
+  const resetRun = () => { setResults(null); setProgress(null); setErrMsg(null); };
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  UI helpers
+  // ─────────────────────────────────────────────────────────────────────
+  const Step = ({n, title, children, done, locked}) => (
+    <div style={{
+      background: locked ? `${C.bg2}88` : C.bg2,
+      border: `1.5px solid ${done ? C.good+"50" : locked ? C.border : C.accent+"50"}`,
+      borderRadius: 8, padding: "14px 16px", marginBottom: 12,
+      opacity: locked ? 0.55 : 1,
+    }}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+        <span style={{
+          width:26, height:26, borderRadius:"50%",
+          background: done ? C.good : (locked ? C.bg3 : C.accent),
+          color: locked ? C.txtMuted : C.bg,
+          display:"inline-flex", alignItems:"center", justifyContent:"center",
+          fontWeight:700, fontSize:13, fontFamily:"'Barlow Condensed',sans-serif",
+        }}>{done ? "✓" : n}</span>
+        <span style={{fontSize:13, fontWeight:700, color:C.txt,
+          fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px",
+          textTransform:"uppercase"}}>{title}</span>
+      </div>
+      {!locked && children}
+    </div>
+  );
+
+  return(<div style={{display:"flex",flexDirection:"column",gap:12,maxWidth:1100}}>
+    <HelpBox title="ℹ️ Automation — How It Works">
+      <p style={{margin:"0 0 6px"}}>Build a <span style={hs.em}>test matrix</span> by picking the panels you want to run, the inputs you want to vary, and the value ranges. The runner then computes every combination, captures every output from those panels, and gives you one Excel sheet — one row per run, inputs first, outputs after.</p>
+      <p style={{margin:"0 0 6px"}}>Pick <strong>Combustor Mapping</strong> and Cycle is auto-included (Mapping needs T3, P3, mdot_air from the cycle deck). Vary a sidebar variable that's normally Cycle-linked (T_air, P, φ) and the corresponding linkage is <strong>auto-broken</strong> for this run so your swept values actually take effect — restored after.</p>
+      <p style={{margin:0}}><span style={hs.warn}>Cycle and Combustor Mapping require Accurate Mode</span> (Cantera backend). The other panels run in either mode.</p>
+    </HelpBox>
+
+    {/* ────────── STEP 1 — PANELS ────────── */}
+    <Step n={1} title="Pick the panels to automate" done={selectedPanels.length > 0}>
+      <div style={{fontSize:11, color:C.txtMuted, marginBottom:10, fontFamily:"'Barlow',sans-serif", lineHeight:1.5}}>
+        Select one or more. Combustor Mapping depends on Cycle internally — if you pick Mapping, Cycle is auto-included. Picking more panels means more outputs per row but also more compute time.
+      </div>
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(280px,1fr))", gap:8}}>
+        {AUTOMATABLE_PANELS.map(p => {
+          const isSel  = selectedPanels.includes(p.id);
+          const isAuto = autoIncluded.includes(p.id);
+          return(
+            <div key={p.id}
+              onClick={() => togglePanel(p.id)}
+              style={{
+                padding:"10px 12px",
+                background: isSel ? `${C.accent}18` : isAuto ? `${C.accent2}10` : C.bg3,
+                border: `1.5px solid ${isSel ? C.accent : isAuto ? C.accent2 : C.border}`,
+                borderRadius:6, cursor:"pointer",
+                fontFamily:"'Barlow',sans-serif", color:C.txt,
+              }}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                <input type="checkbox" checked={isSel} readOnly
+                  style={{accentColor:C.accent, cursor:"pointer", margin:0}}/>
+                <span style={{fontSize:13, fontWeight:700, fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".4px"}}>
+                  {p.icon} {p.label}
+                </span>
+                {isAuto && <span style={{marginLeft:"auto", fontSize:9, fontWeight:700, color:C.accent2, fontFamily:"monospace"}}>AUTO</span>}
+              </div>
+              <div style={{fontSize:10.5, color:C.txtDim, lineHeight:1.45}}>{p.desc}</div>
+              <div style={{fontSize:9.5, color:C.txtMuted, marginTop:4, fontFamily:"monospace"}}>
+                ~{p.typicalCost}s / row in Accurate mode
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Step>
+
+    {/* ────────── STEP 2 — VARIABLES ────────── */}
+    <Step n={2} title="Pick variables to vary" done={selectedVarIds.length > 0}
+      locked={selectedPanels.length === 0}>
+      <div style={{fontSize:11, color:C.txtMuted, marginBottom:10, fontFamily:"'Barlow',sans-serif", lineHeight:1.5}}>
+        Only variables that affect a selected panel are shown. Everything else stays at its current sidebar value across every row.
+      </div>
+      <div style={{maxHeight:320, overflowY:"auto", border:`1px solid ${C.border}`, borderRadius:6, padding:6}}>
+        {(() => {
+          const grouped = {};
+          for (const v of relevantVars){
+            const key = v.panels[0];  // group by primary panel
+            (grouped[key] = grouped[key] || []).push(v);
+          }
+          return Object.entries(grouped).map(([panel, vars]) => (
+            <div key={panel} style={{marginBottom:8}}>
+              <div style={{fontSize:10, fontWeight:700, color:C.accent, textTransform:"uppercase",
+                letterSpacing:".7px", padding:"4px 8px", background:`${C.accent}10`, borderRadius:3}}>
+                {panel}
+              </div>
+              <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))", gap:4, padding:4}}>
+                {vars.map(v => {
+                  const isSel = selectedVarIds.includes(v.id);
+                  return(
+                    <label key={v.id} title={v.desc}
+                      style={{display:"flex", alignItems:"center", gap:6, padding:"4px 6px",
+                        cursor:"pointer", borderRadius:3,
+                        background: isSel ? `${C.accent}14` : "transparent",
+                        fontSize:11, fontFamily:"'Barlow',sans-serif"}}>
+                      <input type="checkbox" checked={isSel}
+                        onChange={() => toggleVar(v.id)}
+                        style={{accentColor:C.accent, cursor:"pointer", margin:0}}/>
+                      <span style={{flex:1, color:C.txt}}>{v.label}</span>
+                      <span style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>
+                        {v.unit_si || v.kind}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ));
+        })()}
+      </div>
+    </Step>
+
+    {/* ────────── STEP 3 — DOE ────────── */}
+    <Step n={3} title="Define the DoE (range or list)" done={matrix.length > 0}
+      locked={selectedVarIds.length === 0}>
+      <div style={{fontSize:11, color:C.txtMuted, marginBottom:10, fontFamily:"'Barlow',sans-serif", lineHeight:1.5}}>
+        For each variable, set min / max / step (range mode) OR enter a comma-separated list of specific values. Fuel-species variables also need a balance species (the species that absorbs the difference to keep total = 100 %).
+      </div>
+      <div style={{display:"flex", flexDirection:"column", gap:6}}>
+        {selectedVarIds.map(vid => {
+          const def = AUTO_VARS.find(v => v.id === vid);
+          if (!def) return null;
+          const cfg = varSpecs[vid] || {};
+          const isEnum = def.kind === "enum" || def.kind === "bool";
+          const isFuel = def.kind === "fuel_species";
+          const mode = cfg.mode || (isEnum ? "list" : "range");
+          return(
+            <div key={vid} style={{padding:"8px 10px", background:C.bg3, borderRadius:5,
+              border:`1px solid ${C.border}`, display:"grid",
+              gridTemplateColumns:"180px 80px 1fr", gap:8, alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:11.5, color:C.txt, fontWeight:600}}>{def.label}</div>
+                <div style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>{def.unit_si || def.kind}</div>
+              </div>
+              <select value={mode} onChange={e => updateVarSpec(vid, {mode:e.target.value})}
+                disabled={isEnum}
+                style={{...S.sel, fontSize:10, padding:"4px 6px"}}>
+                <option value="range">Range</option>
+                <option value="list">List</option>
+              </select>
+              <div style={{display:"flex", gap:6, alignItems:"center", flexWrap:"wrap"}}>
+                {mode === "range" && !isEnum && (
+                  <>
+                    <NumLabel l="Min">
+                      <NumField value={cfg.min ?? def.range?.[0]} decimals={4}
+                        onCommit={v => updateVarSpec(vid, {min:+v})}
+                        style={{...S.inp, width:75}}/>
+                    </NumLabel>
+                    <NumLabel l="Max">
+                      <NumField value={cfg.max ?? def.range?.[1]} decimals={4}
+                        onCommit={v => updateVarSpec(vid, {max:+v})}
+                        style={{...S.inp, width:75}}/>
+                    </NumLabel>
+                    <NumLabel l="Step">
+                      <NumField value={cfg.step ?? def.step} decimals={4}
+                        onCommit={v => updateVarSpec(vid, {step:+v})}
+                        style={{...S.inp, width:65}}/>
+                    </NumLabel>
+                    <span style={{fontSize:10, color:C.txtMuted, fontFamily:"monospace"}}>
+                      → {Math.max(1, Math.floor(((cfg.max ?? def.range?.[1]) - (cfg.min ?? def.range?.[0])) / (cfg.step ?? def.step) + 1))} pts
+                    </span>
+                  </>
+                )}
+                {mode === "list" && (
+                  <>
+                    <input type="text" placeholder={isEnum ? def.choices?.map(c=>c.value).join(", ") : "1.0, 2.0, 3.0"}
+                      value={Array.isArray(cfg.list) ? cfg.list.join(", ") : ""}
+                      onChange={e => {
+                        const raw = e.target.value.split(",").map(s => s.trim()).filter(Boolean);
+                        const list = isEnum ? raw : raw.map(s => +s).filter(n => Number.isFinite(n));
+                        updateVarSpec(vid, {list});
+                      }}
+                      style={{...S.inp, flex:1, minWidth:200}}/>
+                  </>
+                )}
+                {isFuel && (
+                  <NumLabel l="Balance">
+                    <select value={cfg.balanceSpecies || (def.species === "CH4" ? "N2" : "CH4")}
+                      onChange={e => updateVarSpec(vid, {balanceSpecies:e.target.value})}
+                      style={{...S.sel, fontSize:10, padding:"3px 5px", width:90}}>
+                      {FUEL_SP.filter(sp => sp !== def.species).map(sp =>
+                        <option key={sp} value={sp}>{sp}</option>)}
+                    </select>
+                  </NumLabel>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Step>
+
+    {/* ────────── STEP 4 — PREVIEW ────────── */}
+    <Step n={4} title={`Review matrix (${matrix.length} runs · est. ${formatRuntime(estimatedSec)})`}
+      done={results !== null} locked={matrix.length === 0}>
+      {brokenLinkages.length > 0 && (
+        <div style={{padding:"6px 10px", background:`${C.accent2}12`, border:`1px solid ${C.accent2}50`,
+          borderRadius:4, fontSize:11, color:C.txtDim, marginBottom:8, fontFamily:"'Barlow',sans-serif"}}>
+          <strong style={{color:C.accent2}}>⚙ Linkage(s) auto-broken for this run:</strong>{" "}
+          {brokenLinkages.map(b => <code key={b.var} style={{color:C.accent2, marginRight:6}}>{b.linkage}</code>)}
+          — your swept values for those variables will take effect instead of being overridden by Cycle.
+        </div>
+      )}
+      {autoIncluded.length > 0 && (
+        <div style={{padding:"6px 10px", background:`${C.accent}12`, border:`1px solid ${C.accent}50`,
+          borderRadius:4, fontSize:11, color:C.txtDim, marginBottom:8, fontFamily:"'Barlow',sans-serif"}}>
+          <strong style={{color:C.accent}}>+ Cycle auto-included</strong> — Combustor Mapping needs Cycle T3/P3/mdot_air. Cycle outputs will appear in the Excel sheet too.
+        </div>
+      )}
+      {cycleRequiresAccurate && (
+        <div style={{padding:"6px 10px", background:`${C.warm}14`, border:`1px solid ${C.warm}60`,
+          borderRadius:4, fontSize:11, color:C.warm, marginBottom:8, fontFamily:"'Barlow',sans-serif", fontWeight:700}}>
+          ⚠ Cycle requires Accurate Mode (Cantera backend). Turn it on in the header before running.
+        </div>
+      )}
+      <div style={{display:"flex", gap:14, marginBottom:8, flexWrap:"wrap", fontSize:11, fontFamily:"'Barlow',sans-serif"}}>
+        <Stat label="Runs"            value={matrix.length}/>
+        <Stat label="Inputs / row"    value={selectedVarIds.length}/>
+        <Stat label="Outputs / row"   value={effectiveOutputs.length}/>
+        <Stat label="Mode"            value={accurate ? "Accurate" : "Simple"}
+          color={accurate ? C.accent : C.txtDim}/>
+        <Stat label="Est. runtime"    value={formatRuntime(estimatedSec)}/>
+      </div>
+      {/* Tiny preview table — first 8 rows */}
+      <div style={{maxHeight:180, overflow:"auto", border:`1px solid ${C.border}`, borderRadius:4,
+        fontFamily:"monospace", fontSize:10, background:C.bg}}>
+        <table style={{width:"100%", borderCollapse:"collapse"}}>
+          <thead>
+            <tr>
+              <th style={previewHeaderStyle}>#</th>
+              {activeVarSpecs.map(s => <th key={s.id} style={previewHeaderStyle}>{s.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {matrix.slice(0, 8).map((r, i) => (
+              <tr key={i} style={{borderTop:`1px solid ${C.border}40`}}>
+                <td style={previewCellStyle}>{i+1}</td>
+                {activeVarSpecs.map(s => <td key={s.id} style={previewCellStyle}>{formatRowValue(r[s.id])}</td>)}
+              </tr>
+            ))}
+            {matrix.length > 8 && (
+              <tr><td colSpan={activeVarSpecs.length + 1} style={{...previewCellStyle, color:C.txtMuted, fontStyle:"italic"}}>
+                … and {matrix.length - 8} more rows
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Step>
+
+    {/* ────────── STEP 5 — RUN ────────── */}
+    <Step n={5} title="Run the matrix" done={results !== null}
+      locked={matrix.length === 0 || cycleRequiresAccurate}>
+      {!running && !results && (
+        <button onClick={startRun}
+          disabled={matrix.length === 0 || cycleRequiresAccurate}
+          style={{padding:"10px 24px", fontSize:13, fontWeight:700,
+            color:C.bg, background:C.good, border:"none", borderRadius:6,
+            cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif",
+            letterSpacing:".7px"}}>
+          ▶ START AUTOMATED RUN ({matrix.length} runs)
+        </button>
+      )}
+      {running && progress && (
+        <div>
+          <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:8}}>
+            <span style={{display:"inline-block",width:14,height:14,
+              border:`2.5px solid ${C.accent}`, borderTopColor:"transparent",
+              borderRadius:"50%", animation:"ctkspin 0.85s linear infinite"}}/>
+            <span style={{fontSize:13, fontWeight:700, color:C.accent,
+              fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px"}}>
+              RUNNING — {progress.done} / {progress.total}
+            </span>
+            <span style={{marginLeft:"auto", fontSize:11, color:C.txtMuted, fontFamily:"monospace"}}>
+              {formatRuntime(progress.elapsed)} elapsed · {formatRuntime(progress.eta)} ETA
+            </span>
+          </div>
+          <div style={{height:8, background:C.bg3, borderRadius:4, overflow:"hidden", marginBottom:8}}>
+            <div style={{
+              height:"100%", width:`${(progress.done/progress.total)*100}%`,
+              background:C.accent, transition:"width .3s",
+            }}/>
+          </div>
+          <button onClick={cancelRun}
+            style={{padding:"6px 14px", fontSize:11, fontWeight:700,
+              color:C.warm, background:"transparent", border:`1px solid ${C.warm}`,
+              borderRadius:4, cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif"}}>
+            ✕ CANCEL
+          </button>
+        </div>
+      )}
+      {!running && results && (
+        <div style={{display:"flex", gap:10, alignItems:"center", flexWrap:"wrap"}}>
+          <span style={{fontSize:13, fontWeight:700, color:C.good, fontFamily:"'Barlow Condensed',sans-serif"}}>
+            ✓ COMPLETE — {results.length} rows
+            {results.filter(r => r.__error__).length > 0 && (
+              <span style={{color:C.warm, marginLeft:8}}>
+                ({results.filter(r => r.__error__).length} errored)
+              </span>
+            )}
+          </span>
+          <button onClick={downloadExcel}
+            style={{padding:"8px 18px", fontSize:12, fontWeight:700,
+              color:C.bg, background:C.accent2, border:"none", borderRadius:5,
+              cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif",
+              letterSpacing:".5px"}}>
+            📥 DOWNLOAD EXCEL
+          </button>
+          <button onClick={resetRun}
+            style={{padding:"8px 14px", fontSize:11, fontWeight:600,
+              color:C.txtDim, background:"transparent", border:`1px solid ${C.border}`,
+              borderRadius:5, cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif"}}>
+            ↺ RESET
+          </button>
+        </div>
+      )}
+      {errMsg && (
+        <div style={{marginTop:8, padding:"6px 10px", background:`${C.warm}14`,
+          border:`1px solid ${C.warm}60`, borderRadius:4, fontSize:11, color:C.warm,
+          fontFamily:"monospace"}}>{errMsg}</div>
+      )}
+    </Step>
+  </div>);
+}
+
+// Tiny visual helpers used by AutomatePanel
+const previewHeaderStyle = {
+  textAlign:"left", padding:"4px 6px", fontSize:10, color:C.txtDim,
+  background:C.bg3, position:"sticky", top:0, fontWeight:700,
+};
+const previewCellStyle = {
+  padding:"3px 6px", color:C.txt, whiteSpace:"nowrap",
+};
+function NumLabel({l, children}){
+  return(<div style={{display:"flex",flexDirection:"column",gap:1}}>
+    <div style={{fontSize:8.5, color:C.txtMuted, textTransform:"uppercase", letterSpacing:".5px"}}>{l}</div>
+    {children}
+  </div>);
+}
+function Stat({label, value, color}){
+  return(<div style={{display:"flex", flexDirection:"column", gap:1, paddingRight:14, borderRight:`1px solid ${C.border}40`}}>
+    <div style={{fontSize:9, color:C.txtMuted, textTransform:"uppercase", letterSpacing:".5px"}}>{label}</div>
+    <div style={{fontSize:13, fontWeight:700, color: color || C.txt, fontFamily:"'Barlow Condensed',sans-serif"}}>{value}</div>
+  </div>);
+}
+function formatRuntime(seconds){
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), r = s % 60;
+  if (m < 60) return `${m}m ${r}s`;
+  const h = Math.floor(m / 60), rm = m % 60;
+  return `${h}h ${rm}m`;
+}
+
 function EngineAmbientSidebar({
   engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct,setLoadPct,
   Tcool,setTcool,airFrac,setAirFrac,
@@ -4908,7 +5860,7 @@ function EngineAmbientSidebar({
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
 
 /* ══════════════════ MAIN APP ══════════════════ */
-const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"mapping",label:"Combustor Mapping",icon:"🎯",engines:["LMS100PB+"]},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
+const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"mapping",label:"Combustor Mapping",icon:"🎯",engines:["LMS100PB+"]},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"automate",label:"Automate",icon:"🧪"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
 const ACCOUNT_TAB={id:"account",label:"Account & Billing",icon:"👤"};
 
 export default function App(){
@@ -5549,6 +6501,19 @@ export default function App(){
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
             {tab==="props"&&<PropsPanel/>}
+            {tab==="automate"&&<AutomatePanel baseline={{
+              // Snapshot every input the runner needs as a per-row baseline.
+              // Anything the user doesn't vary stays at this value across rows.
+              phi, T_air:T0, T_fuel, P, WFR, water_mode:waterMode,
+              engine:cycleEngine, P_amb:cyclePamb, T_amb:cycleTamb, RH:cycleRH,
+              load_pct:cycleLoad, T_cool:cycleTcool, com_air_frac:cycleAirFrac,
+              bleed_open_pct:bleedOpenPct, emissionsMode,
+              mapW36w3, mapPhiIP, mapPhiOP, mapPhiIM, mapFracIP, mapFracOP,
+              tau_psr, L_pfr, V_pfr, heatLossFrac,
+              velocity, Lchar, Dfh, Lpremix, Vpremix,
+              measO2, measCO2,
+              fuel, ox,
+            }}/>}
             {tab==="assumptions"&&<AssumptionsPanel/>}
             {tab==="account"&&auth.isAuthenticated&&<AccountPanel C={C}/>}
           </div>
