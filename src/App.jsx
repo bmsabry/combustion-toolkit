@@ -14,6 +14,7 @@ import {
 import { useAuth, AuthModal } from "./auth.jsx";
 import { AccountPanel } from "./AccountPanel.jsx";
 import * as api from "./api.js";
+import { estimateRunSeconds, recordRunPerf } from "./perfEstimator";
 
 /* ══════════════════════════════════════════════════════════════
    UNIT SYSTEM
@@ -7469,16 +7470,30 @@ function AutomatePanel(props){
     [matrixSpecs, matrixOversized],
   );
 
-  // Estimated runtime (sum of typical-cost per panel, times matrix size).
-  // Uses matrixSize (not matrix.length) so the estimate stays accurate even
-  // when the matrix is oversized and not enumerated.
-  const estimatedSec = useMemo(() => {
-    const perRow = effectivePanels.reduce((sum, pid) => {
-      const def = AUTOMATABLE_PANELS.find(p => p.id === pid);
-      return sum + (def?.typicalCost || 1);
-    }, 0);
-    return Math.round(matrixSize * perRow * (accurate ? 1 : 0.05));
-  }, [effectivePanels, matrixSize, accurate]);
+  // T_flame as an operating-condition variable triggers the per-row
+  // /calc/solve-phi-for-tflame bisection — it adds non-trivial time
+  // even after the brentq+pool optimization, so the estimator tracks
+  // it as part of the run signature.
+  const needsBisection = useMemo(
+    () => selectedVarIds.includes("T_flame"),
+    [selectedVarIds],
+  );
+
+  // Adaptive runtime estimate. On the first run for a given (panels,
+  // mode, bisection) signature we use calibrated defaults; from the
+  // second run on, the EMA of measured per-row time takes over. The
+  // {seconds, source, sampleCount} bundle lets the UI flag whether the
+  // estimate is `default` (a guess) or `calibrated` (tuned to your
+  // actual hardware + network + load history).
+  const estimate = useMemo(() => {
+    return estimateRunSeconds(
+      effectivePanels,
+      accurate ? "accurate" : "free",
+      needsBisection,
+      matrixSize,
+    );
+  }, [effectivePanels, accurate, needsBisection, matrixSize]);
+  const estimatedSec = Math.round(estimate.seconds);
 
   // Any auto-broken linkages?
   const brokenLinkages = useMemo(() => {
@@ -7581,6 +7596,10 @@ function AutomatePanel(props){
         } catch (_) { /* warmup is best-effort */ }
       }
       setProgress({ done: 0, total: matrix.length, elapsed: 0, eta: 0, lastRow: null, phase: "running" });
+      // Capture the wall-clock at the moment the matrix run actually
+      // starts (NOT including the warmup ping above) so the persisted
+      // per-row time reflects steady-state cost, not cold-start.
+      const matrixStart = Date.now();
       const out = await runAutomationMatrix({
         rows: matrix,
         selectedPanels: effectivePanels,
@@ -7591,6 +7610,23 @@ function AutomatePanel(props){
         onProgress: (p) => setProgress(p),
         abortRef,
       });
+      // Record measured per-row time → updates the EMA used by the
+      // pre-run estimator on the user's NEXT matrix run with the same
+      // (panels, mode, bisection) signature. If the user cancelled, we
+      // still log a partial sample so the next estimate benefits.
+      const elapsed = (Date.now() - matrixStart) / 1000;
+      const completed = out ? out.length : 0;
+      const wasAborted = !!abortRef.current?.aborted;
+      if (completed > 0){
+        recordRunPerf(
+          effectivePanels,
+          accurate ? "accurate" : "free",
+          needsBisection,
+          completed,
+          elapsed,
+          { partial: wasAborted },
+        );
+      }
       setResults(out);
     } catch (e){
       setErrMsg(e?.message || String(e));
@@ -7884,7 +7920,10 @@ function AutomatePanel(props){
         <Stat label="Outputs / row"   value={effectiveOutputs.length}/>
         <Stat label="Mode"            value={accurate ? "Accurate" : "Simple"}
           color={accurate ? C.accent : C.txtDim}/>
-        <Stat label="Est. runtime"    value={formatRuntime(estimatedSec)}
+        <Stat label={estimate.source === "calibrated"
+                 ? `Est. runtime (calibrated · n=${estimate.sampleCount})`
+                 : "Est. runtime (default — first run)"}
+          value={formatRuntime(estimatedSec)}
           color={matrixOversized ? C.strong : C.txt}/>
       </div>
       {/* Preview table — first 8 rows. Values shown in current units.
