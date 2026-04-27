@@ -1,6 +1,7 @@
 import { Fragment, useState, useMemo, useCallback, useEffect, useRef, createContext, useContext } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";   // drop-in replacement that supports cell styles
+import { smartRound, excelNumberFormat, smartFormat } from "./format";
 import JSZip from "jszip";
 import {
   AUTOMATABLE_PANELS, AUTO_VARS, AUTO_OUTPUTS,
@@ -5892,15 +5893,61 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
   const header1 = allCols.map(c => c.panel);
   const header2 = allCols.map(c => c.name);
   const header3 = allCols.map(c => c.unit ? `(${c.unit})` : "");
-  const dataRows = results.map(r => allCols.map(c => formatRowValue(c.convert(c.pick(r)))));
+  // Data rows: keep numbers as NUMBERS so Excel applies the per-cell
+  // number format and right-aligns naturally. Booleans → "TRUE"/"FALSE".
+  // Errors / strings pass through.
+  const dataRows = results.map(r => allCols.map(c => {
+    const raw = c.convert(c.pick(r));
+    if (raw == null) return "";
+    if (typeof raw === "boolean") return raw ? "TRUE" : "FALSE";
+    if (typeof raw === "number"){
+      if (!Number.isFinite(raw)) return "";
+      return smartRound(raw, c.unit, c.name);
+    }
+    return raw;
+  }));
 
   const aoa = [header1, header2, header3, ...dataRows];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws["!cols"] = allCols.map(c => ({ wch: Math.max(10, c.name.length + 2) }));
-  // Freeze the three header rows.
-  // Freeze the three header rows + the input columns (everything left of
-  // the first output column). Run # is column 1, then inputs+fuel+ox.
   ws["!freeze"] = { xSplit: 1 + inCols.length + fuelCols.length + oxCols.length, ySplit: 3 };
+
+  // ── Per-cell styling pass ──
+  // - First 3 rows: bold + center alignment + light fill so headers stand out.
+  // - All cells: thin black border (table-grid look).
+  // - Data cells: number format from excelNumberFormat() so the displayed
+  //   value matches the project-wide rounding contract while the underlying
+  //   cell value remains a true number (sortable, filterable, formula-able).
+  // - Numbers right-aligned (Excel default), text left-aligned (override
+  //   so meta columns like Run #, Error read consistently).
+  const THIN_BORDER = { style: "thin", color: { rgb: "606060" } };
+  const ALL_BORDERS = { top: THIN_BORDER, bottom: THIN_BORDER, left: THIN_BORDER, right: THIN_BORDER };
+  const HEADER_FILL = { fgColor: { rgb: "1C2128" } };
+  const HEADER_FONT = { bold: true, color: { rgb: "F0F6FC" } };
+  for (let r = 0; r < aoa.length; r++){
+    for (let c = 0; c < allCols.length; c++){
+      const addr = XLSX.utils.encode_cell({ c, r });
+      const cell = ws[addr];
+      if (!cell) continue;
+      const isHeader = r < 3;
+      const isNumber = typeof cell.v === "number";
+      const style = {
+        border: ALL_BORDERS,
+        alignment: { horizontal: isHeader ? "center" : (isNumber ? "right" : "left"), vertical: "center" },
+      };
+      if (isHeader){
+        style.font = HEADER_FONT;
+        style.fill = HEADER_FILL;
+      }
+      // Apply number format to data-row numeric cells.
+      if (!isHeader && isNumber){
+        const fmtCode = excelNumberFormat(allCols[c].unit, allCols[c].name, cell.v);
+        if (fmtCode) cell.z = fmtCode;
+      }
+      cell.s = style;
+    }
+  }
+
   XLSX.utils.book_append_sheet(wb, ws, "Automation Results");
 
   // ── Run definition sheet — captures what was run ──
@@ -5937,6 +5984,29 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
   ];
   const wsDef = XLSX.utils.aoa_to_sheet(def);
   wsDef["!cols"] = [{wch:36},{wch:14},{wch:12},{wch:12},{wch:12},{wch:36},{wch:18}];
+  // Bold + bordered styling on the Run Definition section headers
+  // (rows whose first cell starts with an uppercase keyword) so the
+  // sheet reads as a proper structured report.
+  for (let r = 0; r < def.length; r++){
+    const firstCell = def[r] && def[r][0];
+    const isSectionHeader = typeof firstCell === "string" &&
+      /^[A-Z][A-Z\s]+$/.test(firstCell.trim().split(" ")[0] || "");
+    for (let c = 0; c < (def[r] || []).length; c++){
+      const addr = XLSX.utils.encode_cell({ c, r });
+      const cell = wsDef[addr];
+      if (!cell) continue;
+      const style = {
+        border: { top: {style:"thin",color:{rgb:"606060"}}, bottom: {style:"thin",color:{rgb:"606060"}},
+                  left: {style:"thin",color:{rgb:"606060"}}, right: {style:"thin",color:{rgb:"606060"}} },
+        alignment: { vertical: "center" },
+      };
+      if (r === 0 || isSectionHeader){
+        style.font = { bold: true, color: { rgb: "F0F6FC" } };
+        style.fill = { fgColor: { rgb: "1C2128" } };
+      }
+      cell.s = style;
+    }
+  }
   XLSX.utils.book_append_sheet(wb, wsDef, "Run Definition");
 
   const filename = `ProReadyEngineer_Automation_${new Date().toISOString().slice(0,16).replace(/[:T-]/g,"")}.xlsx`;
@@ -6168,7 +6238,11 @@ function _plotFmtVal(col, raw){
   if (raw == null) return "—";
   if (col.isCategorical) return String(raw);
   const disp = col.toDisp(raw);
-  if (typeof disp === "number" && Number.isFinite(disp)) return formatRowValue(disp);
+  // Use unit-aware smart formatting so legends read "Pressure = 250 psia"
+  // and "Fuel H₂ = 50 mol %" — matching what the rest of the app shows.
+  if (typeof disp === "number" && Number.isFinite(disp)){
+    return formatRowValue(disp, col.unit, col.label);
+  }
   return String(disp);
 }
 
@@ -7951,7 +8025,7 @@ function AutomatePanel(props){
               <tr key={i} style={{borderTop:`1px solid ${C.border}40`}}>
                 <td style={{...previewCellStyle, textAlign:"right"}}>{i+1}</td>
                 {activeVarSpecs.map(s => <td key={s.id} style={{...previewCellStyle, textAlign:"right"}}>
-                  {formatRowValue(toDisplay(s, r[s.id], units))}
+                  {formatRowValue(toDisplay(s, r[s.id], units), unitFor(s, units), s.label)}
                 </td>)}
               </tr>
             ))}

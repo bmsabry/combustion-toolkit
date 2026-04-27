@@ -21,6 +21,8 @@
    etc.). This module just hands it the catalog and the matrix.
    ══════════════════════════════════════════════════════════════════════════ */
 
+import { smartFormat } from "./format";
+
 // ─────────────────────────────────────────────────────────────────────────
 //  Panel ids — must match the tab ids in App.jsx (TABS_BASE).
 // ─────────────────────────────────────────────────────────────────────────
@@ -789,10 +791,17 @@ export function rebalanceFuel(baselineFuel, overrides, fuelBalance){
 //  Format a row value for the Excel sheet. Numbers get reasonable decimal
 //  precision, booleans become "TRUE"/"FALSE", strings pass through.
 // ─────────────────────────────────────────────────────────────────────────
-export function formatRowValue(v){
+export function formatRowValue(v, unit, label){
   if (v == null || (typeof v === "number" && !Number.isFinite(v))) return "";
   if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
   if (typeof v === "number"){
+    // If caller supplied unit/label context, delegate to the unit-aware
+    // smartFormat helper so display matches the project-wide rounding
+    // contract (temperatures → integer, φ → 3 dec, FAR → 4 dec, etc.).
+    if (unit !== undefined || label !== undefined){
+      return smartFormat(v, unit, label);
+    }
+    // No-context fallback for legacy callers (preview table, etc.).
     const a = Math.abs(v);
     if (a >= 1e6) return v.toExponential(3);
     if (a >= 100) return +v.toFixed(2);
