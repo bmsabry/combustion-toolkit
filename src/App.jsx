@@ -5120,15 +5120,18 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
   // sheet records the actual mol % used for that row's calculation.
 
   const variedIds = new Set(varSpecs.map(s => s.id));
-  const variedSpecMap = {};
-  for (const s of varSpecs) variedSpecMap[s.id] = s;
 
-  // 1. Variables relevant to the selected panels, ordered: varied first
-  //    (in the user's selection order), then fixed (in catalog order).
+  // 1. Scalar input variables relevant to the selected panels, ordered:
+  //    varied first (in the user's selection order), then fixed (in catalog
+  //    order). Fuel- and oxidizer-species variables are EXCLUDED from this
+  //    section — composition is reported in dedicated FUEL / OXIDIZER
+  //    sections below where the full per-row composition lives.
   const allRelevant = varsForPanels(effectivePanels);
   const orderedVars = [
-    ...varSpecs,
-    ...allRelevant.filter(v => !variedIds.has(v.id) && v.kind !== "fuel_species"),
+    ...varSpecs.filter(s => s.kind !== "fuel_species" && s.kind !== "ox_species"),
+    ...allRelevant.filter(v => !variedIds.has(v.id)
+                              && v.kind !== "fuel_species"
+                              && v.kind !== "ox_species"),
   ];
 
   const inCols = orderedVars.map(s => ({
@@ -5137,11 +5140,9 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
     unit: unitFor(s, units),
     panel: variedIds.has(s.id) ? "INPUT (varied)" : "INPUT (fixed)",
     convert: v => {
-      // Lookups go through the picker fn so unit conversion fires.
-      // Booleans and enums pass through formatRowValue directly.
-      if (s.kind === "enum" || s.kind === "bool" || s.kind === "fuel_species"){
-        return v;
-      }
+      // Booleans and enums pass through formatRowValue directly; numerics
+      // get unit conversion (SI → display).
+      if (s.kind === "enum" || s.kind === "bool") return v;
       return toDisplay(s, v, units);
     },
     pick: r => {
@@ -5175,7 +5176,11 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
       key: `fuel.${sp}`,
       name: `Fuel ${sp}`,
       unit: "mol %",
-      panel: isVaried ? "FUEL (varied)" : "FUEL (fixed)",
+      // The species the user varies is "FUEL (varied)". Other species are
+      // labelled just "FUEL" — NOT "fixed" — because their values can move
+      // per row when rebalanceFuel adjusts the balance species to keep the
+      // composition summing to 100 %.
+      panel: isVaried ? "FUEL (varied)" : "FUEL",
       convert: v => v,
       pick: r => {
         const fuel = r.__inputs__?.fuel || {};
@@ -5193,7 +5198,9 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
     key: `ox.${sp}`,
     name: `Oxidizer ${sp}`,
     unit: "mol %",
-    panel: "OXIDIZER (fixed)",
+    // Oxidizer composition is not user-varyable yet; same neutral "OXIDIZER"
+    // label as the FUEL section uses for non-varied species.
+    panel: "OXIDIZER",
     convert: v => v,
     pick: r => {
       const ox = r.__inputs__?.ox || {};
@@ -5347,7 +5354,17 @@ function AutomatePanel(props){
         list: cfg.list ?? (def.kind === "enum" ? def.choices.map(c => c.value)
                           : def.kind === "bool" ? [true, false]
                           : null),
-        balanceSpecies: cfg.balanceSpecies,
+        // For fuel-species variables, fall back to the SAME default the
+        // balance-species dropdown displays (CH4 for any non-CH4 species,
+        // N2 if the user is varying CH4 itself). Without this fallback,
+        // varSpecs[id].balanceSpecies stays `undefined` until the user
+        // actively clicks the dropdown — and rebalanceFuel silently bails
+        // (`if (!fuelBalance) return baselineFuel`), dropping every fuel
+        // override and sending unchanged baseline fuel to the backend.
+        balanceSpecies: cfg.balanceSpecies
+          || (def.kind === "fuel_species"
+              ? (def.species === "CH4" ? "N2" : "CH4")
+              : undefined),
       };
       return baseSpec;
     });
