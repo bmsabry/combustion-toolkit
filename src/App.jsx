@@ -4846,11 +4846,21 @@ async function runAutomationMatrix({
     // need to back-solve the canonical phi for whichever the user did
     // pick. After this block, inputs.phi is the truth and downstream
     // panels read from it.
+    //
+    // ALSO preserve the user's swept input on `inputs` so the Excel
+    // writer's picker can find it. The picker reads `inputs[varId]` —
+    // for FAR and T_flame those keys are NOT among the standard input
+    // fields above (only `phi` is), so without these explicit copies
+    // the "INPUT (varied) T_flame" / "INPUT (varied) FAR" columns
+    // would be blank in the workbook even though the back-solve fired
+    // correctly. Same class of bug as fuel.H2 in an earlier round.
     if (Object.prototype.hasOwnProperty.call(row, "FAR")){
+      inputs.FAR = +row.FAR;
       const fp = calcFuelProps(inputs.fuel, inputs.ox);
       const FAR_st = fp.AFR_mass > 0 ? (1 / fp.AFR_mass) : 0.06;
       inputs.phi = (+row.FAR) / Math.max(FAR_st, 1e-9);
     } else if (Object.prototype.hasOwnProperty.call(row, "T_flame")){
+      inputs.T_flame = +row.T_flame;
       // Bisect for the lean phi that produces the target T_flame under
       // complete combustion at the current 3-stream mixed inlet. In
       // Accurate Mode use the backend Cantera bisection (one HTTP call
@@ -4877,6 +4887,26 @@ async function runAutomationMatrix({
           inputs.T_fuel, inputs.T_air,
         );
       }
+    }
+
+    // ── Symmetric: always populate the FAR and T_flame inputs even
+    //   when they're not the varied variable, so the Excel writer's
+    //   "INPUT (fixed) FAR" / "INPUT (fixed) T_flame" columns aren't
+    //   blank when something else drives the operating point. Both are
+    //   derivable from inputs.phi + composition; we use JS for these
+    //   (no extra backend roundtrip) — they're diagnostic columns, not
+    //   the canonical sidebar/panel display, so the ~14 °F JS↔Cantera
+    //   bias on T_flame is acceptable for fixed-column reporting.
+    if (!Object.prototype.hasOwnProperty.call(inputs, "FAR")){
+      const _fp = calcFuelProps(inputs.fuel, inputs.ox);
+      const _FAR_st = _fp.AFR_mass > 0 ? (1 / _fp.AFR_mass) : 0.06;
+      inputs.FAR = inputs.phi * _FAR_st;
+    }
+    if (!Object.prototype.hasOwnProperty.call(inputs, "T_flame")){
+      inputs.T_flame = calcTflameComplete(
+        inputs.fuel, inputs.ox, inputs.phi,
+        inputs.T_fuel, inputs.T_air,
+      );
     }
 
     let rowState = {};
