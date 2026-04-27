@@ -572,6 +572,50 @@ class CycleResponse(BaseModel):
     oxidizer_humid_mol_pct: Dict[str, float]
 
 
+# ---------- solve-phi-for-tflame (Cantera bisection back-solver) ---------
+class SolvePhiForTflameRequest(BaseModel):
+    """Find the lean φ that produces a target T_flame under complete
+    combustion (no dissociation), at the 3-stream adiabatically mixed
+    inlet T. Bisection runs server-side via Cantera so the answer
+    matches everything else the user sees in Accurate Mode (sidebar
+    T_flame, Combustor PSR-PFR panel "T_AD — Complete Combustion",
+    Operations Summary, etc.).
+
+    Lean side only: T_flame_complete(φ) is non-monotonic — peaks near
+    φ ≈ 1, drops on rich side. This solver always returns the unique
+    LEAN solution. If the target is above the achievable peak it
+    saturates at φ_max; below the lean floor it saturates at φ_min.
+    """
+
+    fuel: Dict[str, float] = Field(description="Fuel mole %")
+    oxidizer: Dict[str, float] = Field(description="Oxidizer mole %")
+    T_flame_target_K: float = Field(gt=0, description="Target adiabatic flame T (K), complete combustion")
+    T_fuel_K: float = Field(gt=0, description="Fuel inlet T (K)")
+    T_air_K: float = Field(gt=0, description="Air inlet T (K)")
+    P_bar: float = Field(gt=0, description="Combustor pressure (bar)")
+    WFR: float = Field(default=0.0, ge=0.0, le=2.0)
+    water_mode: str = Field(default="liquid", pattern="^(liquid|steam)$")
+    T_water_K: Optional[float] = Field(default=None, gt=0)
+    phi_min: float = Field(default=0.05, gt=0, le=1.0, description="Lower bound for bisection")
+    phi_max: float = Field(default=1.0, gt=0, le=2.0, description="Upper bound (>1 will not be searched — lean only)")
+    tol: float = Field(default=1e-4, gt=0, description="Absolute φ convergence tolerance")
+
+
+class SolvePhiForTflameResponse(BaseModel):
+    """Result of the back-solve. `phi` is the canonical answer; the rest
+    are diagnostics so the UI can warn the user when the target was
+    outside the achievable range."""
+
+    phi: float
+    T_flame_actual_K: float = Field(description="T_flame computed at the returned φ (should match target unless saturated)")
+    T_flame_target_K: float
+    T_at_phi_min_K: float = Field(description="T_flame at φ_min — minimum achievable")
+    T_at_phi_max_K: float = Field(description="T_flame at φ_max — peak (lean side maximum)")
+    iterations: int = Field(description="Bisection iterations taken")
+    converged: bool = True
+    saturated: str = Field(default="", description='"low" if target ≤ floor, "high" if target ≥ peak, "" otherwise')
+
+
 # ---------- combustor mapping (LMS100 DLE 4-circuit correlation model) ------
 class CombustorMappingRequest(BaseModel):
     """Request for the 4-circuit correlation-based combustor mapping.

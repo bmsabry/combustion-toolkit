@@ -1336,7 +1336,8 @@ function bkClearCache(){
 async function bkCachedFetch(kind, args){
   const fn = {aft:api.calcAFT, flame:api.calcFlameSpeed, combustor:api.calcCombustor,
     exhaust:api.calcExhaust, props:api.calcProps, autoignition:api.calcAutoignition,
-    cycle:api.calcCycle, combustor_mapping:api.calcCombustorMapping}[kind];
+    cycle:api.calcCycle, combustor_mapping:api.calcCombustorMapping,
+    solve_phi_tflame:api.calcSolvePhiForTflame}[kind];
   if(!fn) throw new Error(`bkCachedFetch: unknown kind ${kind}`);
   const cacheKey = `${kind}:${JSON.stringify(args||{})}`;
   const cached = __bkCacheGet(cacheKey);
@@ -4851,11 +4852,31 @@ async function runAutomationMatrix({
       inputs.phi = (+row.FAR) / Math.max(FAR_st, 1e-9);
     } else if (Object.prototype.hasOwnProperty.call(row, "T_flame")){
       // Bisect for the lean phi that produces the target T_flame under
-      // complete combustion at the current 3-stream mixed inlet.
-      inputs.phi = solvePhiForTflame(
-        inputs.fuel, inputs.ox, +row.T_flame,
-        inputs.T_fuel, inputs.T_air,
-      );
+      // complete combustion at the current 3-stream mixed inlet. In
+      // Accurate Mode use the backend Cantera bisection (one HTTP call
+      // per row, ~350 ms — the backend wraps ~15 internal Cantera evals).
+      // In Free Mode use JS bisection (instant).
+      if (accurate){
+        try {
+          const r = await bkCachedFetch("solve_phi_tflame", {
+            fuel: nonzero(inputs.fuel), oxidizer: nonzero(inputs.ox),
+            T_flame_target_K: +row.T_flame,
+            T_fuel_K: inputs.T_fuel, T_air_K: inputs.T_air,
+            P_bar: atmToBar(inputs.P),
+            WFR: inputs.WFR, water_mode: inputs.water_mode,
+          });
+          inputs.phi = (r && Number.isFinite(r.phi))
+            ? r.phi
+            : solvePhiForTflame(inputs.fuel, inputs.ox, +row.T_flame, inputs.T_fuel, inputs.T_air);
+        } catch (_) {
+          inputs.phi = solvePhiForTflame(inputs.fuel, inputs.ox, +row.T_flame, inputs.T_fuel, inputs.T_air);
+        }
+      } else {
+        inputs.phi = solvePhiForTflame(
+          inputs.fuel, inputs.ox, +row.T_flame,
+          inputs.T_fuel, inputs.T_air,
+        );
+      }
     }
 
     let rowState = {};
@@ -6791,15 +6812,28 @@ export default function App(){
                 const tflame_disp = Number.isFinite(tflame_K)
                   ? +uv(units, "T", tflame_K).toFixed(2) : NaN;
                 const fromBackend = accurate && bkSidebarTflame.data?.T_ad_complete > 0;
-                const onTflameCommit = (v) => {
+                const onTflameCommit = async (v) => {
                   const T_target_K = uvI(units, "T", +v);
                   if (!Number.isFinite(T_target_K) || T_target_K <= 0) return;
-                  // Back-solve via JS bisection in BOTH modes — async backend
-                  // bisection would fire 50 calls per slider drag and lock up
-                  // the queue. After commit, the displayed T_flame snaps to
-                  // whichever solver is canonical for the current mode, so
-                  // the user may see a small drift from the typed value when
-                  // accurate mode is on (~10–20 °F, the JS↔Cantera bias).
+                  // Back-solve via the same Cantera path the display uses.
+                  // ONE backend call wraps ~15 internal evaluations (~150 ms
+                  // server-side + ~200 ms wire = ~350 ms total). Falls back
+                  // to JS bisection if the backend errors or in Free Mode.
+                  if (accurate){
+                    try {
+                      const r = await bkCachedFetch("solve_phi_tflame", {
+                        fuel: nonzero(fuel), oxidizer: nonzero(ox),
+                        T_flame_target_K: T_target_K,
+                        T_fuel_K: T_fuel, T_air_K: T0, P_bar: atmToBar(P),
+                        WFR, water_mode: waterMode,
+                      });
+                      if (r && Number.isFinite(r.phi)) {
+                        setPhiClamped(r.phi);
+                        return;
+                      }
+                    } catch (_) { /* fall through to JS */ }
+                  }
+                  // Free Mode (or backend failure) — JS bisection (instant).
                   const phi_solved = solvePhiForTflame(fuel, ox, T_target_K, T_fuel, T0);
                   setPhiClamped(phi_solved);
                 };

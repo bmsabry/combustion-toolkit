@@ -169,6 +169,11 @@ export async function calcCycle(payload) {
 export async function calcCombustorMapping(payload) {
   return request("/calc/combustor_mapping", { method: "POST", body: payload, auth: true });
 }
+// Backend bisection: lean phi that produces a target T_flame under
+// complete combustion. ONE network call wraps ~15 internal Cantera evals.
+export async function calcSolvePhiForTflame(payload) {
+  return request("/calc/solve-phi-for-tflame", { method: "POST", body: payload, auth: true });
+}
 
 // ---- health ----
 export async function health() {

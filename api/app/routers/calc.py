@@ -28,12 +28,15 @@ from ..schemas import (
     FlameSpeedSweepResponse,
     PropsRequest,
     PropsResponse,
+    SolvePhiForTflameRequest,
+    SolvePhiForTflameResponse,
 )
 from ..science import (
     aft,
     autoignition,
     combustor,
     combustor_mapping,
+    complete_combustion,
     cycle,
     exhaust,
     flame_speed,
@@ -265,3 +268,101 @@ def calc_autoignition(
         body.water_mode,
     )
     return AutoignitionResponse(**result)
+
+
+# ───────────────────────────────────────────────────────────────────────
+#  /calc/solve-phi-for-tflame
+#  Bisect on phi (lean side only) to find the equivalence ratio that
+#  produces a target adiabatic flame temperature under complete
+#  combustion. Each inner evaluation calls the same complete_combustion
+#  solver the AFT/Combustor panels use, so the answer is consistent
+#  with everything else the user sees in Accurate Mode. Bisection runs
+#  inside the single-thread Cantera pool.
+# ───────────────────────────────────────────────────────────────────────
+def _solve_phi_for_tflame_impl(
+    fuel,
+    oxidizer,
+    T_target,
+    T_fuel,
+    T_air,
+    P_bar,
+    WFR,
+    water_mode,
+    T_water_K,
+    phi_min,
+    phi_max,
+    tol,
+):
+    def tflame_at(phi: float) -> float:
+        r = complete_combustion.run(
+            fuel, oxidizer, float(phi), float(T_fuel), float(T_air), float(P_bar),
+            WFR=float(WFR), water_mode=water_mode, T_water_K=T_water_K,
+        )
+        # complete_combustion.run returns a dict whose primary T field is
+        # `T_ad` (matches AFTResponse.T_ad_complete shape).
+        return float(r.get("T_ad", 0.0))
+
+    # Lean-only search: phi(peak) is near 1.0, so cap hi at min(phi_max, 1.0).
+    lo = float(phi_min)
+    hi = min(float(phi_max), 1.0)
+    T_lo = tflame_at(lo)
+    T_hi = tflame_at(hi)
+
+    # Saturation: target outside the achievable lean range.
+    if T_target <= T_lo:
+        return {
+            "phi": lo, "T_flame_actual_K": T_lo,
+            "T_flame_target_K": T_target,
+            "T_at_phi_min_K": T_lo, "T_at_phi_max_K": T_hi,
+            "iterations": 1, "converged": True, "saturated": "low",
+        }
+    if T_target >= T_hi:
+        return {
+            "phi": hi, "T_flame_actual_K": T_hi,
+            "T_flame_target_K": T_target,
+            "T_at_phi_min_K": T_lo, "T_at_phi_max_K": T_hi,
+            "iterations": 1, "converged": True, "saturated": "high",
+        }
+
+    # Bisect — T_flame is monotonic-increasing on the lean side.
+    iters = 0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        T_mid = tflame_at(mid)
+        iters += 1
+        if T_mid < T_target:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < tol:
+            break
+    phi_solved = 0.5 * (lo + hi)
+    T_actual = tflame_at(phi_solved)
+    return {
+        "phi": phi_solved, "T_flame_actual_K": T_actual,
+        "T_flame_target_K": T_target,
+        "T_at_phi_min_K": T_lo, "T_at_phi_max_K": T_hi,
+        "iterations": iters, "converged": True, "saturated": "",
+    }
+
+
+@router.post("/solve-phi-for-tflame", response_model=SolvePhiForTflameResponse)
+def calc_solve_phi_for_tflame(
+    body: SolvePhiForTflameRequest, _: User = Depends(require_full_subscription),
+) -> SolvePhiForTflameResponse:
+    result = _run_in_pool(
+        _solve_phi_for_tflame_impl,
+        body.fuel,
+        body.oxidizer,
+        body.T_flame_target_K,
+        body.T_fuel_K,
+        body.T_air_K,
+        body.P_bar,
+        body.WFR,
+        body.water_mode,
+        body.T_water_K,
+        body.phi_min,
+        body.phi_max,
+        body.tol,
+    )
+    return SolvePhiForTflameResponse(**result)
