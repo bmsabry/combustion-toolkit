@@ -4757,8 +4757,9 @@ async function runAutomationMatrix({
       load_pct: override(row, "load_pct", baseline.load_pct),
       T_cool:   override(row, "T_cool",   baseline.T_cool),
       com_air_frac: override(row, "com_air_frac", baseline.com_air_frac),
-      bleed_open_pct: override(row, "bleed_open_pct", baseline.bleed_open_pct),
-      emissionsMode:  override(row, "emissionsMode",  baseline.emissionsMode),
+      bleed_open_pct:       override(row, "bleed_open_pct",       baseline.bleed_open_pct),
+      bleed_valve_size_pct: override(row, "bleed_valve_size_pct", baseline.bleed_valve_size_pct),
+      emissionsMode:        override(row, "emissionsMode",        baseline.emissionsMode),
       // mapping
       mapW36w3:  override(row, "mapW36w3",  baseline.mapW36w3),
       mapPhiIP:  override(row, "mapPhiIP",  baseline.mapPhiIP),
@@ -4766,6 +4767,8 @@ async function runAutomationMatrix({
       mapPhiIM:  override(row, "mapPhiIM",  baseline.mapPhiIM),
       mapFracIP: override(row, "mapFracIP", baseline.mapFracIP),
       mapFracOP: override(row, "mapFracOP", baseline.mapFracOP),
+      mapFracIM: override(row, "mapFracIM", baseline.mapFracIM),
+      mapFracOM: override(row, "mapFracOM", baseline.mapFracOM),
       // psr-pfr
       tau_psr: override(row, "tau_psr", baseline.tau_psr),
       L_pfr:   override(row, "L_pfr",   baseline.L_pfr),
@@ -4881,6 +4884,14 @@ async function runCycleForAutomation(inp, accurate){
     // still work; the user is told in the UI that Cycle requires Accurate.
     return null;
   }
+  // Compute the actual bleed_air_frac the backend needs, from the user's
+  // open % and valve size %. Same formula the rest of the app uses
+  // (App.jsx ~4251). Clamped to the backend's [0, 0.5] range.
+  const bleed_open  = +inp.bleed_open_pct       || 0;
+  const bleed_valve = +inp.bleed_valve_size_pct || 0;
+  const bleed_air_frac = Math.max(0, Math.min(0.50,
+    (bleed_open / 100) * (bleed_valve / 100)
+  ));
   return await bkCachedFetch("cycle", {
     engine: inp.engine,
     P_amb_bar: inp.P_amb,
@@ -4894,7 +4905,7 @@ async function runCycleForAutomation(inp, accurate){
     WFR:       inp.WFR,
     water_mode: inp.water_mode,
     T_water_K: 288.15,
-    bleed_air_frac: 0,  // server resolves bleed from valve schedule
+    bleed_air_frac,
   });
 }
 
@@ -4909,10 +4920,14 @@ async function runMappingForAutomation(inp, cycleResult, accurate){
     W3_kg_s: cycleResult.mdot_air_post_bleed_kg_s || cycleResult.mdot_air_kg_s,
     W36_over_W3: inp.mapW36w3,
     com_air_frac: cycleResult.combustor_air_frac || inp.com_air_frac,
+    // All four circuit air fractions are now driven by the user's baseline /
+    // matrix overrides (previously frac_IM_pct was hardcoded to 39.9 and
+    // frac_OM_pct was a derived remainder, so user variations of IM/OM had
+    // no effect). The backend validates that they sum to 100.
     frac_IP_pct: inp.mapFracIP,
     frac_OP_pct: inp.mapFracOP,
-    frac_IM_pct: 39.9,
-    frac_OM_pct: 100 - inp.mapFracIP - inp.mapFracOP - 39.9,
+    frac_IM_pct: inp.mapFracIM,
+    frac_OM_pct: inp.mapFracOM,
     phi_IP: inp.mapPhiIP,
     phi_OP: inp.mapPhiOP,
     phi_IM: inp.mapPhiIM,
@@ -4981,7 +4996,7 @@ async function runExhaustForAutomation(inp, accurate){
 
 async function runPSRForAutomation(inp, accurate){
   if (accurate){
-    return await bkCachedFetch("combustor", {
+    const r = await bkCachedFetch("combustor", {
       fuel: nonzero(inp.fuel), oxidizer: nonzero(inp.ox),
       phi: inp.phi, T0: inp.T_air, P: atmToBar(inp.P),
       tau_psr_s: inp.tau_psr / 1000,
@@ -4994,12 +5009,34 @@ async function runPSRForAutomation(inp, accurate){
       mechanism: "gri30",
       WFR: inp.WFR, water_mode: inp.water_mode,
     });
+    // ── Adapt the backend response to the canonical picker shape ──
+    // Backend uses the verbose `_vd_` infix (volumetric dry) for ppm and
+    // `_dry_` suffix for O2 percentages. We normalize to short names so the
+    // AUTO_OUTPUTS pickers stay simple and free-mode aligned. Same pattern
+    // the existing CombustorPanel uses (App.jsx ~1791 backendNet).
+    return {
+      T_psr:        r.T_psr,
+      T_exit:       r.T_exit,
+      NO_ppm_psr:   r.NO_ppm_vd_psr,
+      NO_ppm_exit:  r.NO_ppm_vd_exit,
+      CO_ppm_psr:   r.CO_ppm_vd_psr,
+      CO_ppm_exit:  r.CO_ppm_vd_exit,
+      NO_ppm_15O2:  r.NO_ppm_15O2,
+      CO_ppm_15O2:  r.CO_ppm_15O2,
+      O2_pct:       r.O2_pct_dry_exit,  // post-burnout dry O2
+      conv_psr:     r.conv_psr,
+      tau_pfr_ms:   r.tau_pfr_ms,
+      tau_total_ms: r.tau_total_ms,
+    };
   }
-  // Free mode: the JS reduced-order PSR-PFR
-  return calcCombustorNetwork(
+  // Free mode: calcCombustorNetwork returns the short names natively, BUT
+  // it has no separate PFR-exit T (the JS solver assumes adiabatic PFR, so
+  // T at the exit ≡ T_psr). Alias T_exit = T_psr so the picker works.
+  const free = calcCombustorNetwork(
     inp.fuel, inp.ox, inp.phi, inp.T_air, inp.P,
     inp.tau_psr, inp.L_pfr, inp.V_pfr, inp.T_fuel, inp.T_air,
   );
+  return { ...free, T_exit: free.T_psr };
 }
 
 async function runFlameForAutomation(inp, accurate){
@@ -6546,11 +6583,16 @@ export default function App(){
             {tab==="automate"&&<AutomatePanel baseline={{
               // Snapshot every input the runner needs as a per-row baseline.
               // Anything the user doesn't vary stays at this value across rows.
+              // Field names here MUST match the override() keys used in the
+              // runner (App.jsx runAutomationMatrix inputs object).
               phi, T_air:T0, T_fuel, P, WFR, water_mode:waterMode,
               engine:cycleEngine, P_amb:cyclePamb, T_amb:cycleTamb, RH:cycleRH,
               load_pct:cycleLoad, T_cool:cycleTcool, com_air_frac:cycleAirFrac,
-              bleed_open_pct:bleedOpenPct, emissionsMode,
-              mapW36w3, mapPhiIP, mapPhiOP, mapPhiIM, mapFracIP, mapFracOP,
+              bleed_open_pct:bleedOpenPct,
+              bleed_valve_size_pct:bleedValveSizePct,
+              emissionsMode,
+              mapW36w3, mapPhiIP, mapPhiOP, mapPhiIM,
+              mapFracIP, mapFracOP, mapFracIM, mapFracOM,
               tau_psr, L_pfr, V_pfr, heatLossFrac,
               velocity, Lchar, Dfh, Lpremix, Vpremix,
               measO2, measCO2,

@@ -168,7 +168,12 @@ export const AUTO_VARS = [
   { id: "bleed_open_pct", label: "Bleed Valve Open",
     panels: ["cycle"], kind: "number",
     default: 0, range: [0, 100], step: 5, unit_si: "%", unit_en: "%",
-    desc: "Manual-mode bleed valve open %. Auto mode follows load schedule." },
+    desc: "Bleed valve open %. Effective bleed_air_frac = (open % × valve size %) ÷ 10000. Always treated as MANUAL during automation — auto-schedule logic is bypassed." },
+
+  { id: "bleed_valve_size_pct", label: "Bleed Valve Size (max bleed)",
+    panels: ["cycle"], kind: "number",
+    default: 3.3, range: [0, 100], step: 0.5, unit_si: "%", unit_en: "%",
+    desc: "Maximum bleed % at fully-open valve. Combines with bleed_open_pct to set the actual fraction the cycle deck dumps to ambient." },
 
   { id: "emissionsMode", label: "Emissions Mode (BD7 ladder)",
     panels: ["cycle", "mapping"], kind: "bool",
@@ -205,6 +210,16 @@ export const AUTO_VARS = [
     panels: ["mapping"], kind: "number",
     default: 2.2, range: [0.5, 30], step: 0.5, unit_si: "%", unit_en: "%",
     desc: "Outer pilot air fraction (% of flame air)." },
+
+  { id: "mapFracIM", label: "Air % Inner Main",
+    panels: ["mapping"], kind: "number",
+    default: 39.9, range: [10, 80], step: 1.0, unit_si: "%", unit_en: "%",
+    desc: "Inner main air fraction (% of flame air). IP+OP+IM+OM should sum to 100." },
+
+  { id: "mapFracOM", label: "Air % Outer Main",
+    panels: ["mapping"], kind: "number",
+    default: 55.6, range: [10, 80], step: 1.0, unit_si: "%", unit_en: "%",
+    desc: "Outer main air fraction (% of flame air). IP+OP+IM+OM should sum to 100." },
 
   // ── PSR-PFR Combustor ──
   { id: "tau_psr", label: "τ_PSR",
@@ -400,17 +415,29 @@ export const AUTO_OUTPUTS = [
   { id: "MW_net",       label: "MW Net",            panel: "cycle", unit: "MW",       pick: r => r.cycle?.MW_net },
   { id: "MW_gross",     label: "MW Gross",          panel: "cycle", unit: "MW",       pick: r => r.cycle?.MW_gross },
   { id: "MW_cap",       label: "MW Cap",            panel: "cycle", unit: "MW",       pick: r => r.cycle?.MW_cap },
-  { id: "eta_LHV_pct",  label: "η LHV",             panel: "cycle", unit: "%",        pick: r => 100*(r.cycle?.eta_LHV ?? r.cycle?.efficiency_LHV ?? 0) },
-  { id: "HR_BTU_kWh",   label: "Heat Rate",         panel: "cycle", unit: "BTU/kWh",  pick: r => r.cycle?.HR_BTU_per_kWh },
+  // η_LHV — backend field is `efficiency_LHV` (a fraction 0–1). Multiply by
+  // 100 for %. The legacy fallback to `eta_LHV` was dead code (no such field).
+  { id: "eta_LHV_pct",  label: "η LHV",             panel: "cycle", unit: "%",        pick: r => 100*(r.cycle?.efficiency_LHV ?? 0) },
+  // Heat rate — backend returns kJ/kWh; we expose kJ/kWh in SI mode and
+  // convert to BTU/kWh in ENG mode (1 kJ = 0.9478 BTU).
+  { id: "HR",           label: "Heat Rate",         panel: "cycle",
+    unit_si: "kJ/kWh", unit_en: "BTU/kWh",
+    siToEn: x => x * 0.9478,
+    pick: r => r.cycle?.heat_rate_kJ_per_kWh },
   { id: "T1",           label: "T1 (ambient)",      panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T1_K },
   { id: "T2",           label: "T2 (LPC exit)",     panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T2_K },
-  { id: "T2c",          label: "T2c (IC exit)",     panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T2c_K },
+  // Backend uses snake_case `T2_5_K` for intercooler exit (LMS100 only);
+  // the label keeps the conventional "T2c" name.
+  { id: "T2c",          label: "T2c (IC exit)",     panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T2_5_K },
   { id: "T3",           label: "T3 (combustor in)", panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T3_K },
   { id: "T4",           label: "T4 (firing)",       panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T4_K },
   { id: "T5",           label: "T5 (turbine exit)", panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T5_K },
   { id: "T_Bulk",       label: "T_Bulk (flame)",    panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T_Bulk_K },
   { id: "P3",           label: "P3",                panel: "cycle", unit_si: "bar", unit_en: "psia", siToEn: bar_to_psia, pick: r => r.cycle?.P3_bar },
-  { id: "P4",           label: "P4",                panel: "cycle", unit_si: "bar", unit_en: "psia", siToEn: bar_to_psia, pick: r => r.cycle?.P4_bar },
+  // The backend doesn't return P4 directly (combustor exit P after the 4 %
+  // ΔP isn't reported); P_exhaust_bar (turbine exit, 1.05 bar fixed) is the
+  // closest available station. Renamed accordingly.
+  { id: "P_exhaust",    label: "P_exhaust (turbine exit)", panel: "cycle", unit_si: "bar", unit_en: "psia", siToEn: bar_to_psia, pick: r => r.cycle?.P_exhaust_bar },
   { id: "mdot_air",     label: "mdot air (post-bleed)", panel: "cycle", unit_si: "kg/s", unit_en: "lb/s", siToEn: kgs_to_lbs, pick: r => r.cycle?.mdot_air_post_bleed_kg_s ?? r.cycle?.mdot_air_kg_s },
   { id: "mdot_fuel",    label: "mdot fuel",         panel: "cycle", unit_si: "kg/s", unit_en: "lb/s", siToEn: kgs_to_lbs, pick: r => r.cycle?.mdot_fuel_kg_s },
   { id: "mdot_bleed",   label: "mdot bleed",        panel: "cycle", unit_si: "kg/s", unit_en: "lb/s", siToEn: kgs_to_lbs, pick: r => r.cycle?.mdot_bleed_kg_s },
@@ -473,14 +500,19 @@ export const AUTO_OUTPUTS = [
   { id: "exh_FAR_from_CO2",   label: "FAR (mass) from CO₂", panel: "exhaust", unit: "—", pick: r => r.exh_co2?.FAR_mass },
 
   // ── PSR-PFR Combustor ──
+  // The runner normalizes both Free (calcCombustorNetwork) and Accurate
+  // (Cantera /calc/combustor) responses to the SAME field-name shape, so
+  // pickers can be simple. Backend uses verbose `_vd_` infix and `_dry_`
+  // suffix; we strip those for the picker. T_exit aliases to T_psr in Free
+  // mode (no separate PFR exit T in the JS reduced-order solver).
   { id: "T_psr",              label: "T_PSR",        panel: "combustor", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.psr?.T_psr },
-  { id: "T_exit",             label: "T_exit (PFR)", panel: "combustor", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.psr?.T_ad },
-  { id: "psr_NO_ppm",         label: "NOx PSR",      panel: "combustor", unit: "ppm", pick: r => r.psr?.NO_ppm_psr },
-  { id: "psr_CO_ppm",         label: "CO PSR",       panel: "combustor", unit: "ppm", pick: r => r.psr?.CO_ppm_psr },
-  { id: "exit_NO_ppm",        label: "NOx exit",     panel: "combustor", unit: "ppm", pick: r => r.psr?.NO_ppm_exit },
-  { id: "exit_CO_ppm",        label: "CO exit",      panel: "combustor", unit: "ppm", pick: r => r.psr?.CO_ppm_exit },
-  { id: "NOx_15_psr",         label: "NOx @ 15% O₂", panel: "combustor", unit: "ppmvd",pick: r => r.psr?.NO_ppm_15O2 },
-  { id: "CO_15_psr",          label: "CO @ 15% O₂",  panel: "combustor", unit: "ppmvd",pick: r => r.psr?.CO_ppm_15O2 },
+  { id: "T_exit",             label: "T_exit (PFR)", panel: "combustor", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.psr?.T_exit },
+  { id: "psr_NO_ppm",         label: "NOx PSR",      panel: "combustor", unit: "ppmvd", pick: r => r.psr?.NO_ppm_psr },
+  { id: "psr_CO_ppm",         label: "CO PSR",       panel: "combustor", unit: "ppmvd", pick: r => r.psr?.CO_ppm_psr },
+  { id: "exit_NO_ppm",        label: "NOx exit",     panel: "combustor", unit: "ppmvd", pick: r => r.psr?.NO_ppm_exit },
+  { id: "exit_CO_ppm",        label: "CO exit",      panel: "combustor", unit: "ppmvd", pick: r => r.psr?.CO_ppm_exit },
+  { id: "NOx_15_psr",         label: "NOx @ 15% O₂", panel: "combustor", unit: "ppmvd", pick: r => r.psr?.NO_ppm_15O2 },
+  { id: "CO_15_psr",          label: "CO @ 15% O₂",  panel: "combustor", unit: "ppmvd", pick: r => r.psr?.CO_ppm_15O2 },
   { id: "O2_dry_pct",         label: "Exhaust O₂ (dry)", panel: "combustor", unit: "%", pick: r => r.psr?.O2_pct },
   { id: "conv_psr_pct",       label: "PSR conversion", panel: "combustor", unit: "%", pick: r => r.psr?.conv_psr },
   { id: "tau_pfr_ms",         label: "τ_PFR",        panel: "combustor", unit: "ms",  pick: r => r.psr?.tau_pfr_ms },
