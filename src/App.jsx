@@ -415,7 +415,23 @@ const _PSR_SEED_LBL={unreacted:"Unreacted (cold)",hot_eq:"Hot equilibrium",cold_
 const _EQ_LBL={HP:"HP (constant enthalpy+pressure)",UV:"UV (constant internal energy+volume)",TP:"TP (constant temperature+pressure)"};
 const _INT_LBL={steady_state:"Steady-state solver",chunked:"Chunked time advance (default)",step:"Step-by-step"};
 const _MECH_LBL={gri30:"GRI-Mech 3.0 (53 species, 325 rxns)",glarborg:"Glarborg 2018 (151 species, 1395 rxns)",usc2:"USC-Mech II (coming soon)",aramco30:"AramcoMech 3.0 (coming soon)"};
-function exportToExcel(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult,mappingTables}=ps||{};
+// Top-level entrypoint: build TWO workbooks (one in SI, one in English) and
+// download both. The actual workbook construction lives in
+// _buildExportWorkbook below — this wrapper just calls it twice with the two
+// unit systems and writes each file.
+function exportToExcel(fuel,ox,phi,T0,P,_unitsIgnored,ps){
+  for(const _u of ["SI","ENG"]){
+    const wb=_buildExportWorkbook(fuel,ox,phi,T0,P,_u,ps);
+    const _suffix=_u==="SI"?"SI":"English";
+    XLSX.writeFile(wb,`ProReadyEngineer_CombustionReport_${_suffix}.xlsx`);
+  }
+}
+
+function _buildExportWorkbook(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult,mappingTables,
+  emissionsMode=true,mapW36w3=0.75,mapFracIP=2.3,mapFracOP=2.2,mapFracIM=39.9,mapFracOM=55.6,
+  mapPhiIP=0.25,mapPhiOP=0.65,mapPhiIM=0.50,mapResult=null,emTfMults=null,
+  linkT3=true,linkP3=true,linkFAR=true,loadStepPct=5,bleedStepPct=15
+}=ps||{};
   // Adiabatic fuel/air mix T that's used everywhere downstream
   const T_mix_phi=mixT(fuel,ox,phi,T_fuel??T0,T_air??T0);
   const aft=calcAFTx(fuel,ox,phi,T_mix_phi,P,combMode);
@@ -583,6 +599,99 @@ if(cycleResult){
   XLSX.utils.book_append_sheet(wb,wsC,"Cycle Results");
 }
 
+// ══════════════════ COMBUSTOR MAPPING (4-circuit DLE) ══════════════════
+// Captures every mapping-panel input and the bkMap correlation result so
+// the export reproduces what the user sees on the panel + Operations Summary.
+{
+  const fmtN=(v,d=3)=>(Number.isFinite(v)?(+v).toFixed(d):"n/a");
+  const mr=mapResult;
+  const mc=mr?.circuits||{};
+  const ma=mr?.air_accounting||{};
+  const md=mr?.derived||{};
+  const mFinal=mr?.correlations||{};
+  const m100  =mr?.correlations_100pct_load||{};
+  const mLin  =mr?.correlations_linear||{};
+  const sMP=[
+    ["═══ COMBUSTOR MAPPING — 4-CIRCUIT DLE (LMS100) ═══"],
+    ["Correlation-based emissions and dynamics. No reactor-network kinetics."],[],
+    ["═══ OPERATING MODE ═══"],
+    ["Parameter","Value","Unit"],
+    ["Emissions Mode","ON (DLE staging)" ,"—"],
+    ["Emissions Mode toggle",emissionsMode?"ENABLED":"DISABLED","—"],
+    [],
+    ["═══ AIR-FLOW ALLOCATION INPUTS ═══"],
+    ["Parameter","Value","Unit"],
+    ["W36 / W3 (compressor → combustor)",fmtN(mapW36w3,4),"—"],
+    ["Combustor air fraction (flame / W36)",fmtN(cycleAirFrac,4),"—"],
+    ["Inner Pilot air %",fmtN(mapFracIP,2),"% of flame air"],
+    ["Outer Pilot air %",fmtN(mapFracOP,2),"% of flame air"],
+    ["Inner Main air %", fmtN(mapFracIM,2),"% of flame air"],
+    ["Outer Main air %", fmtN(mapFracOM,2),"% of flame air"],
+    [],
+    ["═══ CIRCUIT EQUIVALENCE-RATIO INPUTS ═══"],
+    ["Parameter","Value","Unit"],
+    ["φ_IP (Inner Pilot)",fmtN(mapPhiIP,4),"—"],
+    ["φ_OP (Outer Pilot)",fmtN(mapPhiOP,4),"—"],
+    ["φ_IM (Inner Main)", fmtN(mapPhiIM,4),"—"],
+    ["φ_OM (Outer Main, residual)",fmtN(mr?.phi_OM,4),"— (computed)"],
+    [],
+    ["═══ EMISSIONS TRANSFER FUNCTION (post-multipliers per BRNDMD) ═══"],
+    ["BRNDMD","NOx mult","CO mult","PX36 mult"],
+    ...[7,6,4,2].map(k=>{
+      const e=emTfMults?.[k]||{};
+      return [k,fmtN(e.NOx,3),fmtN(e.CO,3),fmtN(e.PX36,3)];
+    }),
+    [],
+    ["═══ CIRCUIT RESULTS (mass flows, T_AFT) ═══"],
+    ["Circuit","φ","m_air (kg/s)","m_fuel (kg/s)","T_AFT_complete ("+uu(u,"T")+")"],
+    ...["IP","OP","IM","OM"].map(k=>{
+      const c=mc[k]||{};
+      return [k,fmtN(c.phi,4),fmtN(c.m_air_kg_s,4),fmtN(c.m_fuel_kg_s,5),
+        Number.isFinite(c.T_AFT_complete_K)?fmtN(uv(u,"T",c.T_AFT_complete_K),1):"n/a"];
+    }),
+    [],
+    ["═══ AIR ACCOUNTING ═══"],
+    ["Parameter","Value","Unit"],
+    ["W3 (compressor air post-bleed)",fmtN(ma.W3_kg_s,3),"kg/s"],
+    ["W36 (combustor inflow)",fmtN(ma.W36_kg_s,3),"kg/s"],
+    ["Flame air (W36 × com_air_frac)",fmtN(ma.flame_air_kg_s,3),"kg/s"],
+    ["Cooling air (W36 × (1 − com_air_frac))",fmtN(ma.cooling_air_kg_s,3),"kg/s"],
+    ["Fuel residual (mass-balance check)",fmtN(mr?.fuel_residual_kg_s,6),"kg/s — should ≈ 0"],
+    ["FAR_stoich",fmtN(mr?.FAR_stoich,5),"—"],
+    [],
+    ["═══ DERIVED CORRELATION INPUTS ═══"],
+    ["Parameter","Value","Unit"],
+    ["DT_Main = (T_AFT_OM − T_AFT_IM) × 1.8",fmtN(md.DT_Main_F,1),"°F (always F internally)"],
+    ["Tflame (mass-flow weighted, all 4 circuits)",
+      Number.isFinite(md.Tflame_K)?fmtN(uv(u,"T",md.Tflame_K),1):"n/a",uu(u,"T")],
+    ["T3 (compressor exit)",
+      Number.isFinite(cycleResult?.T3_K)?fmtN(uv(u,"T",cycleResult.T3_K),1):"n/a",uu(u,"T")],
+    ["P3",fmtN(cycleResult?.P3_bar,3),"bar"],
+    ["C3-effective fuel mole %",fmtN(md.C3_effective_pct,3),"%"],
+    ["N₂ in fuel",fmtN(md.N2_pct,3),"%"],
+    ["φ_OP multiplier (Step 2)",fmtN(md.phi_OP_mult,4),"—"],
+    ["P3 ratio (P3 / 638 psia)",fmtN(md.pressure_ratio,4),"—"],
+    [],
+    ["═══ CORRELATION OUTPUTS — STAGE BY STAGE ═══"],
+    ["Stage","NOx15 (ppmvd)","CO15 (ppmvd)","PX36_SEL (psi)","PX36_SEL_HI (psi)"],
+    ["Linear (after Step 1)",     fmtN(mLin.NOx15,3),fmtN(mLin.CO15,2),fmtN(mLin.PX36_SEL,4),fmtN(mLin.PX36_SEL_HI,4)],
+    ["After φ_OP mult (Step 2)",  fmtN(m100.NOx15,3),fmtN(m100.CO15,2),fmtN(m100.PX36_SEL,4),fmtN(m100.PX36_SEL_HI,4)],
+    ["Final (after P3 scaling)",  fmtN(mFinal.NOx15,3),fmtN(mFinal.CO15,2),fmtN(mFinal.PX36_SEL,4),fmtN(mFinal.PX36_SEL_HI,4)],
+    [],
+    ["═══ REFERENCE DESIGN POINT (LMS100 DLE, 100% load, 44 °F) ═══"],
+    ["Parameter","Value","Unit"],
+    ["NOx15 ref",fmtN(mr?.reference?.values?.NOx15,2),"ppmvd"],
+    ["CO15 ref", fmtN(mr?.reference?.values?.CO15,2),"ppmvd"],
+    ["PX36_SEL ref",   fmtN(mr?.reference?.values?.PX36_SEL,3),"psi"],
+    ["PX36_SEL_HI ref",fmtN(mr?.reference?.values?.PX36_SEL_HI,3),"psi"],
+    ["DT_Main ref","450","°F"],["Phi_OP ref","0.65","—"],["C3 ref","7.5","%"],
+    ["N₂ ref","0.5","%"],["Tflame ref","3035","°F"],["T3 ref","700","°F"],["P3 ref","638","psia"],
+  ];
+  const wsMP=XLSX.utils.aoa_to_sheet(sMP);
+  wsMP["!cols"]=[{wch:42},{wch:18},{wch:18},{wch:22},{wch:22}];
+  XLSX.utils.book_append_sheet(wb,wsMP,"Combustor Mapping");
+}
+
 // ══════════════════ ASSUMPTIONS ══════════════════
 // Mirrors the 12 groups from the in-app Assumptions panel. Keep these two
 // in sync — if a number changes in cycle.py it must be updated both places.
@@ -659,26 +768,81 @@ const sA=[
   ["","Compressor work","Cantera enthalpy difference","Humid-air real-gas."],
   ["","Thread model","Single-thread Cantera pool","Serialized server-side. 180 s / 540 s timeouts."],
   ["","Units","SI internal","UI converts to ENG on display."],
+
+  ["13. Compressor Bleed","Modes","AUTO  /  MANUAL","AUTO: open % vs Load. MANUAL: user sets directly."],
+  ["","Valve size","User input, 0–100% of W3","Sets max bleed_air_frac."],
+  ["","Destination","Dumped to ambient","No re-injection. mdot_air_post_bleed = W3·(1 − bleed_air_frac)."],
+  ["","T4 hold","Iterative on bleed_air_frac","Converges so T4 = deck commanded value. Reports bleed_iters / bleed_converged."],
+
+  ["14. Water Injection","Inputs","WFR (kg_water/kg_fuel) + mode","WFR = 0 disables. Mode: liquid (h_fg) or steam (gas at T_air)."],
+  ["","Mixed inlet T","3-stream enthalpy balance","h_air + WFR·h_water + (1/AFR)·h_fuel = mixed h."],
+  ["","Liquid","Absorbs latent + sensible","h_fg = 2.257 MJ/kg at 100 °C."],
+  ["","Steam","Gas phase, no h_fg","Joins inlet stream as superheated H2O at T_air."],
+  ["","Cycle effect","Water passes through turbine","Adds turbine mdot. Power ↑, η ↓."],
+
+  ["15. Combustor Mapping (LMS100 4-circuit DLE)","Reference design point","100% load, 44 °F","NOx15=45, CO15=180, PX36=4.0, PX36_HI=2.2 / DT_Main=450°F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035°F · T3=700°F · P3=638 psia."],
+  ["","Per-circuit T_AFT","complete_combustion(T3, P3, φ)","Cantera complete-combustion (no dissociation)."],
+  ["","OM circuit","Residual fuel mass","m_fuel_OM = total − (IP+OP+IM). φ_OM solved & clamped to [0,3]."],
+  ["","Linear correction (Step 1)","Y = Y_ref + Σ ∂Y/∂xₖ · (xₖ − xₖ_ref)","Vars: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (≥0.25 floor), Tflame, T3."],
+  ["","Phi_OP multiplier (Step 2)","HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45","Linear interp on the 0.10 band. PX36_SEL_HI only."],
+  ["","P3 scaling (Step 3)","(P3/638)^exp","NOx15=0.467, CO15=−1.0, SEL=0.50, SEL_HI=0.44."],
+  ["","C3-effective","0.8·(C2H6+C2H4+C2H2) + (C3+...+C8)","C2-class at 0.8; C3 and heavier at 1.0."],
+  ["","Tflame derivative (NOx)","Piecewise: 0.12 ≥2850, 0.04 between, 0 below 2750","Integrated continuously from T_ref = 3035 °F."],
+  ["","Emissions Transfer Function","Per-BRNDMD post-multipliers on NOx, CO, PX36","User-trim knob; default 1.0. PX36_SEL_HI not multiplied."],
+
+  ["16. Live Mapping (HMI sim)","Tick rate","1 Hz","10-minute rolling buffer (600 samples)."],
+  ["","Instrument response","Transport delay + smoothstep","display(t) = lookup(t − deadT) blended over transT. Per-metric deadT/transT: PX36 0/1, NOx/CO 83/7, MWI_WIM 2/5, MWI_GC 415/5, MW 0/7."],
+  ["","Noise","Per-metric, mean-band dependent","PX36: random step 1–9% every 1–2 s. NOx/CO: 20-s sine. MWI: 2.5% white + 2-min sine."],
+  ["","PX36 protection trigger","px36 (display) > 5.5 psi","BD4 50 s → BD6 30 s → BD7. Up to 3 cycles before LOCK at BD4."],
+  ["","Stochastic trips","phi_IP / phi_OP exceeding load-interp band","Random threshold rolled per band entry. Trip → all targets ramp to 0; 4-hour lockout banner."],
+  ["","Emissions Mode staging","BD4 → 50 s → BD6 → 30 s → BD7","Triggered when Emissions Mode toggles ON. Endpoint adapts to current MW (skip / stop at BD6 / full)."],
 ];
 const wsA=XLSX.utils.aoa_to_sheet(sA);
 wsA["!cols"]=[{wch:34},{wch:36},{wch:40},{wch:52}];
 XLSX.utils.book_append_sheet(wb,wsA,"Assumptions");
 
 // ══════════════════ MAPPING TABLES ══════════════════
+// Tables are stored in °F internally. SI export converts to K, English keeps °F.
 if(mappingTables){
-  const sM=[["═══ COMBUSTOR MAPPING TABLES — φ lookup by T3 × BRNDMD ═══"],[],
-    ["BRNDMD","T3 (°F)","φ_OuterPilot","φ_InnerPilot","φ_InnerMain"]];
+  const _t3Header=u==="SI"?"T3 (K)":"T3 (°F)";
+  const _t3Conv=u==="SI"?(F=>+(((+F-32)*5/9+273.15).toFixed(2))):(F=>+(+F).toFixed(1));
+  const sM=[["═══ COMBUSTOR MAPPING TABLES — φ lookup by T3 × BRNDMD ═══"],
+    ["BRNDMD = burner mode (7=full DLE, 6=trans, 4=part-load, 2=startup)"],[],
+    ["BRNDMD",_t3Header,"φ_OuterPilot","φ_InnerPilot","φ_InnerMain"]];
   for(const k of [7,6,4,2]){
     const rows=mappingTables[k]||[];
-    for(const r of rows){sM.push([k,+r.T3,+r.OP,+r.IP,+r.IM]);}
+    for(const r of rows){sM.push([k,_t3Conv(r.T3),+r.OP,+r.IP,+r.IM]);}
     sM.push([]);
   }
   const wsM=XLSX.utils.aoa_to_sheet(sM);
-  wsM["!cols"]=[{wch:10},{wch:10},{wch:16},{wch:16},{wch:16}];
+  wsM["!cols"]=[{wch:10},{wch:12},{wch:16},{wch:16},{wch:16}];
   XLSX.utils.book_append_sheet(wb,wsM,"Mapping Tables");
 }
 
-XLSX.writeFile(wb,"ProReadyEngineer_CombustionReport.xlsx");}
+// ══════════════════ UI / SIDEBAR SETTINGS ══════════════════
+// Captures sidebar toggles & step values that aren't physical inputs but
+// affect what the user sees / how they navigate. Helpful for reproducing
+// a session.
+{
+  const sUI=[
+    ["═══ UI & SIDEBAR SETTINGS ═══"],[],
+    ["Setting","Value","Notes"],
+    ["Unit System",u==="SI"?"SI (K, bar, m, m/s)":"English (°F, psia, ft, ft/s)","UI display only — internal calcs are SI"],
+    ["Computation Mode",accurate?"ACCURATE (Cantera backend)":"SIMPLE (in-browser JS)","Accurate requires subscription"],
+    ["Combustion Mode",combMode==="equilibrium"?"Chemical Equilibrium":"Complete Combustion","Drives AFT, Exhaust, Ops Summary"],
+    ["Emissions Mode (Live Mapping staging)",emissionsMode?"ENABLED (BD7 ladder)":"DISABLED (BD4 only)","Drives BRNDMD ladder & live-mapping staging"],
+    ["Linkage T3 ← Cycle T3",linkT3?"ON":"OFF","Sidebar T_air follows cycle T3"],
+    ["Linkage P3 ← Cycle P3",linkP3?"ON":"OFF","Sidebar P follows cycle P3"],
+    ["Linkage φ ← Cycle φ_Bulk",linkFAR?"ON":"OFF","Sidebar φ follows cycle φ_Bulk"],
+    ["Load step (%)",loadStepPct,"± buttons + slider step. Editable, persists."],
+    ["Bleed step (%)",bleedStepPct,"Manual-mode ± step for bleed valve."],
+  ];
+  const wsUI=XLSX.utils.aoa_to_sheet(sUI);
+  wsUI["!cols"]=[{wch:38},{wch:24},{wch:48}];
+  XLSX.utils.book_append_sheet(wb,wsUI,"UI Settings");
+}
+
+return wb;}
 
 /* ══════════════════ SVG CHART ══════════════════ */
 function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,markerColor=null,y2K=null,c2="#FBBF24",y2L="",vline=null,xMin=null,xMax=null,yMin=null,yMax=null,y2Min=null,y2Max=null,step=false,hLines=null,xFmt=null,nXTicks=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn,yx;if(yMin!=null&&yMax!=null){yn=yMin;yx=yMax;}else{let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}yn=yMin!=null?yMin:yn_-(yx_-yn_)*0.05;yx=yMax!=null?yMax:yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;}const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;
@@ -760,25 +924,88 @@ function NumField({value,onCommit,decimals=4,style,title,disabled,...rest}){
 }
 
 /* ══════════════════ HELP MODAL ══════════════════ */
-function HelpModal({show,onClose}){if(!show)return null;return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
-  <div style={{background:C.bg3,border:`1px solid ${C.border}`,borderRadius:12,padding:"24px 28px",maxWidth:620,maxHeight:"80vh",overflowY:"auto",color:C.txt,fontFamily:"'Barlow',sans-serif",fontSize:13,lineHeight:1.7}} onClick={e=>e.stopPropagation()}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+function HelpModal({show,onClose}){if(!show)return null;
+  const _h=(t)=>(<div style={{margin:"14px 0 6px",padding:"4px 0",borderBottom:`1px solid ${C.border}`,color:C.accent,fontSize:13,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".7px",textTransform:"uppercase"}}>{t}</div>);
+  const _sub=(t)=>(<div style={{margin:"6px 0 2px",color:C.accent2,fontSize:11.5,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>{t}</div>);
+  return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
+  <div style={{background:C.bg3,border:`1px solid ${C.border}`,borderRadius:12,padding:"22px 26px",maxWidth:760,maxHeight:"85vh",overflowY:"auto",color:C.txt,fontFamily:"'Barlow',sans-serif",fontSize:12.5,lineHeight:1.65}} onClick={e=>e.stopPropagation()}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,position:"sticky",top:0,background:C.bg3,paddingTop:2,paddingBottom:6,zIndex:1}}>
       <h2 style={{margin:0,fontSize:18,color:C.accent}}>Combustion Toolkit — User Guide</h2>
       <button onClick={onClose} style={{background:"none",border:"none",color:C.txtDim,fontSize:18,cursor:"pointer"}}>✕</button></div>
-    <div style={{fontSize:12,color:C.txtDim,lineHeight:1.8}}>
-      <p><strong style={{color:C.accent}}>Getting Started:</strong> Define your fuel and oxidizer compositions in the <strong>left sidebar</strong>. These are shared across ALL calculation tabs. Select a preset or enter custom mol% values. The total must equal 100%.</p>
-      <p><strong style={{color:C.accent}}>Operating Conditions:</strong> Set the equivalence ratio (φ), inlet temperature, and pressure in the sidebar. φ=1.0 is stoichiometric, φ&lt;1 is lean, φ&gt;1 is rich.</p>
-      <p><strong style={{color:C.accent}}>Unit System:</strong> Toggle between SI (K, atm, m/s, MJ/kg) and English (°F, psia, ft/s, BTU/lb) using the button in the header. All inputs, outputs, and charts update automatically.</p>
-      <hr style={{border:"none",borderTop:`1px solid ${C.border}`,margin:"12px 0"}}/>
-      <p><strong style={{color:C.accent2}}>🔥 Flame Temp & Properties:</strong> Computes adiabatic flame temperature via energy balance with NASA polynomials. Shows LHV, HHV, Wobbe Index, specific gravity, stoichiometric air-fuel ratios, and equilibrium product composition.</p>
-      <p><strong style={{color:C.accent2}}>⚡ Flame Speed & Blowoff:</strong> Laminar flame speed from Gülder/Metghalchi-Keck correlations with mixture-weighted parameters. Blowoff analysis compares chemical and flow timescales via the Damköhler number (Da&gt;1 = stable).</p>
-      <p><strong style={{color:C.accent2}}>🏭 Combustor PSR→PFR:</strong> Models a gas turbine combustor as a Perfectly Stirred Reactor (primary zone) feeding a Plug Flow Reactor (burnout zone). Computes thermal NOx via Zeldovich mechanism and CO burnout kinetics.</p>
-      <p><strong style={{color:C.accent2}}>🔬 Exhaust Analysis:</strong> Back-calculates equivalence ratio and flame temperature from measured exhaust O₂ or CO₂ concentrations using iterative inversion of the equilibrium solver.</p>
-      <p><strong style={{color:C.accent2}}>📊 Thermo Database:</strong> NASA 7-coefficient polynomial properties (Cp, H, S, G) for 14 species from 200–6000K.</p>
-      <hr style={{border:"none",borderTop:`1px solid ${C.border}`,margin:"12px 0"}}/>
-      <p><strong style={{color:C.accent}}>Export to Excel:</strong> Click "Export Excel" to download a comprehensive .xlsx report with all inputs, outputs, sweep data, and spatial profiles from every panel — organized into separate sheets.</p>
-      <p><strong style={{color:C.accent}}>ℹ️ Inline Help:</strong> Click the "ℹ️ How It Works" buttons in each panel for methodology details. Hover over metric boxes with ⓘ icons for quick definitions.</p>
-      <p style={{fontSize:10.5,color:C.txtMuted,marginTop:12}}>Calculations use NASA Glenn thermodynamic polynomials, Gülder flame speed correlations, global Arrhenius kinetics, and extended Zeldovich NOx mechanism. Results are for engineering estimation — detailed CFD and full chemical mechanisms (e.g., GRI-Mech) should be used for final design.</p>
+    <div style={{fontSize:12,color:C.txtDim,lineHeight:1.7}}>
+
+      {_h("Quick Start")}
+      <p>Pick an engine and set the operating point in the <strong>left sidebar</strong>, then open the panel you want. Most panels recompute live from the sidebar; the <strong>Combustor Mapping</strong> and <strong>Cycle</strong> panels also feed each other.</p>
+      <p>Every interactive control on every panel has a <strong style={{color:C.accent}}>tooltip</strong> — hover or long-press any label, button, or input to see what it does. Look for the <strong>ⓘ</strong> icon next to labels for definitions.</p>
+
+      {_h("Header Bar")}
+      <p><strong>Unit toggle</strong> — flips the entire UI between SI (K, bar, m/s, MJ/kg) and English (°F, psia, ft/s, BTU/lb). Calculations stay in SI internally; this only changes display.</p>
+      <p><strong>Accurate Mode</strong> — routes calculations to the backend Cantera solver (GRI-Mech 3.0 or Glarborg 2018). Requires an active subscription. When OFF, panels use in-browser reduced-order models accurate for φ ≤ 1.0.</p>
+      <p><strong>Help (?)</strong> — this dialog. <strong>Export Excel</strong> — downloads two workbooks (one in SI, one in English) containing every input, output, sweep, and setting from every panel. <strong>Account</strong> — sign in / out, manage subscription.</p>
+
+      {_h("Left Sidebar")}
+      {_sub("Engine & Ambient")}
+      <p><strong>Engine</strong> — pick LM6000PF (single-shaft) or LMS100PB+ (intercooled). Drives MW cap, T4 firing temperature, and which panels are visible (Combustor Mapping is LMS100-only).</p>
+      <p><strong>Ambient P / T / RH</strong> — site conditions. The cycle uses these for compressor inlet density and humid-air properties.</p>
+      <p><strong>Load %</strong> — gas turbine load. The big number in the green box. <strong>± buttons</strong> bump by the editable <strong>Step (%)</strong> just below — default 5, persists across reloads, accepts any integer 1–50. The slider also uses this step.</p>
+      <p><strong>Intercooler coolant T</strong> — only shown for LMS100PB+. Sets the HPC inlet temperature (architectural intercooler benefit).</p>
+      <p><strong>Combustor air fraction</strong> — flame-zone air ÷ total combustor inflow. Higher = leaner flame zone. Drives T_Bulk vs T4 split.</p>
+      <p><strong>Bleed (Auto / Manual)</strong> — compressor bleed valve. <em>Auto</em> follows a load schedule. <em>Manual</em> exposes the open % slider with a chip-selectable step (1, 15, 30, 45, 60, 75, 90 %). Valve size sets the maximum bleed fraction at 100 % open.</p>
+      <p><strong>Emissions Mode</strong> — when ON, the Combustor Mapping panel and Live Mapping use the BD7 staging ladder (DLE behavior). When OFF, the engine runs in BD4. In Live Mapping, toggling ON triggers a BD4→BD6→BD7 ramp; toggling OFF cancels any ramp in progress.</p>
+
+      {_sub("Fuel & Oxidizer Composition")}
+      <p>Pick a preset (Pipeline NG, Pure CH₄, etc.) or type custom mol % values. The total <strong>must sum to 100 %</strong> — the Σ indicator turns red if it doesn't. Compositions are shared across every panel.</p>
+
+      {_sub("Operating Conditions (φ, T, P)")}
+      <p><strong>φ</strong> — equivalence ratio. φ=1 stoichiometric, &lt;1 lean, &gt;1 rich. Sliders are clamped to physical ranges.</p>
+      <p><strong>T_air, T_fuel</strong> — separate inlet temperatures. T_mixed at φ is computed from a 3-stream enthalpy balance (air + fuel + optional water).</p>
+      <p><strong>Water/Fuel ratio (WFR)</strong> + radio (steam vs liquid) — water injection. Liquid mode absorbs h_fg from the flame; steam mode enters as gas at T_air. WFR = 0 disables water entirely.</p>
+
+      {_sub("Linkages")}
+      <p>Three checkboxes near the sidebar bottom: <strong>T3 ← Cycle T3</strong>, <strong>P3 ← Cycle P3</strong>, <strong>φ ← Cycle φ_Bulk</strong>. When ON, the sidebar values follow the most recent Cycle result automatically. Turn OFF to override manually.</p>
+
+      {_h("Tabs")}
+
+      {_sub("📈 Operations Summary")}
+      <p>Single-glance dashboard: cycle MW, T3, P3, T4, T_Bulk, NOx15/CO15/PX36 at the current operating point. Pulls live from Cycle and Combustor Mapping. No inputs of its own — change conditions in the sidebar.</p>
+
+      {_sub("🛠️ Cycle (Gas Turbine)")}
+      <p>Anchored cycle deck for LM6000PF and LMS100PB+. <strong>Inputs</strong>: ambient, load, RH, T_cool (LMS100), combustor air fraction, T_fuel, WFR, water mode, bleed. <strong>Outputs</strong>: every station state (1, 2, 2c, 3, 4, 5), MW_gross / MW_cap / MW_net, heat rate, η_LHV, fuel-flexibility derate (MWI), warnings.</p>
+      <p>Run <strong>Cycle</strong> → its results propagate through the linkages into every other panel.</p>
+
+      {_sub("🎯 Combustor Mapping (LMS100 only)")}
+      <p>4-circuit DLE correlation: per-circuit T_AFT (complete-combustion solve) plus a linear-anchored emissions / dynamics model centered on the LMS100 design point. <strong>Inputs</strong>: W36/W3 ratio, per-circuit air fractions (IP/OP/IM/OM), per-circuit φ (IP/OP/IM — OM is the residual). <strong>Outputs</strong>: NOx15, CO15, PX36_SEL, PX36_SEL_HI, plus stage-by-stage diagnostics (linear → φ_OP mult → P3 scaling).</p>
+      <p><strong>Mapping Tables</strong> — editable φ-vs-T3 lookups for BRNDMD ∈ {"{2, 4, 6, 7}"}. Edits persist via localStorage; the <strong>Reset</strong> button restores factory defaults. Used to seed circuit φ inputs as ambient changes.</p>
+      <p><strong>Emissions Transfer Function</strong> — per-BRNDMD post-multipliers on NOx, CO, and PX36_SEL. Trim knob; defaults to 1.0. Persists.</p>
+      <p><strong>Live Mapping</strong> — real-time HMI-style trace dashboard. <strong>▶ Start</strong> begins a 1 Hz recording for up to 10 minutes. Six charts (PX36_SEL, PX36_SEL_HI, NOx15, CO15, MWI, MW Net) with sensor-realistic noise + first-order lag (each metric has its own deadtime and time constant). Per-chart <strong>y-axis Min/Max</strong> inputs persist; auto-extend if data exceeds your bounds.</p>
+      <p style={{paddingLeft:14,borderLeft:`2px solid ${C.txtMuted}50`,fontSize:11,color:C.txtMuted}}>The Live Mapping plays out a stochastic plant model under the hood: PX36 spikes &gt; 5.5 trigger a 3-cycle protection sequence (BD4→BD6→BD7); rare φ_IP/φ_OP excursions trigger a full engine trip with a 4-hour lockout banner and a Reset button. Toggling Emissions Mode ON during mapping triggers the same staging ladder, ending at BD6 or BD7 depending on load. These behaviors are intentional and not under the operator's direct control — they exist to make the panel feel like a real control room.</p>
+
+      {_sub("🔥 Flame Temp & Properties")}
+      <p>Adiabatic flame temperature via energy balance with NASA polynomials. Two modes: <em>Complete combustion</em> (no dissociation) and <em>Equilibrium</em> (full dissociation). Outputs LHV / HHV (mass + volumetric), Wobbe Index, Modified Wobbe Index (MWI = LHV_vol / √(SG·T_fuel)), specific gravity, stoichiometric AFR, equilibrium products at T_ad. If Cycle has been run, also re-equilibrates products at T₄.</p>
+
+      {_sub("🔬 Exhaust Analysis")}
+      <p>Back-solves φ and T_ad from measured exhaust O₂ (dry) or CO₂ (dry) by inverting the equilibrium solver. Useful for tuning combustion mode against actual stack measurements. Two-pass solver: initial mix-T guess at φ=0.6, then refines.</p>
+
+      {_sub("🏭 Combustor PSR → PFR")}
+      <p>Reduced-order combustor: a Perfectly Stirred Reactor (primary zone, residence time τ_PSR) feeding a Plug Flow Reactor (burnout zone, length L_PFR at velocity V_PFR). Computes thermal NOx (extended Zeldovich) and CO burnout. <strong>Accurate Mode</strong> exposes solver options: PSR seed (cold-ignited / hot-eq / unreacted / autoignition), equilibrium constraint (HP / UV / TP), integration strategy, heat-loss fraction, and kinetic mechanism (GRI-Mech 3.0 / Glarborg 2018).</p>
+      <p><strong>Run sweep</strong> — 17-point load sweep across the full envelope, results plotted vs load. Cached per build SHA.</p>
+
+      {_sub("⚡ Flame Speed & Blowoff")}
+      <p>Laminar flame speed from Gülder / Metghalchi-Keck correlations (mixture-weighted). Blowoff via Damköhler comparison (τ_chem vs τ_flow). Premixer stability adds Zukoski blowoff time (τ_BO), Lewis-von Elbe critical gradient (g_c), and Spadaccini-Colket autoignition delay (τ_ign vs τ_res). The PREMIXER SAFE / RISK badge combines all four criteria.</p>
+
+      {_sub("📊 Thermo Database")}
+      <p>NASA 7-coefficient polynomial properties (Cp, H, S, G) for 16 species from 200–3000 K. Pick a species and a temperature range; outputs plot and tabulate.</p>
+
+      {_sub("📘 Assumptions")}
+      <p>Single-page reference of every modeling assumption baked into the cycle and combustion solvers — ambient, humid air, compressor, intercooler, combustor, turbine, power & load, fuel properties, MWI derate, engine deck anchors, off-design scaling, and solver numerics. Mirrors the Assumptions sheet in the Excel export.</p>
+
+      {_h("Export")}
+      <p><strong>Export Excel</strong> downloads <strong>two</strong> .xlsx files in one click: <code>ProReadyEngineer_CombustionReport_SI.xlsx</code> and <code>..._English.xlsx</code>. Each file contains parallel sheets for Flame Temp, Flame Speed, Combustor Network, Exhaust, Cycle Results, Combustor Mapping, Mapping Tables, Thermo Database, Assumptions, and UI Settings — covering every input, output, sweep, and setting visible in the app.</p>
+
+      {_h("Disclaimer")}
+      <p style={{fontSize:11,color:C.warm}}><strong>This simulator may not be representative of the LMS100 engine behavior.</strong> All results are reduced-order approximations for educational and preliminary-estimation purposes. Not certified for design, permitting, or safety-critical decisions. See the footer for the full liability disclaimer.</p>
+
+      <p style={{fontSize:10.5,color:C.txtMuted,marginTop:14}}>Calculations use NASA Glenn thermodynamic polynomials, Gülder / Metghalchi-Keck flame speed correlations, global Arrhenius kinetics, extended Zeldovich NOx, Cantera GRI-Mech 3.0 / Glarborg 2018 (Accurate Mode), and an LMS100 4-circuit DLE correlation anchored to the design point.</p>
     </div></div></div>);}
 
 function PricingModal({show,onClose,onRequestSignin}){if(!show)return null;
@@ -837,21 +1064,13 @@ function PricingModal({show,onClose,onRequestSignin}){if(!show)return null;
 // 300 s client-side is the shortest reasonable ceiling that still lets long
 // sweeps finish).
 const BACKEND_CALC_TIMEOUT_MS = 300_000;
-// Prominent in-panel banner shown while one or more Cantera calls are in flight
-// on the current panel. Sits INSIDE the panel's scrollable content so the user
-// can't miss it (unlike the global fixed-position BusyOverlay, which may be
-// scrolled off-screen or visually ignored). Pass any boolean(s) that represent
-// an active calc — common pattern: <InlineBusyBanner loading={bk.loading}/>.
-function InlineBusyBanner({loading, label="Calculations updating — please wait before trusting any number on this panel or exporting."}){
-  if(!loading) return null;
-  return(<div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 14px",
-    background:`${C.warm}14`,border:`1px solid ${C.warm}60`,borderRadius:6,
-    fontFamily:"'Barlow',sans-serif",fontSize:11.5,color:C.warm,marginBottom:6}}>
-    <span style={{display:"inline-block",width:12,height:12,border:`2px solid ${C.warm}`,borderTopColor:"transparent",borderRadius:"50%",animation:"ctkspin 0.85s linear infinite",flexShrink:0}}/>
-    <strong style={{fontWeight:700,letterSpacing:".3px"}}>CANTERA UPDATING</strong>
-    <span style={{color:C.txtDim,fontWeight:400}}>— {label}</span>
-  </div>);
-}
+// Per-panel in-line "calculations updating" banner — INTENTIONALLY DISABLED.
+// The global BusyOverlay (rendered once by BusyProvider, fixed top-of-screen)
+// already communicates "calculating, please wait" any time a Cantera call is
+// in flight, anywhere in the app. Showing the same message twice (overlay +
+// inline panel banner) was noisy, so this component is now a no-op stub.
+// Call sites still pass `loading` for future flexibility, but nothing renders.
+function InlineBusyBanner(){ return null; }
 
 // Export button that auto-disables while any Cantera calculation is in flight
 // (reading BusyCtx.tasks). Prevents the user from exporting a stale snapshot
@@ -1064,11 +1283,11 @@ function BusyOverlay({tasks}){
     data-tick={tick}>
     <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
       <span style={{display:"inline-block",width:14,height:14,border:`2.5px solid ${C.accent}`,borderTopColor:"transparent",borderRadius:"50%",animation:"ctkspin 0.85s linear infinite"}}/>
-      <span style={{fontSize:15,fontWeight:700,letterSpacing:".5px",color:C.accent,fontFamily:"'Barlow Condensed',sans-serif"}}>CALCULATIONS IN PROGRESS — PLEASE WAIT</span>
+      <span style={{fontSize:15,fontWeight:700,letterSpacing:".5px",color:C.accent,fontFamily:"'Barlow Condensed',sans-serif"}}>CALCULATING — PLEASE WAIT</span>
       <span style={{fontSize:11,color:C.txtMuted,fontFamily:"monospace",marginLeft:"auto"}}>{secs}s</span>
     </div>
     <div style={{fontSize:11.5,color:C.txtDim,lineHeight:1.5,marginBottom:6}}>
-      Cantera is updating the numbers on this page. Values on the screen may not yet reflect your latest inputs.
+      The calculation is still running. This banner will disappear automatically when it completes — please wait until then before reading any numbers on the page or exporting.
     </div>
     <ul style={{margin:"4px 0 6px 18px",padding:0,fontSize:11,color:C.txt,fontFamily:"monospace",lineHeight:1.55}}>
       {labels.map(l=><li key={l}>{l}</li>)}
@@ -1968,6 +2187,42 @@ function AssumptionsPanel(){
       <Assumption label="Compressor work" value="Cantera enthalpy difference" note="Humid-air composition with water vapor → real-gas properties."/>
       <Assumption label="Thread model" value="Single-thread Cantera pool" note="All Cantera calls serialized server-side. Per-request timeout 180 s (540 s for sweeps)."/>
       <Assumption label="Units" value="SI internally" note="K, Pa, m, kg/s, W. UI converts to ENG (°F, psia, BTU/kWh) on display."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="13. Compressor Bleed" subtitle="Optional compressor air dump used to hold combustor T4 at part-load. Active only on the LMS100 deck.">
+      <Assumption label="Modes" value="AUTO  /  MANUAL" note="AUTO: bleed_open % is a continuous function of load — 100% open below 75% load, 0% above 95%, linear between. MANUAL: user sets the open % directly."/>
+      <Assumption label="Valve size (max bleed)" value="User input, 0–100% of W3" note="Sets the upper bound on bleed_air_frac at 100% open. bleed_air_frac = (open_pct/100) × (valve_size_pct/100)."/>
+      <Assumption label="Bleed destination" value="Dumped to ambient" note="No re-injection or HRSG mix; the air leaves the cycle. mdot_air_post_bleed = W3 × (1 − bleed_air_frac)."/>
+      <Assumption label="Convergence (T4 hold)" value="Iterative on bleed_air_frac" note="When bleed is active and T4 is the target, the cycle iterates bleed_air_frac to keep T4 at the deck commanded value. Reports bleed_iters and bleed_converged in the result."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="14. Water Injection (NOx control)" subtitle="3-stream enthalpy balance: air + fuel + water → mixed inlet. Used by every combustor panel and the cycle.">
+      <Assumption label="Inputs" value="WFR (kg_water / kg_fuel) + mode" note="WFR = 0 disables water entirely. Mode = liquid (absorbs h_fg) or steam (gas phase at T_air)."/>
+      <Assumption label="Mixed inlet T" value="3-stream enthalpy balance" note="T_mixed solved so h_air(T_air) + WFR·h_water(T_water,mode) + (1/AFR)·h_fuel(T_fuel) = total mixed h at T_mixed."/>
+      <Assumption label="Liquid water" value="Absorbs latent + sensible" note="h_fg at 100 °C = 2.257 MJ/kg. Plus cp_liq·(T_evap − T_water_in) and cp_vap·(T_mixed − T_evap)."/>
+      <Assumption label="Steam water" value="Gas phase, no h_fg debit" note="Treated as superheated steam at T_air, joining the inlet stream as pure H2O."/>
+      <Assumption label="Cycle effect" value="Water mass passes through turbine" note="Adds turbine mdot, increases W_turb. T4 floats — power ↑, η ↓ (extra energy spent vaporizing). Reported in cycle outputs."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="15. Combustor Mapping (LMS100 4-circuit DLE — correlation)" subtitle="Per-circuit T_AFT from a complete-combustion solve, then linear-anchored emissions / dynamics. No reactor kinetics. Drives the Combustor Mapping panel and the Operations Summary.">
+      <Assumption label="Reference design point" value="LMS100 DLE, 100% load, 44 °F" note="NOx15=45 ppmvd · CO15=180 ppmvd · PX36_SEL=4.0 psi · PX36_SEL_HI=2.2 psi. DT_Main=450 °F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035 °F · T3=700 °F · P3=638 psia."/>
+      <Assumption label="Per-circuit T_AFT" value="complete_combustion at (T3, P3, φ_circuit)" note="Cantera complete-combustion (no dissociation) at the circuit-specific φ. Falls back to T_air when φ ≈ 0."/>
+      <Assumption label="OM circuit" value="Residual fuel mass" note="m_fuel_OM = m_fuel_total − (m_fuel_IP + m_fuel_OP + m_fuel_IM). φ_OM is back-solved and clamped to [0, 3]."/>
+      <Assumption label="Linear correction (Step 1)" value="Y_lin = Y_ref + Σₖ (∂Y/∂xₖ)·(xₖ − xₖ_ref)" note="Variables: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (above 0.25 floor), Tflame, T3. Per-output derivatives baked into the module — see combustor_mapping.py."/>
+      <Assumption label="Phi_OP multiplier (Step 2)" value="HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45" note="Linear interp on the 0.10 band between. PX36_SEL_HI is the only output that gets this multiplier."/>
+      <Assumption label="P3 scaling (Step 3)" value="(P3/638)^exp" note="Exponents: NOx15=0.467, CO15=−1.0, PX36_SEL=0.50, PX36_SEL_HI=0.44. Anchored at the design P3 = 638 psia."/>
+      <Assumption label="C3-effective" value="0.8·(C2H6+C2H4+C2H2) + (C3H8+C4H10+...+C8H18)" note="C2-class species at 0.8 coefficient; C3 and every heavier hydrocarbon at 1.0."/>
+      <Assumption label="Tflame derivative (NOx only)" value="Piecewise: 0.12 ppm/°F ≥2850, 0.04 between 2750–2850, 0 below 2750" note="Integrated continuously from T_ref = 3035 °F so the contribution has no jumps at breakpoints."/>
+      <Assumption label="Emissions Transfer Function" value="Per-BRNDMD post-multipliers on NOx, CO, PX36" note="User-trim knob, default 1.0 for all. PX36_SEL_HI does NOT take this multiplier (its tuning is in Step 2). Stored per BRNDMD ∈ {2,4,6,7}."/>
+    </AssumptionsGroup>
+
+    <AssumptionsGroup title="16. Live Mapping (HMI sim — visual only, no engineering data)" subtitle="Real-time trace dashboard. Numbers are derived from the mapping correlation above plus a stochastic instrument-response model. Behavior is intentional and not under operator control.">
+      <Assumption label="Tick rate" value="1 Hz" note="One sample per second. Buffer holds 10 minutes (600 samples) and shifts oldest out."/>
+      <Assumption label="Instrument response" value="History-based transport delay + 1st-order smoothstep" note="displayed(t) = lookup(history, t − deadT) blended via smoothstep over transT. Per-metric deadT/transT: PX36 0/1, NOx/CO 83/7, MWI_WIM 2/5, MWI_GC 415/5, MW 0/7."/>
+      <Assumption label="Noise model" value="Per-metric, mean-band dependent" note="PX36: random step every 1–2 s, amplitude scales with mean (1.5–3.4% low, 7–9% high). NOx/CO: 20-second sine, amplitude re-rolled at each cycle. MWI: 2.5% white + slow 2-min sine."/>
+      <Assumption label="PX36 trip threshold" value="px36 (display) > 5.5 psi" note="Triggers the protection cycle: BD4 for 50 s → BD6 for 30 s → BD7. Up to 3 cycles before LOCK at BD4."/>
+      <Assumption label="Stochastic engine trips" value="phi_IP / phi_OP excursions" note="At BR=7, phi_IP entry into a load-interpolated band rolls a random threshold; crossing it trips the engine. Same logic for phi_OP at BR=6 or 7. After trip, all targets ramp to 0 with metric-specific delays; banner shows a 4-hour lockout countdown."/>
+      <Assumption label="Emissions Mode staging" value="BD4 → 50 s → BD6 → 30 s → BD7 (or stop at BD6)" note="Triggered when Emissions Mode toggles ON during mapping. Endpoint adapts to current MW: low load skips, mid load (BR_max=6) stops at BD6, high load runs the full sequence."/>
     </AssumptionsGroup>
   </div>);
 }
@@ -3480,15 +3735,15 @@ function CombustorMappingPanel({
 
         {/* W36/W3 knob */}
         <div style={{padding:"9px 11px",background:`${C.accent}0A`,border:`1px solid ${C.accent}45`,borderRadius:6,marginBottom:10,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-          <div style={{minWidth:160}}>
+          <div style={{minWidth:160}} title="W36 = mass flow into the combustor dome (i.e. into the four DLE circuits + cooling air). W3 = total compressor exit air (post-bleed). The remaining (1 − W36/W3) is wall cooling air that bypasses the dome. Default 0.75.">
             <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px"}}>W36 / W3</div>
             <div style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic"}}>fraction of W3 → combustor dome</div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:3}}>
-            <button onClick={()=>setW36w3(v=>Math.max(0,+(v-0.01).toFixed(4)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>−</button>
+            <button onClick={()=>setW36w3(v=>Math.max(0,+(v-0.01).toFixed(4)))} title="Decrease W36/W3 by 0.01" style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>−</button>
             <NumField value={w36w3} decimals={3} onCommit={v=>setW36w3(Math.max(0,Math.min(1,+v)))}
               style={{width:66,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-            <button onClick={()=>setW36w3(v=>Math.min(1,+(v+0.01).toFixed(4)))} style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>+</button>
+            <button onClick={()=>setW36w3(v=>Math.min(1,+(v+0.01).toFixed(4)))} title="Increase W36/W3 by 0.01" style={{padding:"2px 7px",fontSize:12,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}60`,borderRadius:3,cursor:"pointer",lineHeight:1}}>+</button>
           </div>
           <div style={{fontSize:11,color:C.txtDim,fontFamily:"monospace"}}>W36 = {fmtMdot(m_air_W36)} {mdotU}</div>
         </div>
@@ -4292,9 +4547,13 @@ function EngineAmbientSidebar({
   bleedMode,setBleedMode,bleedOpenPct,bleedOpenManualPct,setBleedOpenManualPct,
   bleedValveSizePct,setBleedValveSizePct,bleedAirFrac,
   bleedStepPct,setBleedStepPct,
+  loadStepPct,setLoadStepPct,
   emissionsMode,setEmissionsMode,
   accurate,
 }){
+  // Clamp the editable step to a sane range. The buttons read this value;
+  // the inline NumField below the load row writes it.
+  const _loadStep=Math.max(1,Math.min(50,Math.round(+loadStepPct||5)));
   const units=useContext(UnitCtx);
   const isLMS=engine==="LMS100PB+";
   const dim=!accurate;
@@ -4316,8 +4575,9 @@ function EngineAmbientSidebar({
     <div style={sec}>Engine & Ambient {dim&&<span style={{fontSize:9,color:C.warm,fontWeight:600,letterSpacing:".4px",textTransform:"none",marginLeft:6}}>(Accurate Mode required)</span>}</div>
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
       <div>
-        <label style={lbl}>Engine</label>
-        <select style={S.sel} value={engine} onChange={e=>setEngine(e.target.value)}>
+        <label style={lbl} title="Pick the gas turbine deck. LM6000PF is single-shaft, 45 MW @ ISO. LMS100PB+ is intercooled, 107.5 MW @ 44 °F / 80% RH. The choice drives engine-specific calibration constants (η_isen, MW cap, T4 firing temp, combustor bypass) and which panels are visible — Combustor Mapping is LMS100-only.">Engine</label>
+        <select style={S.sel} value={engine} onChange={e=>setEngine(e.target.value)}
+          title="Switch engine deck. Triggers a re-fit of MW cap, T4, and combustor bypass to match the selected engine.">
           <option value="LM6000PF">LM6000PF DLE</option>
           <option value="LMS100PB+">LMS100PB+ DLE IC</option>
         </select>
@@ -4326,6 +4586,9 @@ function EngineAmbientSidebar({
       <div>
         <label style={lbl} title="When enabled, the full BRNDMD ladder is active (1 → 2 → 4 → 6 → 7). When disabled, BRNDMD holds at 4 for MW > 45 — combustor stays in a simpler low-load mode rather than progressing to high-load modes.">Emissions Mode</label>
         <button onClick={()=>setEmissionsMode(!emissionsMode)}
+          title={emissionsMode
+            ?"Click to DISABLE emissions mode — engine holds at BD4 (low-load mode) regardless of MW. In Live Mapping, this cancels any in-progress staging ramp."
+            :"Click to ENABLE emissions mode — full DLE BD4→BD6→BD7 ladder is active. In Live Mapping, this triggers a staging ramp through the burner modes."}
           style={{width:"100%",padding:"7px 12px",fontSize:11.5,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",
             color:emissionsMode?C.good:C.strong,
             background:emissionsMode?`${C.good}18`:`${C.strong}18`,
@@ -4342,22 +4605,31 @@ function EngineAmbientSidebar({
       <div style={{background:`${C.accent}0F`,border:`1px solid ${C.accent}60`,borderRadius:6,padding:"8px 10px",marginTop:2}}>
         <div style={{fontSize:9.5,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:".6px",marginBottom:4,lineHeight:1.25}}>Input or vary the gas turbine load</div>
         <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-          <button onClick={()=>setLoadPct(Math.max(20,Math.min(100,Math.round(loadPct-10))))}
-            title="Decrease load by 10%"
-            style={{padding:"4px 10px",fontSize:13,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}80`,borderRadius:4,cursor:"pointer",lineHeight:1}}>−10</button>
+          <button onClick={()=>setLoadPct(Math.max(20,Math.min(100,Math.round(loadPct-_loadStep))))}
+            title={`Decrease load by ${_loadStep}%`}
+            style={{padding:"4px 10px",fontSize:13,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}80`,borderRadius:4,cursor:"pointer",lineHeight:1}}>−{_loadStep}</button>
           <div style={{flex:1,position:"relative"}}>
             <NumField value={loadPct} decimals={0} onCommit={v=>setLoadPct(Math.max(20,Math.min(100,+v)))}
               style={{width:"100%",padding:"5px 6px",fontFamily:"'Barlow Condensed',sans-serif",color:C.accent,fontSize:18,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}80`,borderRadius:4,textAlign:"center",outline:"none",letterSpacing:".5px"}}/>
             <span style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",fontSize:11,color:C.txtMuted,fontFamily:"monospace",pointerEvents:"none"}}>%</span>
           </div>
-          <button onClick={()=>setLoadPct(Math.max(20,Math.min(100,Math.round(loadPct+10))))}
-            title="Increase load by 10%"
-            style={{padding:"4px 10px",fontSize:13,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}80`,borderRadius:4,cursor:"pointer",lineHeight:1}}>+10</button>
+          <button onClick={()=>setLoadPct(Math.max(20,Math.min(100,Math.round(loadPct+_loadStep))))}
+            title={`Increase load by ${_loadStep}%`}
+            style={{padding:"4px 10px",fontSize:13,fontWeight:700,fontFamily:"monospace",color:C.accent,background:"transparent",border:`1px solid ${C.accent}80`,borderRadius:4,cursor:"pointer",lineHeight:1}}>+{_loadStep}</button>
         </div>
-        <input type="range" min="20" max="100" step="1" value={loadPct} onChange={e=>setLoadPct(+e.target.value)}
+        <input type="range" min="20" max="100" step={_loadStep} value={loadPct} onChange={e=>setLoadPct(+e.target.value)}
           style={{width:"100%",accentColor:C.accent,display:"block"}}/>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:9,color:C.txtMuted,fontFamily:"monospace",marginTop:-1}}>
           <span>20%</span><span>60%</span><span>100%</span>
+        </div>
+        {/* Editable step — drives both ± buttons and the slider step. */}
+        <div style={{display:"flex",alignItems:"center",gap:5,marginTop:5}}
+          title="Step size for the ± buttons and the slider above. Edit to any integer 1..50.">
+          <span style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace"}}>Step (%):</span>
+          <NumField value={_loadStep} decimals={0}
+            onCommit={v=>setLoadStepPct&&setLoadStepPct(Math.max(1,Math.min(50,Math.round(+v||5))))}
+            style={{width:42,padding:"2px 4px",fontSize:10,fontFamily:"monospace",color:C.accent,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+          <span style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",marginLeft:"auto"}}>persists</span>
         </div>
       </div>
 
@@ -4570,6 +4842,15 @@ export default function App(){
   // under the Bleed Open NumField. 1 = fine (per-% step); 15/30/45/60/75/90 are
   // coarse steps for quickly nudging the valve to common operating points.
   const[bleedStepPct,setBleedStepPct]=useState(15);
+  // Load %-step for the Engine&Ambient sidebar ± buttons. Default is 5 %.
+  // Persists across reloads; user can edit to any positive integer 1..50.
+  const[loadStepPct,setLoadStepPct]=useState(()=>{
+    try{const s=localStorage.getItem("ctk.loadStepPct.v1");
+      if(s!==null){const n=Math.round(+s);if(n>=1&&n<=50)return n;}
+    }catch(e){}
+    return 5;
+  });
+  useEffect(()=>{try{localStorage.setItem("ctk.loadStepPct.v1",String(loadStepPct));}catch(e){}},[loadStepPct]);
   // ── Combustor-Mapping panel inputs (lifted to App so Operations Summary
   // can reuse the same correlation result — /calc/combustor_mapping is
   // fired once in App and the bkMap handle is passed to both panels).
@@ -4775,7 +5056,16 @@ export default function App(){
   // Consumed by exportToExcel button further below; safe to declare here.
   const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,T_water,accurate:accurate&&!!auth.hasOnlineAccess,
     cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult,
-    bleedMode,bleedOpenPct,bleedValveSizePct,bleedAirFrac,mappingTables};
+    bleedMode,bleedOpenPct,bleedValveSizePct,bleedAirFrac,mappingTables,
+    // ── Combustor-Mapping inputs (4-circuit DLE — LMS100 only) ──
+    emissionsMode,
+    mapW36w3,mapFracIP,mapFracOP,mapFracIM,mapFracOM,mapPhiIP,mapPhiOP,mapPhiIM,
+    mapResult:bkMap?.data||null,
+    emTfMults,
+    // ── Linkage toggles (Cycle → sidebar) ──
+    linkT3,linkP3,linkFAR,
+    // ── UI sidebar controls ──
+    loadStepPct,bleedStepPct};
 
   // Propagate cycle outputs into main sidebar state when linkages are ON.
   // Re-runs whenever the cycle result changes or a toggle flips.
@@ -4828,7 +5118,7 @@ export default function App(){
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             {hasOnline&&(
-              <button onClick={()=>setAccurate(a=>!a)} title={accurate?"Using backend Cantera solver":"Using in-browser model"} style={{padding:"6px 12px",fontSize:11,fontWeight:700,color:accurate?C.bg:C.accent,background:accurate?C.accent:`${C.accent}15`,border:`1px solid ${C.accent}`,borderRadius:6,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",display:"flex",alignItems:"center",gap:6}}>
+              <button onClick={()=>setAccurate(a=>!a)} title={accurate?"Click to switch OFF — calculations route to the in-browser reduced-order model (faster, accurate for φ ≤ 1.0). The backend Cantera solver is currently active.":"Click to switch ON — calculations route to the backend Cantera solver (GRI-Mech 3.0 / Glarborg 2018, exact across all φ). Subscription required."} style={{padding:"6px 12px",fontSize:11,fontWeight:700,color:accurate?C.bg:C.accent,background:accurate?C.accent:`${C.accent}15`,border:`1px solid ${C.accent}`,borderRadius:6,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",display:"flex",alignItems:"center",gap:6}}>
                 <span style={{width:7,height:7,borderRadius:"50%",background:accurate?C.bg:C.accent,display:"inline-block"}}/>
                 {accurate?"ACCURATE: ON":"ACCURATE: OFF"}
               </button>
@@ -4902,6 +5192,7 @@ export default function App(){
               bleedOpenManualPct={bleedOpenManualPct} setBleedOpenManualPct={setBleedOpenManualPct}
               bleedValveSizePct={bleedValveSizePct} setBleedValveSizePct={setBleedValveSizePct}
               bleedStepPct={bleedStepPct} setBleedStepPct={setBleedStepPct}
+              loadStepPct={loadStepPct} setLoadStepPct={setLoadStepPct}
               bleedAirFrac={bleedAirFrac}
               emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
               accurate={accurate&&hasOnline}
@@ -5084,7 +5375,7 @@ export default function App(){
         <div style={{borderTop:`1px solid ${C.border}`,background:C.bg,flexShrink:0}}>
           <div style={{padding:"10px 20px",borderBottom:`1px solid ${C.border}`}}>
             <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.55,textAlign:"justify",maxWidth:1400,margin:"0 auto"}}>
-              <span style={{color:C.accent,fontWeight:700,letterSpacing:".5px"}}>DISCLAIMER &amp; LIMITATION OF LIABILITY —</span> This software and all results herein (&quot;the Software&quot;) are provided <span style={{fontWeight:700}}>&quot;AS IS&quot;</span> without warranties of any kind, express or implied, for <span style={{fontWeight:700}}>educational and preliminary-estimation purposes only</span>. Outputs are best-effort approximations from reduced-order models and may deviate materially from real-world behavior or high-fidelity CFD / chemistry solvers. ProReadyEngineer LLC, its owners, employees, and contributors disclaim all liability for any direct, indirect, incidental, consequential, or punitive damages, losses, or claims arising from use of or reliance on the Software. Not certified for design, permitting, regulatory, emissions-reporting, or safety-critical decisions. Users assume all risk and must independently verify every result with qualified licensed engineers, validated software, and applicable codes and standards before any engineering or operational decision. By using the Software you accept these terms.
+              <span style={{color:C.accent,fontWeight:700,letterSpacing:".5px"}}>DISCLAIMER &amp; LIMITATION OF LIABILITY —</span> This software and all results herein (&quot;the Software&quot;) are provided <span style={{fontWeight:700}}>&quot;AS IS&quot;</span> without warranties of any kind, express or implied, for <span style={{fontWeight:700}}>educational and preliminary-estimation purposes only</span>. <span style={{color:C.warm,fontWeight:700}}>This simulator may not be representative of the LMS100 engine behavior.</span> Outputs are best-effort approximations from reduced-order models and may deviate materially from real-world behavior or high-fidelity CFD / chemistry solvers. ProReadyEngineer LLC, its owners, employees, and contributors disclaim all liability for any direct, indirect, incidental, consequential, or punitive damages, losses, or claims arising from use of or reliance on the Software. Not certified for design, permitting, regulatory, emissions-reporting, or safety-critical decisions. Users assume all risk and must independently verify every result with qualified licensed engineers, validated software, and applicable codes and standards before any engineering or operational decision. By using the Software you accept these terms.
             </div>
           </div>
           <div style={{padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
