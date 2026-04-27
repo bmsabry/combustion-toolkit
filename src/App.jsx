@@ -1954,11 +1954,19 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
     {accurate?null:modeToggle}
     {/* ============== FROM MEASURED O2 ============== */}
     <div style={S.card}>
-      <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured O₂ (% dry) {status(bkO2)}
-        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
-          <Tip text="Enter the measured O₂ concentration in the exhaust on a dry basis. Typical values: 2–6% for gas turbines, 3–8% for boilers."><label style={{fontSize:11,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>Meas. O₂ (% dry) ⓘ</label></Tip>
-          <NumField value={measO2} decimals={2} onCommit={setMeasO2} style={{...S.inp,width:70}}/>
-        </div>
+      <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured O₂ (% dry) {status(bkO2)}</div>
+      {/* Dedicated input bar — right-aligned and visually distinct so the user
+          immediately sees this is the field they need to fill in to drive the
+          analysis below. Lives directly under the title, not inside it. */}
+      <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10,
+        padding:"8px 12px",marginBottom:10,
+        background:`${C.accent}10`,border:`1px solid ${C.accent}45`,borderRadius:6}}>
+        <Tip text="Enter the measured O₂ concentration in the exhaust on a dry basis. Typical values: 2–6% for gas turbines, 3–8% for boilers. The analysis below back-solves φ and flame temperature from this single measurement.">
+          <label style={{fontSize:11,fontWeight:700,color:C.accent,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",cursor:"help",textTransform:"uppercase"}}>Enter measured O₂ (% dry) ⓘ</label>
+        </Tip>
+        <NumField value={measO2} decimals={2} onCommit={setMeasO2}
+          style={{width:90,padding:"5px 8px",fontFamily:"'Barlow Condensed',sans-serif",color:C.accent,fontSize:16,fontWeight:700,background:C.bg,border:`1.5px solid ${C.accent}80`,borderRadius:5,textAlign:"center",outline:"none",letterSpacing:".5px"}}/>
+        <span style={{fontSize:11,color:C.txtMuted,fontFamily:"monospace"}}>%</span>
       </div>
       <div style={{display:"grid",gridTemplateColumns:accurate&&rO2.cc?"1fr 1fr":"1fr",gap:12}}>
         {accurate&&rO2.cc?<div style={{padding:12,background:`${C.orange}0A`,border:`1px solid ${C.orange}40`,borderRadius:6}}>
@@ -1996,11 +2004,16 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
 
     {/* ============== FROM MEASURED CO2 ============== */}
     <div style={S.card}>
-      <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured CO₂ (% dry) {status(bkCO2)}
-        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
-          <Tip text="Enter the measured CO₂ concentration in the exhaust on a dry basis. Higher CO₂ indicates richer combustion."><label style={{fontSize:11,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>Meas. CO₂ (% dry) ⓘ</label></Tip>
-          <NumField value={measCO2} decimals={2} onCommit={setMeasCO2} style={{...S.inp,width:70}}/>
-        </div>
+      <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured CO₂ (% dry) {status(bkCO2)}</div>
+      <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10,
+        padding:"8px 12px",marginBottom:10,
+        background:`${C.accent}10`,border:`1px solid ${C.accent}45`,borderRadius:6}}>
+        <Tip text="Enter the measured CO₂ concentration in the exhaust on a dry basis. Higher CO₂ indicates richer combustion. The analysis below back-solves φ and flame temperature from this single measurement.">
+          <label style={{fontSize:11,fontWeight:700,color:C.accent,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",cursor:"help",textTransform:"uppercase"}}>Enter measured CO₂ (% dry) ⓘ</label>
+        </Tip>
+        <NumField value={measCO2} decimals={2} onCommit={setMeasCO2}
+          style={{width:90,padding:"5px 8px",fontFamily:"'Barlow Condensed',sans-serif",color:C.accent,fontSize:16,fontWeight:700,background:C.bg,border:`1.5px solid ${C.accent}80`,borderRadius:5,textAlign:"center",outline:"none",letterSpacing:".5px"}}/>
+        <span style={{fontSize:11,color:C.txtMuted,fontFamily:"monospace"}}>%</span>
       </div>
       <div style={{display:"grid",gridTemplateColumns:accurate&&rCO2.cc?"1fr 1fr":"1fr",gap:12}}>
         {accurate&&rCO2.cc?<div style={{padding:12,background:`${C.orange}0A`,border:`1px solid ${C.orange}40`,borderRadius:6}}>
