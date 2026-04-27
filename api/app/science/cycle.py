@@ -245,7 +245,10 @@ def _t_ad_at_phi(
     """
     fuel_str = ", ".join(f"{k}:{v:.10f}" for k, v in fuel_x.items())
     ox_str = ", ".join(f"{k}:{v:.10f}" for k, v in ox_x.items())
-    gas = ct.Solution(GRI_MECH)
+    # Pooled — slot `cyc_eq` is unique to this helper. State fully reset via
+    # TP + set_equivalence_ratio before equilibrate.
+    from ._solution_pool import get_solution
+    gas = get_solution("gri30", "cyc_eq")
     gas.TP = float(T_inlet_K), float(P_bar) * 1e5
     gas.set_equivalence_ratio(float(phi), fuel=fuel_str, oxidizer=ox_str)
     gas.equilibrate("HP")
@@ -439,7 +442,9 @@ def _compressor_work_W(
 
     Returns W (watts); positive = work into the gas.
     """
-    gas = ct.Solution(GRI_MECH)
+    # Pooled — slot `cyc_comp` is dedicated to the compressor-work helper.
+    from ._solution_pool import get_solution
+    gas = get_solution("gri30", "cyc_comp")
     X = [0.0] * gas.n_species
     for s, v in air_x.items():
         idx = gas.species_index(s)
@@ -1243,7 +1248,11 @@ def _estimate_LHV_mass_J_per_kg(fuel_x: Dict[str, float]) -> float:
     returns the enthalpy release per kg of fuel at 298 K. Water is left as
     vapor (→ LHV, not HHV).
     """
-    gas = ct.Solution(GRI_MECH)
+    # Pooled — `cyc_lhv_fuel` and `cyc_lhv_mix` (below) coexist throughout
+    # this function (we read h_fuel from `gas` then later read h_reactants
+    # from `gas2`), so both need distinct slots.
+    from ._solution_pool import get_solution
+    gas = get_solution("gri30", "cyc_lhv_fuel")
     # Build the fuel stream alone at 298 K
     X_fuel = [0.0] * gas.n_species
     for s, v in fuel_x.items():
@@ -1256,7 +1265,7 @@ def _estimate_LHV_mass_J_per_kg(fuel_x: Dict[str, float]) -> float:
     # at 298 K (forces fuel → products at reactant T, so ΔH = LHV).
     fuel_str = ", ".join(f"{k}:{v:.10f}" for k, v in fuel_x.items() if v > 0)
     ox_str = "O2:1.0"
-    gas2 = ct.Solution(GRI_MECH)
+    gas2 = get_solution("gri30", "cyc_lhv_mix")
     gas2.TP = 298.15, 101325.0
     gas2.set_equivalence_ratio(1.0, fuel=fuel_str, oxidizer=ox_str)
     h_reactants_mass = gas2.enthalpy_mass  # per kg of (fuel+O2) mixture

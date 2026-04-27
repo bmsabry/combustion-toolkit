@@ -132,8 +132,12 @@ def make_gas_mixed_with_water(
     Y_w = m_w / m_total
 
     # --- Stream enthalpies at their own inlet temperatures ---
+    # Pooled — slots `wm_*` are disjoint from anything mixture/_normalize uses,
+    # and the four Solutions in this function (g_f, g_a, g_w, gas) coexist via
+    # distinct slot labels so a single shared instance won't collide on state.
+    from ._solution_pool import get_solution
     # Fuel stream
-    g_f = ct.Solution(mech_path)
+    g_f = get_solution(mechanism, "wm_fuel")
     X_fuel_vec = np.zeros(g_f.n_species)
     for s, v in fuel_x.items():
         idx = g_f.species_index(s)
@@ -146,7 +150,7 @@ def make_gas_mixed_with_water(
     h_fuel = g_f.enthalpy_mass  # J/kg
 
     # Air stream
-    g_a = ct.Solution(mech_path)
+    g_a = get_solution(mechanism, "wm_air")
     X_air_vec = np.zeros(g_a.n_species)
     for s, v in ox_x.items():
         idx = g_a.species_index(s)
@@ -160,7 +164,7 @@ def make_gas_mixed_with_water(
 
     # Water stream — use Cantera's gas-phase H2O enthalpy at T_water, then
     # subtract h_fg(T_water) for the liquid case to account for latent heat.
-    g_w = ct.Solution(mech_path)
+    g_w = get_solution(mechanism, "wm_water")
     h2o_idx = g_w.species_index("H2O")
     if h2o_idx < 0:
         raise ValueError(f"Mechanism {mechanism} has no H2O species; cannot inject water")
@@ -207,7 +211,7 @@ def make_gas_mixed_with_water(
     # but we do it manually for compatibility.
 
     # --- Solve for T_mixed at (h_mix, P, X_combined) ---
-    gas = ct.Solution(mech_path)
+    gas = get_solution(mechanism, "wm_main")
     gas.HPX = h_mix, P_Pa, X_combined
     T_mixed = float(gas.T)
 

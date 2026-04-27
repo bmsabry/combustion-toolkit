@@ -56,8 +56,11 @@ def run(
 
     # Heat-loss case: reduce enthalpy by heat_loss_fraction of (h_ad - h_reactants) → re-equilibrate HP
     if heat_loss_fraction > 0:
-        # Set up at T_ad (products hot state), then remove fraction of heat release
-        gas_hl = ct.Solution("gri30.yaml")
+        # Set up at T_ad (products hot state), then remove fraction of heat release.
+        # Pooled — slot is disjoint from the `gas` (mgm_main) we got from
+        # make_gas_mixed, so the two coexist without state collision.
+        from ._solution_pool import get_solution
+        gas_hl = get_solution("gri30", "aft_hl")
         gas_hl.TPX = gas.T, gas.P, gas.X
         h_ad = gas_hl.enthalpy_mass
         # Absolute enthalpy reference: the reactants had h_reactants at T0; after adiabatic combustion,
@@ -96,7 +99,8 @@ def run(
     mole_fracs_at_T: Dict[str, float] = {}
     if T_products_K is not None and float(T_products_K) > 0:
         try:
-            gas_T = ct.Solution("gri30.yaml")
+            from ._solution_pool import get_solution
+            gas_T = get_solution("gri30", "aft_T")
             # Reuse the equilibrated product elemental state, then re-equilibrate at fixed T,P.
             gas_T.TPX = float(T_products_K), gas.P, gas.X
             gas_T.equilibrate("TP")

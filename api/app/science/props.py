@@ -10,7 +10,9 @@ from .mixture import _normalize_to_gri
 
 def run(mixture_pct_or_frac: Dict[str, float], T_K: float, P_bar: float) -> dict:
     """Compute rho, cp, mu, k, Pr, a, h, s, g at (T, P) for the given mixture."""
-    gas = ct.Solution("gri30.yaml")
+    # Pooled — props.run is a single Solution use, fully reset via TPX below.
+    from ._solution_pool import get_solution
+    gas = get_solution("gri30", "props_gas")
     # Accept either mole% (sum ≈ 100) or mole fractions (sum ≈ 1). Normalize.
     total = sum(mixture_pct_or_frac.values())
     if total > 10:  # assume percent

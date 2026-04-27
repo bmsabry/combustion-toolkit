@@ -388,8 +388,12 @@ def run(
     X_in = np.array(gas.X, dtype=float)
     P_Pa = gas.P
 
-    # Upstream reservoir: fresh pre-mixed reactants at the adiabatic mixed T
-    inlet_gas = ct.Solution(mech_path)
+    # Upstream reservoir: fresh pre-mixed reactants at the adiabatic mixed T.
+    # Pooled — Reservoir holds boundary-condition state and doesn't mutate
+    # the source phase, so a single shared instance is safe across calls.
+    # The slot is disjoint from `gas` (mgm_main) we got from make_gas_mixed.
+    from ._solution_pool import get_solution
+    inlet_gas = get_solution(mechanism, "comb_inlet")
     inlet_gas.TPX = T_mixed, P_Pa, X_in
     upstream = ct.Reservoir(inlet_gas)
 
@@ -406,7 +410,8 @@ def run(
 
     # Downstream reservoir must be at the same pressure as the PSR; otherwise
     # the PressureController will bleed the PSR toward the downstream pressure.
-    downstream_gas = ct.Solution(mech_path)
+    # Pooled (Reservoir is read-only after construction).
+    downstream_gas = get_solution(mechanism, "comb_downstream")
     downstream_gas.TPX = psr_gas.T, psr_gas.P, psr_gas.X
     downstream = ct.Reservoir(downstream_gas)
 
@@ -424,12 +429,14 @@ def run(
     ambient = None
     wall = None
     if heat_loss_fraction > 0.0:
-        eq_gas = ct.Solution(mech_path)
+        # Pooled — `comb_eq_hl` and `comb_ambient` coexist (we read eq_gas.X
+        # AFTER constructing ambient via TPX), so distinct slots are required.
+        eq_gas = get_solution(mechanism, "comb_eq_hl")
         eq_gas.TPX = T_mixed, P_Pa, X_in
         eq_gas.equilibrate("HP")
         T_ad_ref = float(eq_gas.T)
         T_target = T_ad_ref - float(heat_loss_fraction) * (T_ad_ref - float(T_mixed))
-        ambient_gas = ct.Solution(mech_path)
+        ambient_gas = get_solution(mechanism, "comb_ambient")
         ambient_gas.TPX = T_target, P_Pa, eq_gas.X
         ambient = ct.Reservoir(ambient_gas)
         # U*A with A=1 m² → U in W/m²/K. 1e7 ≫ mdot·cp for our scales (mdot~O(1)
@@ -522,7 +529,12 @@ def run(
     T_ad_equilibrium = None
     T_ad_complete = None
     try:
-        eq_gas = ct.Solution(mech_path)
+        # Pooled — slot `comb_eq_final` is dedicated to this final equilibrium
+        # snapshot. Disjoint from comb_eq_hl above (the heat-loss block has
+        # already returned to the caller by the time this fires), and from
+        # the reactor-owning gases (psr_gas, pfr_gas) which we DON'T pool to
+        # avoid breaking the Cantera reactor's state ownership semantics.
+        eq_gas = get_solution(mechanism, "comb_eq_final")
         eq_gas.TPX = T_mixed, P_Pa, X_in
         eq_gas.equilibrate("HP")
         T_ad_equilibrium = float(eq_gas.T)
