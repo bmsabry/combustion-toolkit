@@ -6427,6 +6427,36 @@ export default function App(){
   const FAR=phi*FAR_stoich;
   const setPhiClamped=v=>{if(Number.isFinite(v))setPhi(Math.max(0.3,Math.min(1.0,v)));};
   const setFAR=v=>{if(Number.isFinite(v))setPhiClamped(v/FAR_stoich);};
+  // ── T_flame (canonical) ───────────────────────────────────────────────
+  // The OPERATING CONDITIONS sidebar shows T_flame = adiabatic flame T at
+  // the current phi/fuel/ox/T_fuel/T_air, COMPLETE COMBUSTION (no
+  // dissociation). The Combustor PSR-PFR panel also displays this value
+  // (as "T_AD — Complete Combustion") using Cantera's complete-combustion
+  // path. Two solvers (JS calcAFT vs Cantera) gave different results — a
+  // ~14 °F drift that confused users.
+  //
+  // Single source of truth: in Accurate Mode we fetch Cantera's
+  // T_ad_complete from a dedicated /calc/aft call using the sidebar
+  // values. In Free Mode we fall back to JS calcAFT. The sidebar reads
+  // this canonical T_flame value, and so does the runner during
+  // automation. Same number everywhere.
+  const bkSidebarTflame = useBackendCalc("aft", {
+    fuel: nonzero(fuel), oxidizer: nonzero(ox),
+    phi, T0, P: atmToBar(P),
+    mode: "adiabatic", heat_loss_fraction: 0,
+    T_fuel_K: T_fuel, T_air_K: T0,
+    WFR, water_mode: waterMode,
+  }, accurate);
+  const T_flame_canonical = useMemo(() => {
+    // Prefer Cantera's complete-combustion result when available — it's
+    // what the Combustor PSR-PFR panel displays. Falls through to JS
+    // calcAFT if the call hasn't returned yet, fails, or accurate=false.
+    if (accurate && bkSidebarTflame.data?.T_ad_complete > 0) {
+      return bkSidebarTflame.data.T_ad_complete;
+    }
+    return calcTflameComplete(fuel, ox, phi, T_fuel, T0);
+  }, [accurate, bkSidebarTflame.data, fuel, ox, phi, T_fuel, T0]);
+
 
   // Gas-turbine cycle backend call. Fires only in Accurate Mode (requires FULL subscription).
   // Uses the same fuel composition as the rest of the toolkit so linked phi is self-consistent.
@@ -6755,12 +6785,21 @@ export default function App(){
                    every render, so changes to fuel / ox / T_fuel / T_air
                    are reflected immediately. ── */}
               {(() => {
-                const tflame_K = calcTflameComplete(fuel, ox, phi, T_fuel, T0);
+                // Canonical T_flame source: Cantera in accurate mode (matches
+                // the Combustor PSR-PFR panel exactly), JS calcAFT otherwise.
+                const tflame_K = T_flame_canonical;
                 const tflame_disp = Number.isFinite(tflame_K)
                   ? +uv(units, "T", tflame_K).toFixed(2) : NaN;
+                const fromBackend = accurate && bkSidebarTflame.data?.T_ad_complete > 0;
                 const onTflameCommit = (v) => {
                   const T_target_K = uvI(units, "T", +v);
                   if (!Number.isFinite(T_target_K) || T_target_K <= 0) return;
+                  // Back-solve via JS bisection in BOTH modes — async backend
+                  // bisection would fire 50 calls per slider drag and lock up
+                  // the queue. After commit, the displayed T_flame snaps to
+                  // whichever solver is canonical for the current mode, so
+                  // the user may see a small drift from the typed value when
+                  // accurate mode is on (~10–20 °F, the JS↔Cantera bias).
                   const phi_solved = solvePhiForTflame(fuel, ox, T_target_K, T_fuel, T0);
                   setPhiClamped(phi_solved);
                 };
@@ -6768,11 +6807,13 @@ export default function App(){
                   <div style={{marginBottom:10}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
                       <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}
-                        title="Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Setting this back-solves φ — pick the φ that produces this T_flame given the current fuel, oxidizer, T_fuel, and T_air. Lean solution only.">
-                        T_flame ({uu(units,"T")}) — complete combustion
+                        title={fromBackend
+                          ? "Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Source: Cantera /calc/aft → T_ad_complete (matches the value shown on the Combustor PSR-PFR panel). Editing this back-solves φ via JS bisection — typed value may differ ~10–20 °F from the redisplayed value due to the JS↔Cantera solver bias."
+                          : "Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Source: in-browser JS calcAFT. Setting this back-solves φ — pick the φ that produces this T_flame given the current fuel, oxidizer, T_fuel, and T_air. Lean solution only."}>
+                        T_flame ({uu(units,"T")}) — complete combustion {fromBackend?"":"(JS)"}
                       </label>
                       <NumField value={tflame_disp} decimals={1} onCommit={onTflameCommit}
-                        title="Type a target T_flame; the lean φ that produces it (under complete combustion at the current inlet conditions) is back-solved automatically."
+                        title="Type a target T_flame; the lean φ that produces it is back-solved automatically."
                         style={{width:82,padding:"3px 6px",fontFamily:"monospace",color:C.warm,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.warm}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
                     </div>
                     <input type="range"
