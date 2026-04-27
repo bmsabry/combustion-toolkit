@@ -4846,17 +4846,22 @@ async function runAutomationMatrix({
       console.warn(`[automation] row ${i+1} failed:`, e);
     }
 
-    // ── Pick the requested outputs into a flat row ──
-    const outRow = { __row__: i + 1 };
-    // Add all input columns up front
-    for (const s of varSpecs){
-      const v = row[s.id];
-      outRow[`in.${s.id}`] = v;
-    }
-    // Then the output columns
+    // ── Capture the per-row data ──
+    // We save the FULL inputs snapshot (after fuel/ox rebalance) and the
+    // mapped output values. The Excel writer iterates over every input the
+    // selected panels need — varied or fixed — and reads each value from
+    // this snapshot. That way the workbook is fully self-describing and
+    // reproducible: a reader doesn't need the App's baseline state to know
+    // what value was used for any input on any row.
+    const outputsForRow = {};
     for (const out of selectedOutputs){
-      outRow[`out.${out.id}`] = rowError ? null : out.pick(rowState);
+      outputsForRow[out.id] = rowError ? null : out.pick(rowState);
     }
+    const outRow = {
+      __row__: i + 1,
+      __inputs__: inputs,
+      __outputs__: outputsForRow,
+    };
     if (rowError) outRow.__error__ = rowError;
     results.push(outRow);
 
@@ -5098,41 +5103,138 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
   if (!results || results.length === 0) return;
   const wb = XLSX.utils.book_new();
   const units = runMeta.units || "SI";
+  const baseline = runMeta.baseline || {};
+  const effectivePanels = runMeta.selectedPanels || [];
 
-  // ── Header rows: column name, unit, panel. Each input/output column also
-  //   carries a converter so per-row values get expressed in current units. ──
-  const inCols  = varSpecs.map(s => ({
-    key: `in.${s.id}`,
+  // ── Column construction ──
+  //
+  // Every variable RELEVANT to the selected panels gets its own column,
+  // even if the user didn't pick it to vary. Non-varied vars carry the
+  // baseline value (the App-level state at the moment Run was clicked) on
+  // every row. This way the workbook fully documents what was held fixed
+  // for the run — no reader has to back-derive defaults.
+  //
+  // Fuel and oxidizer compositions are always reported (one column per
+  // species that's either non-zero in the baseline OR being varied).
+  // Per-row values come from the rebalanced inputs.fuel / inputs.ox so the
+  // sheet records the actual mol % used for that row's calculation.
+
+  const variedIds = new Set(varSpecs.map(s => s.id));
+  const variedSpecMap = {};
+  for (const s of varSpecs) variedSpecMap[s.id] = s;
+
+  // 1. Variables relevant to the selected panels, ordered: varied first
+  //    (in the user's selection order), then fixed (in catalog order).
+  const allRelevant = varsForPanels(effectivePanels);
+  const orderedVars = [
+    ...varSpecs,
+    ...allRelevant.filter(v => !variedIds.has(v.id) && v.kind !== "fuel_species"),
+  ];
+
+  const inCols = orderedVars.map(s => ({
+    key: s.id,
     name: s.label,
     unit: unitFor(s, units),
-    panel: "INPUT",
-    convert: v => toDisplay(s, v, units),  // SI → display
+    panel: variedIds.has(s.id) ? "INPUT (varied)" : "INPUT (fixed)",
+    convert: v => {
+      // Lookups go through the picker fn so unit conversion fires.
+      // Booleans and enums pass through formatRowValue directly.
+      if (s.kind === "enum" || s.kind === "bool" || s.kind === "fuel_species"){
+        return v;
+      }
+      return toDisplay(s, v, units);
+    },
+    pick: r => {
+      const inputs = r.__inputs__ || {};
+      return inputs[s.id];
+    },
   }));
+
+  // 2. Fuel composition columns — one per species that's either varied or
+  //    non-zero in the baseline. Per-row value = inputs.fuel[species].
+  const baselineFuel = baseline.fuel || {};
+  const fuelSpeciesSet = new Set();
+  // Add species that are being varied
+  for (const s of varSpecs){
+    if (s.kind === "fuel_species" && s.species) fuelSpeciesSet.add(s.species);
+  }
+  // Add species that have a nonzero baseline mol %
+  for (const sp of Object.keys(baselineFuel)){
+    if ((+baselineFuel[sp] || 0) > 0) fuelSpeciesSet.add(sp);
+  }
+  // Stable order: by AUTO_VARS catalog (CH4, C2H6, ...), then any extras
+  const fuelOrder = [
+    ...AUTO_VARS.filter(v => v.kind === "fuel_species" && fuelSpeciesSet.has(v.species))
+      .map(v => v.species),
+    ...[...fuelSpeciesSet].filter(sp =>
+      !AUTO_VARS.some(v => v.kind === "fuel_species" && v.species === sp)),
+  ];
+  const fuelCols = fuelOrder.map(sp => {
+    const isVaried = varSpecs.some(v => v.kind === "fuel_species" && v.species === sp);
+    return {
+      key: `fuel.${sp}`,
+      name: `Fuel ${sp}`,
+      unit: "mol %",
+      panel: isVaried ? "FUEL (varied)" : "FUEL (fixed)",
+      convert: v => v,
+      pick: r => {
+        const fuel = r.__inputs__?.fuel || {};
+        return +fuel[sp] || 0;
+      },
+    };
+  });
+
+  // 3. Oxidizer composition columns — same rule (non-zero baseline, no
+  //    user variation supported in the catalog yet). Composition is fixed
+  //    across all rows for now (oxidizer isn't a varyable variable).
+  const baselineOx = baseline.ox || {};
+  const oxSpecies = Object.keys(baselineOx).filter(sp => (+baselineOx[sp] || 0) > 0);
+  const oxCols = oxSpecies.map(sp => ({
+    key: `ox.${sp}`,
+    name: `Oxidizer ${sp}`,
+    unit: "mol %",
+    panel: "OXIDIZER (fixed)",
+    convert: v => v,
+    pick: r => {
+      const ox = r.__inputs__?.ox || {};
+      return +ox[sp] || 0;
+    },
+  }));
+
+  // 4. Output columns
   const outCols = selectedOutputs.map(o => ({
     key: `out.${o.id}`,
     name: o.label,
     unit: outputUnitFor(o, units),
     panel: o.panel.toUpperCase(),
     convert: v => outputDisplayValue(o, v, units),
+    pick: r => r.__outputs__?.[o.id],
   }));
+
   const allCols = [
-    {key: "__row__", name: "Run #", unit: "", panel: "META", convert: v => v},
+    {key: "__row__", name: "Run #", unit: "", panel: "META",
+      convert: v => v, pick: r => r.__row__},
     ...inCols,
+    ...fuelCols,
+    ...oxCols,
     ...outCols,
-    {key: "__error__", name: "Error", unit: "", panel: "META", convert: v => v},
+    {key: "__error__", name: "Error", unit: "", panel: "META",
+      convert: v => v, pick: r => r.__error__ ?? ""},
   ];
 
   // Three-row header: panel, metric name, unit. Then data rows.
   const header1 = allCols.map(c => c.panel);
   const header2 = allCols.map(c => c.name);
   const header3 = allCols.map(c => c.unit ? `(${c.unit})` : "");
-  const dataRows = results.map(r => allCols.map(c => formatRowValue(c.convert(r[c.key]))));
+  const dataRows = results.map(r => allCols.map(c => formatRowValue(c.convert(c.pick(r)))));
 
   const aoa = [header1, header2, header3, ...dataRows];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws["!cols"] = allCols.map(c => ({ wch: Math.max(10, c.name.length + 2) }));
   // Freeze the three header rows.
-  ws["!freeze"] = { xSplit: inCols.length + 1, ySplit: 3 };
+  // Freeze the three header rows + the input columns (everything left of
+  // the first output column). Run # is column 1, then inputs+fuel+ox.
+  ws["!freeze"] = { xSplit: 1 + inCols.length + fuelCols.length + oxCols.length, ySplit: 3 };
   XLSX.utils.book_append_sheet(wb, ws, "Automation Results");
 
   // ── Run definition sheet — captures what was run ──
@@ -5343,7 +5445,7 @@ function AutomatePanel(props){
   const downloadExcel = () => {
     if (!results) return;
     writeAutomationExcel(results, activeVarSpecs, effectiveOutputs, {
-      accurate, selectedPanels: effectivePanels, units,
+      accurate, selectedPanels: effectivePanels, units, baseline,
     });
   };
   const resetRun = () => { setResults(null); setProgress(null); setErrMsg(null); };
