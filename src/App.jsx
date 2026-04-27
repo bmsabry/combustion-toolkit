@@ -6405,7 +6405,7 @@ function _buildSlicedSeries(rows, varSpecs, xCol, yCol, gColor, gShape, slice){
     if (row.__error__) continue;
     // Hold-constant filter
     for (const h of heldValues){
-      const col = { kindRaw: h.varSpec.kind, varId: h.varSpec.id };
+      const col = _colFromVarSpec(h.varSpec);
       if (!_valuesMatch(_readRowVarValue(row, col), h.value)) continue rowLoop;
     }
     // Read X
