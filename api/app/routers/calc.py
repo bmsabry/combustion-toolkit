@@ -371,56 +371,75 @@ def _solve_phi_for_tflame_impl(
     phi_max,
     tol,
 ):
-    def tflame_at(phi: float) -> float:
+    # Wrap complete_combustion.run so brentq sees a sign-change-of-(T-T_target)
+    # function. Track call count and last-evaluated point so we can avoid one
+    # extra Cantera eval at the end when brentq converges dead-on.
+    eval_count = [0]
+    last = {"phi": None, "T": None}
+    def f(phi: float) -> float:
         r = complete_combustion.run(
             fuel, oxidizer, float(phi), float(T_fuel), float(T_air), float(P_bar),
             WFR=float(WFR), water_mode=water_mode, T_water_K=T_water_K,
         )
-        # complete_combustion.run returns a dict whose primary T field is
-        # `T_ad` (matches AFTResponse.T_ad_complete shape).
-        return float(r.get("T_ad", 0.0))
+        T = float(r.get("T_ad", 0.0))
+        last["phi"] = phi
+        last["T"]   = T
+        eval_count[0] += 1
+        return T - T_target
 
-    # Lean-only search: phi(peak) is near 1.0, so cap hi at min(phi_max, 1.0).
+    # Lean-only search: T_flame peaks near phi=1.0 on the lean side.
     lo = float(phi_min)
     hi = min(float(phi_max), 1.0)
-    T_lo = tflame_at(lo)
-    T_hi = tflame_at(hi)
+    f_lo = f(lo)
+    f_hi = f(hi)
+    T_lo = f_lo + T_target
+    T_hi = f_hi + T_target
 
-    # Saturation: target outside the achievable lean range.
+    # Saturation: target outside the achievable lean range. Same semantics
+    # as the previous bisection.
     if T_target <= T_lo:
         return {
             "phi": lo, "T_flame_actual_K": T_lo,
             "T_flame_target_K": T_target,
             "T_at_phi_min_K": T_lo, "T_at_phi_max_K": T_hi,
-            "iterations": 1, "converged": True, "saturated": "low",
+            "iterations": eval_count[0], "converged": True, "saturated": "low",
         }
     if T_target >= T_hi:
         return {
             "phi": hi, "T_flame_actual_K": T_hi,
             "T_flame_target_K": T_target,
             "T_at_phi_min_K": T_lo, "T_at_phi_max_K": T_hi,
-            "iterations": 1, "converged": True, "saturated": "high",
+            "iterations": eval_count[0], "converged": True, "saturated": "high",
         }
 
-    # Bisect — T_flame is monotonic-increasing on the lean side.
-    iters = 0
-    for _ in range(60):
-        mid = 0.5 * (lo + hi)
-        T_mid = tflame_at(mid)
-        iters += 1
-        if T_mid < T_target:
-            lo = mid
-        else:
-            hi = mid
-        if hi - lo < tol:
-            break
-    phi_solved = 0.5 * (lo + hi)
-    T_actual = tflame_at(phi_solved)
+    # Brent's method — combines bisection's robustness with secant /
+    # inverse-quadratic interpolation. Same monotonic root, same xtol
+    # semantics as the old bisection's `if hi - lo < tol: break`, but
+    # converges in ~6-9 evals instead of ~15-18 — ~2× speedup on the same
+    # quality bar.
+    from scipy.optimize import brentq
+    phi_solved, info = brentq(
+        f, lo, hi, xtol=float(tol), rtol=1e-9, maxiter=60, full_output=True,
+    )
+    # Avoid a redundant Cantera eval if brentq's last evaluation was at
+    # phi_solved (very common when convergence lands dead-on).
+    if (last["phi"] is not None
+            and abs(last["phi"] - phi_solved) < 1e-12
+            and last["T"] is not None):
+        T_actual = last["T"]
+    else:
+        T_actual = float(complete_combustion.run(
+            fuel, oxidizer, float(phi_solved), float(T_fuel), float(T_air), float(P_bar),
+            WFR=float(WFR), water_mode=water_mode, T_water_K=T_water_K,
+        ).get("T_ad", 0.0))
+        eval_count[0] += 1
     return {
-        "phi": phi_solved, "T_flame_actual_K": T_actual,
+        "phi": float(phi_solved), "T_flame_actual_K": T_actual,
         "T_flame_target_K": T_target,
         "T_at_phi_min_K": T_lo, "T_at_phi_max_K": T_hi,
-        "iterations": iters, "converged": True, "saturated": "",
+        "iterations": eval_count[0],
+        "converged": bool(info.converged),
+        "saturated": "",
     }
 
 

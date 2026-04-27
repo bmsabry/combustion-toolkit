@@ -70,7 +70,15 @@ def fuel_mass_fraction_at_phi(
     α = n_fuel/(n_fuel+n_ox) at the requested phi; mass fraction follows via
     the two stream MWs.
     """
-    g_tmp = ct.Solution(mech_path)
+    # Pull the pooled Solution for the requested mechanism. Both halves of
+    # the function — the n_atoms metadata read AND the per-stream MW
+    # calculation — work on Solutions whose state is fully overwritten
+    # before reading, so reusing pooled instances is safe.
+    from ._solution_pool import get_solution
+    mechanism = "gri30"  # mech_path-driven callers all use gri30 today
+    if "glarborg" in mech_path.lower():
+        mechanism = "glarborg"
+    g_tmp = get_solution(mechanism, "fmf_tmp")
     stoich_O2 = 0.0
     for s, v in fuel_x.items():
         try:
@@ -88,7 +96,7 @@ def fuel_mass_fraction_at_phi(
     alpha = frac_f_per_ox / (1.0 + frac_f_per_ox)
 
     # Stream MWs from normalized compositions
-    g_f = ct.Solution(mech_path)
+    g_f = get_solution(mechanism, "fmf_fuel")
     Xf = np.zeros(g_f.n_species)
     for s, v in fuel_x.items():
         idx = g_f.species_index(s)
@@ -98,7 +106,7 @@ def fuel_mass_fraction_at_phi(
     g_f.TPX = 298.15, 101325.0, Xf
     MW_f = g_f.mean_molecular_weight
 
-    g_a = ct.Solution(mech_path)
+    g_a = get_solution(mechanism, "fmf_air")
     Xa = np.zeros(g_a.n_species)
     for s, v in ox_x.items():
         idx = g_a.species_index(s)
@@ -113,7 +121,10 @@ def fuel_mass_fraction_at_phi(
 
 def _normalize_to_mech(comp_mol_pct: Dict[str, float], mechanism: str = "gri30") -> Dict[str, float]:
     """Take user composition (mole%), map exotic species to mechanism-available substitutes, return dict normalized to sum 1.0."""
-    gas = ct.Solution(mech_yaml(mechanism))
+    # Pure metadata read (species_names is mechanism-static, not state-dependent),
+    # so a pooled Solution shared across callers is safe.
+    from ._solution_pool import get_solution
+    gas = get_solution(mechanism, "normalize")
     available = set(gas.species_names)
     out: Dict[str, float] = {}
     for name, pct in comp_mol_pct.items():
@@ -178,8 +189,9 @@ def make_gas_mixed(
     (T=T_mixed, composition at phi, pressure=P). If T_fuel == T_air, T_mixed
     equals that value (degenerate case = previous behavior).
     """
+    from ._solution_pool import get_solution
     mech_path = mech_yaml(mechanism)
-    gas = ct.Solution(mech_path)
+    gas = get_solution(mechanism, "mgm_main")
     fuel_x = _normalize_to_mech(fuel_pct, mechanism)
     ox_x = _normalize_to_mech(ox_pct, mechanism)
     fuel_str = ", ".join(f"{k}:{v:.10f}" for k, v in fuel_x.items())
@@ -216,12 +228,15 @@ def make_gas_mixed(
         raise ValueError("Empty oxidizer composition")
     X_air_vec /= X_air_vec.sum()
 
-    # Specific enthalpies of each stream at its own inlet T
-    g_f = ct.Solution(mech_path)
+    # Specific enthalpies of each stream at its own inlet T. Pooled
+    # Solutions — slot names disjoint from `mgm_main` (`gas`) so the three
+    # objects coexist without state collision; we read h_fuel BEFORE
+    # mutating g_a so a single shared instance would be wrong here.
+    g_f = get_solution(mechanism, "mgm_fuel")
     g_f.TPX = float(T_fuel_K), P_Pa, X_fuel_vec
     h_fuel = g_f.enthalpy_mass  # J/kg
 
-    g_a = ct.Solution(mech_path)
+    g_a = get_solution(mechanism, "mgm_air")
     g_a.TPX = float(T_air_K), P_Pa, X_air_vec
     h_air = g_a.enthalpy_mass
 

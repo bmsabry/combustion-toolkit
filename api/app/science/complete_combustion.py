@@ -131,7 +131,10 @@ def run(
     n_prod, n_O2_left, soot_flag = _build_complete_products(z)
 
     # Build the products Cantera Solution and Newton-solve for T at (h, P).
-    g_prod = ct.Solution(mech_yaml(mechanism))
+    # Pooled — slot is disjoint from anything mixture.make_gas_mixed uses,
+    # so `gas_in` (mgm_main) and this `g_prod` (cc_prod) coexist safely.
+    from ._solution_pool import get_solution
+    g_prod = get_solution(mechanism, "cc_prod")
     X = np.zeros(g_prod.n_species)
     for sp, n in n_prod.items():
         if n <= 0:
