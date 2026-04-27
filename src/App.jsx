@@ -969,6 +969,11 @@ function MultiSeriesChart({
   xMin=null, xMax=null, yMin=null, yMax=null,
   xCategorical=false, xLabels=null, yLog=false,
   legendCols=2,
+  // When false, render markers only — no connecting lines. Used for
+  // scatter-cloud plots (e.g. when X is an output that depends on
+  // multiple inputs that all vary, so points are not naturally ordered
+  // by X within a series and a connecting line would zigzag).
+  connectLines=true,
 }){
   const allPts = series.flatMap(s => s.points || []).filter(p =>
     p && Number.isFinite(p.x) && Number.isFinite(p.y) && (!yLog || p.y > 0)
@@ -1086,7 +1091,7 @@ function MultiSeriesChart({
         const marker = s.marker || "circle";
         return (
           <g key={`s${sIdx}`}>
-            {pts.length >= 2 && (
+            {connectLines && pts.length >= 2 && (
               <path d={path} fill="none" stroke={s.color} strokeWidth="1.8"
                 strokeLinejoin="round" strokeLinecap="round" opacity="0.85"/>
             )}
@@ -5971,7 +5976,12 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
       const isNumber = typeof cell.v === "number";
       const style = {
         border: ALL_BORDERS,
-        alignment: { horizontal: isHeader ? "center" : (isNumber ? "right" : "left"), vertical: "center" },
+        // Per user request: center-align EVERY cell horizontally + vertically
+        // (headers and data alike). The number-format string still controls
+        // displayed precision; alignment just centers the text within the
+        // cell box. Numbers stay numeric (sortable / formula-able) — only
+        // the visual placement is centered.
+        alignment: { horizontal: "center", vertical: "center" },
       };
       if (isHeader){
         style.font = HEADER_FONT;
@@ -6036,7 +6046,7 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
       const style = {
         border: { top: {style:"thin",color:{rgb:"606060"}}, bottom: {style:"thin",color:{rgb:"606060"}},
                   left: {style:"thin",color:{rgb:"606060"}}, right: {style:"thin",color:{rgb:"606060"}} },
-        alignment: { vertical: "center" },
+        alignment: { horizontal: "center", vertical: "center" },
       };
       if (r === 0 || isSectionHeader){
         style.font = { bold: true, color: { rgb: "F0F6FC" } };
@@ -6889,11 +6899,27 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
 
   const customSliceData = useMemo(() => {
     if (!xCol || !yCol) return null;
-    // Free vars: X (if input) + both groupings (always inputs).
+    // Free vars: X (if input) ∪ groupings.
+    //
+    // CRITICAL: when X is an OUTPUT (not an input), every input must
+    // remain free or X collapses to whatever value it takes at the
+    // single held slice. Example: X=τ_total, where τ_total =
+    // τ_PSR + L_PFR / V_PFR. If we hold L_PFR at one value, τ_total
+    // is mathematically constant across the slice and the chart
+    // becomes a vertical stack of points at one X value. The DOE-
+    // correct behavior is to show the FULL X spread by leaving every
+    // input free (the user can still narrow the slice by setting an
+    // explicit override in the held-value picker).
     const free = new Set();
-    if (xCol.kind === "input")      free.add(xCol.varId);
-    if (gColorCol)                  free.add(gColorCol.varId);
-    if (gShapeCol)                  free.add(gShapeCol.varId);
+    if (xCol.kind === "input"){
+      free.add(xCol.varId);
+    } else {
+      // X is an output → free every varied input so X's full range is
+      // preserved on the chart.
+      for (const v of varSpecs) free.add(v.id);
+    }
+    if (gColorCol) free.add(gColorCol.varId);
+    if (gShapeCol) free.add(gShapeCol.varId);
     const slice = _findHeldSlice(varSpecs, baseline, results, free, heldOverrides);
     const sd = _buildSlicedSeries(results, varSpecs, xCol, yCol, gColorCol, gShapeCol, slice);
     return { ...sd, slice };
@@ -7213,6 +7239,10 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
               xLabels={customSliceData.xLabels}
               yLog={customLog && _seriesAllPositive(customSliceData.series)}
               legendCols={customSliceData.series.length > 6 ? 3 : 2}
+              // Output X axis = scatter cloud (no natural ordering of points
+              // along X within a series). Drop the connecting line so
+              // markers stand alone instead of zigzagging.
+              connectLines={xCol.kind === "input"}
             />
           </div>
         ) : (
