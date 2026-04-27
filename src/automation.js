@@ -313,6 +313,62 @@ export function varsForPanels(selectedPanels){
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+//  UNIT HANDLING
+//  All internal storage (varSpecs.min/max/step/list, generated matrix rows,
+//  runner inputs) is in SI. The UI converts at the boundary using these
+//  helpers so the user always sees the units they've selected in the
+//  global toggle.
+//
+//  For ABSOLUTE values (min, max, list entries): use toDisplay/toSi.
+//  For DELTAS (step): use toDisplayDelta/toSiDelta. Temperature is the
+//  only common case where these differ (offset matters for absolute,
+//  drops out for delta).
+// ─────────────────────────────────────────────────────────────────────────
+export function unitFor(varDef, units){
+  if (!varDef) return "";
+  return (units === "ENG" && varDef.unit_en) ? varDef.unit_en : (varDef.unit_si || "");
+}
+export function toDisplay(varDef, siValue, units){
+  if (siValue == null || !Number.isFinite(siValue)) return siValue;
+  if (units !== "ENG" || !varDef?.siToEn) return siValue;
+  return varDef.siToEn(siValue);
+}
+export function toSi(varDef, displayValue, units){
+  if (displayValue == null || !Number.isFinite(displayValue)) return displayValue;
+  if (units !== "ENG" || !varDef?.enToSi) return displayValue;
+  return varDef.enToSi(displayValue);
+}
+// For step / delta values (e.g. ΔT in K vs ΔT in °F differ only by the
+// scale factor 1.8, not the 273.15 offset). Subtracting the conversion of
+// zero handles both linear and affine conversions correctly.
+export function toDisplayDelta(varDef, siDelta, units){
+  if (siDelta == null || !Number.isFinite(siDelta)) return siDelta;
+  if (units !== "ENG" || !varDef?.siToEn) return siDelta;
+  return varDef.siToEn(siDelta) - varDef.siToEn(0);
+}
+export function toSiDelta(varDef, displayDelta, units){
+  if (displayDelta == null || !Number.isFinite(displayDelta)) return displayDelta;
+  if (units !== "ENG" || !varDef?.enToSi) return displayDelta;
+  return varDef.enToSi(displayDelta) - varDef.enToSi(0);
+}
+// Output catalog also has unit_si/unit_en/siToEn fields for outputs whose
+// units change between SI and English (T*_K → °F, P*_bar → psia, mdot kg/s
+// → lb/s, etc.). Outputs without those fields just use a single `unit`.
+export function outputUnitFor(out, units){
+  if (!out) return "";
+  if (out.unit_si || out.unit_en){
+    return (units === "ENG" && out.unit_en) ? out.unit_en : (out.unit_si || "");
+  }
+  return out.unit || "";
+}
+export function outputDisplayValue(out, siValue, units){
+  if (siValue == null) return siValue;
+  if (typeof siValue !== "number" || !Number.isFinite(siValue)) return siValue;
+  if (units !== "ENG" || !out?.siToEn) return siValue;
+  return out.siToEn(siValue);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 //  AUTO_OUTPUTS — every output a panel can produce.
 //  Each `pick(rs)` reads from the per-row results bundle:
 //    rs.cycle  — /calc/cycle response (or local equivalent)
@@ -324,6 +380,14 @@ export function varsForPanels(selectedPanels){
 //    rs.flame  — flame speed + autoignition result
 //    rs.derived — extra computed values (MWI, fuel props, etc.)
 // ─────────────────────────────────────────────────────────────────────────
+// Output unit converters — each output that has a SI/EN distinction defines
+// `unit_si`, `unit_en`, and `siToEn`. Outputs that don't change between unit
+// systems (e.g. ppmvd, %, MW, mol fractions) use a single `unit` field.
+const bar_to_psia = b => b * 14.5038;
+const kgs_to_lbs  = k => k * 2.20462;
+const ms_to_fts   = v => v * 3.28084;
+const m2s_to_ft2s = a => a * 10.7639;
+
 export const AUTO_OUTPUTS = [
   // ── Cycle ──
   { id: "MW_net",       label: "MW Net",            panel: "cycle", unit: "MW",       pick: r => r.cycle?.MW_net },
@@ -331,19 +395,19 @@ export const AUTO_OUTPUTS = [
   { id: "MW_cap",       label: "MW Cap",            panel: "cycle", unit: "MW",       pick: r => r.cycle?.MW_cap },
   { id: "eta_LHV_pct",  label: "η LHV",             panel: "cycle", unit: "%",        pick: r => 100*(r.cycle?.eta_LHV ?? r.cycle?.efficiency_LHV ?? 0) },
   { id: "HR_BTU_kWh",   label: "Heat Rate",         panel: "cycle", unit: "BTU/kWh",  pick: r => r.cycle?.HR_BTU_per_kWh },
-  { id: "T1_K",         label: "T1 (ambient)",      panel: "cycle", unit: "K",        pick: r => r.cycle?.T1_K },
-  { id: "T2_K",         label: "T2 (LPC exit)",     panel: "cycle", unit: "K",        pick: r => r.cycle?.T2_K },
-  { id: "T2c_K",        label: "T2c (IC exit)",     panel: "cycle", unit: "K",        pick: r => r.cycle?.T2c_K },
-  { id: "T3_K",         label: "T3 (combustor in)", panel: "cycle", unit: "K",        pick: r => r.cycle?.T3_K },
-  { id: "T4_K",         label: "T4 (firing)",       panel: "cycle", unit: "K",        pick: r => r.cycle?.T4_K },
-  { id: "T5_K",         label: "T5 (turbine exit)", panel: "cycle", unit: "K",        pick: r => r.cycle?.T5_K },
-  { id: "T_Bulk_K",     label: "T_Bulk (flame)",    panel: "cycle", unit: "K",        pick: r => r.cycle?.T_Bulk_K },
-  { id: "P3_bar",       label: "P3",                panel: "cycle", unit: "bar",      pick: r => r.cycle?.P3_bar },
-  { id: "P4_bar",       label: "P4",                panel: "cycle", unit: "bar",      pick: r => r.cycle?.P4_bar },
-  { id: "mdot_air",     label: "mdot air (post-bleed)", panel: "cycle", unit: "kg/s", pick: r => r.cycle?.mdot_air_post_bleed_kg_s ?? r.cycle?.mdot_air_kg_s },
-  { id: "mdot_fuel",    label: "mdot fuel",         panel: "cycle", unit: "kg/s",     pick: r => r.cycle?.mdot_fuel_kg_s },
-  { id: "mdot_bleed",   label: "mdot bleed",        panel: "cycle", unit: "kg/s",     pick: r => r.cycle?.mdot_bleed_kg_s },
-  { id: "mdot_water",   label: "mdot water",        panel: "cycle", unit: "kg/s",     pick: r => r.cycle?.mdot_water_kg_s },
+  { id: "T1",           label: "T1 (ambient)",      panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T1_K },
+  { id: "T2",           label: "T2 (LPC exit)",     panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T2_K },
+  { id: "T2c",          label: "T2c (IC exit)",     panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T2c_K },
+  { id: "T3",           label: "T3 (combustor in)", panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T3_K },
+  { id: "T4",           label: "T4 (firing)",       panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T4_K },
+  { id: "T5",           label: "T5 (turbine exit)", panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T5_K },
+  { id: "T_Bulk",       label: "T_Bulk (flame)",    panel: "cycle", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.cycle?.T_Bulk_K },
+  { id: "P3",           label: "P3",                panel: "cycle", unit_si: "bar", unit_en: "psia", siToEn: bar_to_psia, pick: r => r.cycle?.P3_bar },
+  { id: "P4",           label: "P4",                panel: "cycle", unit_si: "bar", unit_en: "psia", siToEn: bar_to_psia, pick: r => r.cycle?.P4_bar },
+  { id: "mdot_air",     label: "mdot air (post-bleed)", panel: "cycle", unit_si: "kg/s", unit_en: "lb/s", siToEn: kgs_to_lbs, pick: r => r.cycle?.mdot_air_post_bleed_kg_s ?? r.cycle?.mdot_air_kg_s },
+  { id: "mdot_fuel",    label: "mdot fuel",         panel: "cycle", unit_si: "kg/s", unit_en: "lb/s", siToEn: kgs_to_lbs, pick: r => r.cycle?.mdot_fuel_kg_s },
+  { id: "mdot_bleed",   label: "mdot bleed",        panel: "cycle", unit_si: "kg/s", unit_en: "lb/s", siToEn: kgs_to_lbs, pick: r => r.cycle?.mdot_bleed_kg_s },
+  { id: "mdot_water",   label: "mdot water",        panel: "cycle", unit_si: "kg/s", unit_en: "lb/s", siToEn: kgs_to_lbs, pick: r => r.cycle?.mdot_water_kg_s },
   { id: "phi4",         label: "φ4 (combustor exit)", panel: "cycle", unit: "—",     pick: r => r.cycle?.phi4 },
   { id: "FAR4",         label: "FAR4",              panel: "cycle", unit: "—",        pick: r => r.cycle?.FAR4 },
   { id: "phi_Bulk",     label: "φ_Bulk",            panel: "cycle", unit: "—",        pick: r => r.cycle?.phi_Bulk },
@@ -359,28 +423,27 @@ export const AUTO_OUTPUTS = [
   { id: "CO15_mapping",       label: "CO @ 15% O₂",  panel: "mapping", unit: "ppmvd", pick: r => r.map?.correlations?.CO15 },
   { id: "PX36_SEL",           label: "PX36_SEL",     panel: "mapping", unit: "psi",   pick: r => r.map?.correlations?.PX36_SEL },
   { id: "PX36_SEL_HI",        label: "PX36_SEL_HI",  panel: "mapping", unit: "psi",   pick: r => r.map?.correlations?.PX36_SEL_HI },
-  { id: "T_AFT_IP_K",         label: "T_AFT IP",     panel: "mapping", unit: "K",     pick: r => r.map?.circuits?.IP?.T_AFT_complete_K },
-  { id: "T_AFT_OP_K",         label: "T_AFT OP",     panel: "mapping", unit: "K",     pick: r => r.map?.circuits?.OP?.T_AFT_complete_K },
-  { id: "T_AFT_IM_K",         label: "T_AFT IM",     panel: "mapping", unit: "K",     pick: r => r.map?.circuits?.IM?.T_AFT_complete_K },
-  { id: "T_AFT_OM_K",         label: "T_AFT OM",     panel: "mapping", unit: "K",     pick: r => r.map?.circuits?.OM?.T_AFT_complete_K },
+  { id: "T_AFT_IP",           label: "T_AFT IP",     panel: "mapping", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.map?.circuits?.IP?.T_AFT_complete_K },
+  { id: "T_AFT_OP",           label: "T_AFT OP",     panel: "mapping", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.map?.circuits?.OP?.T_AFT_complete_K },
+  { id: "T_AFT_IM",           label: "T_AFT IM",     panel: "mapping", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.map?.circuits?.IM?.T_AFT_complete_K },
+  { id: "T_AFT_OM",           label: "T_AFT OM",     panel: "mapping", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.map?.circuits?.OM?.T_AFT_complete_K },
   { id: "phi_OM",             label: "φ OM (residual)", panel: "mapping", unit: "—",  pick: r => r.map?.phi_OM },
-  { id: "DT_Main_F",          label: "DT_Main",      panel: "mapping", unit: "°F",    pick: r => r.map?.derived?.DT_Main_F },
-  { id: "Tflame_K",           label: "Tflame (avg)", panel: "mapping", unit: "K",     pick: r => r.map?.derived?.Tflame_K },
+  { id: "DT_Main",            label: "DT_Main",      panel: "mapping", unit: "°F",    pick: r => r.map?.derived?.DT_Main_F },
+  { id: "Tflame",             label: "Tflame (avg)", panel: "mapping", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.map?.derived?.Tflame_K },
   { id: "C3_eff_pct",         label: "C3-effective", panel: "mapping", unit: "%",     pick: r => r.map?.derived?.C3_effective_pct },
   { id: "phi_OP_mult",        label: "φ_OP multiplier", panel: "mapping", unit: "—",  pick: r => r.map?.derived?.phi_OP_mult },
   { id: "P3_pressure_ratio",  label: "P3 ratio (P3/638)", panel: "mapping", unit: "—",pick: r => r.map?.derived?.pressure_ratio },
   { id: "FAR_stoich",         label: "FAR stoich",   panel: "mapping", unit: "—",     pick: r => r.map?.FAR_stoich },
 
   // ── AFT (Flame Temp & Properties) ──
-  { id: "T_ad_K",             label: "T_ad (adiabatic)", panel: "aft", unit: "K",     pick: r => r.aft?.T_ad },
-  { id: "T_mixed_K",          label: "T_mixed (3-stream)", panel: "aft", unit: "K",   pick: r => r.aft?.T_mixed_inlet_K },
+  { id: "T_ad",               label: "T_ad (adiabatic)", panel: "aft", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_ad },
+  { id: "T_mixed",            label: "T_mixed (3-stream)", panel: "aft", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_mixed_inlet_K },
   { id: "LHV_mass",           label: "LHV (mass)",   panel: "aft", unit: "MJ/kg",     pick: r => r.derived?.LHV_mass },
   { id: "LHV_vol",            label: "LHV (vol)",    panel: "aft", unit: "MJ/m³",     pick: r => r.derived?.LHV_vol },
   { id: "MW_fuel",            label: "Fuel MW",      panel: "aft", unit: "g/mol",     pick: r => r.derived?.MW_fuel },
   { id: "SG",                 label: "Specific Gravity", panel: "aft", unit: "—",     pick: r => r.derived?.SG },
   { id: "WI",                 label: "Wobbe Index",  panel: "aft", unit: "MJ/m³",     pick: r => r.derived?.WI },
   { id: "AFR_mass",           label: "Stoich AFR (mass)", panel: "aft", unit: "—",    pick: r => r.derived?.AFR_mass },
-  // AFT product mole fractions — top species
   { id: "X_CO2",              label: "X_CO₂ (wet)",  panel: "aft", unit: "%",         pick: r => r.aft?.products?.CO2 },
   { id: "X_H2O",              label: "X_H₂O (wet)",  panel: "aft", unit: "%",         pick: r => r.aft?.products?.H2O },
   { id: "X_O2",               label: "X_O₂ (wet)",   panel: "aft", unit: "%",         pick: r => r.aft?.products?.O2 },
@@ -390,15 +453,15 @@ export const AUTO_OUTPUTS = [
 
   // ── Exhaust Analysis ──
   { id: "exh_phi_from_O2",    label: "φ from O₂",         panel: "exhaust", unit: "—", pick: r => r.exh_o2?.phi },
-  { id: "exh_T_ad_from_O2_K", label: "T_ad from O₂",      panel: "exhaust", unit: "K", pick: r => r.exh_o2?.T_ad },
+  { id: "exh_T_ad_from_O2",   label: "T_ad from O₂",      panel: "exhaust", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.exh_o2?.T_ad },
   { id: "exh_FAR_from_O2",    label: "FAR (mass) from O₂",panel: "exhaust", unit: "—", pick: r => r.exh_o2?.FAR_mass },
   { id: "exh_phi_from_CO2",   label: "φ from CO₂",        panel: "exhaust", unit: "—", pick: r => r.exh_co2?.phi },
-  { id: "exh_T_ad_from_CO2_K",label: "T_ad from CO₂",     panel: "exhaust", unit: "K", pick: r => r.exh_co2?.T_ad },
+  { id: "exh_T_ad_from_CO2",  label: "T_ad from CO₂",     panel: "exhaust", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.exh_co2?.T_ad },
   { id: "exh_FAR_from_CO2",   label: "FAR (mass) from CO₂", panel: "exhaust", unit: "—", pick: r => r.exh_co2?.FAR_mass },
 
   // ── PSR-PFR Combustor ──
-  { id: "T_psr_K",            label: "T_PSR",        panel: "combustor", unit: "K",   pick: r => r.psr?.T_psr },
-  { id: "T_exit_K",           label: "T_exit (PFR)", panel: "combustor", unit: "K",   pick: r => r.psr?.T_ad },
+  { id: "T_psr",              label: "T_PSR",        panel: "combustor", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.psr?.T_psr },
+  { id: "T_exit",             label: "T_exit (PFR)", panel: "combustor", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.psr?.T_ad },
   { id: "psr_NO_ppm",         label: "NOx PSR",      panel: "combustor", unit: "ppm", pick: r => r.psr?.NO_ppm_psr },
   { id: "psr_CO_ppm",         label: "CO PSR",       panel: "combustor", unit: "ppm", pick: r => r.psr?.CO_ppm_psr },
   { id: "exit_NO_ppm",        label: "NOx exit",     panel: "combustor", unit: "ppm", pick: r => r.psr?.NO_ppm_exit },
@@ -411,14 +474,15 @@ export const AUTO_OUTPUTS = [
   { id: "tau_total_ms",       label: "τ_total",      panel: "combustor", unit: "ms",  pick: r => r.psr?.tau_total_ms },
 
   // ── Flame Speed & Blowoff ──
+  // S_L conventionally reported in cm/s globally — keep single unit.
   { id: "S_L_cms",            label: "S_L",          panel: "flame", unit: "cm/s",    pick: r => r.flame?.SL_cms },
   { id: "tau_chem_ms",        label: "τ_chem",       panel: "flame", unit: "ms",      pick: r => r.flame?.tau_chem_ms },
   { id: "tau_flow_ms",        label: "τ_flow",       panel: "flame", unit: "ms",      pick: r => r.flame?.tau_flow_ms },
   { id: "Damkohler",          label: "Damköhler",    panel: "flame", unit: "—",       pick: r => r.flame?.Da },
-  { id: "blowoff_velocity",   label: "Blowoff velocity", panel: "flame", unit: "m/s", pick: r => r.flame?.blowoff_velocity },
+  { id: "blowoff_velocity",   label: "Blowoff velocity", panel: "flame", unit_si: "m/s", unit_en: "ft/s", siToEn: ms_to_fts, pick: r => r.flame?.blowoff_velocity },
   { id: "stable",             label: "Flame stable", panel: "flame", unit: "bool",    pick: r => r.flame?.stable },
   { id: "tau_BO_ms",          label: "τ_BO (Zukoski)", panel: "flame", unit: "ms",    pick: r => r.flame?.tau_BO_ms },
-  { id: "alpha_th",           label: "α_th",         panel: "flame", unit: "m²/s",    pick: r => r.flame?.alpha_th },
+  { id: "alpha_th",           label: "α_th",         panel: "flame", unit_si: "m²/s", unit_en: "ft²/s", siToEn: m2s_to_ft2s, pick: r => r.flame?.alpha_th },
   { id: "g_c",                label: "g_c (Lewis-vE)", panel: "flame", unit: "1/s",   pick: r => r.flame?.g_c },
   { id: "tau_ign_ms",         label: "τ_ign",        panel: "flame", unit: "ms",      pick: r => r.flame?.tau_ign_ms },
   { id: "tau_res_ms",         label: "τ_res",        panel: "flame", unit: "ms",      pick: r => r.flame?.tau_res_ms },

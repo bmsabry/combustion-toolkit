@@ -4,6 +4,8 @@ import {
   AUTOMATABLE_PANELS, AUTO_VARS, AUTO_OUTPUTS,
   varsForPanels, outputsForPanels,
   generateMatrix, expandPanelDeps, rebalanceFuel, formatRowValue,
+  unitFor, toDisplay, toSi, toDisplayDelta, toSiDelta,
+  outputUnitFor, outputDisplayValue,
 } from "./automation";
 import { useAuth, AuthModal } from "./auth.jsx";
 import { AccountPanel } from "./AccountPanel.jsx";
@@ -5057,32 +5059,36 @@ async function runFlameForAutomation(inp, accurate){
 function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
   if (!results || results.length === 0) return;
   const wb = XLSX.utils.book_new();
+  const units = runMeta.units || "SI";
 
-  // ── Header rows: column name, unit, panel ──
+  // ── Header rows: column name, unit, panel. Each input/output column also
+  //   carries a converter so per-row values get expressed in current units. ──
   const inCols  = varSpecs.map(s => ({
     key: `in.${s.id}`,
     name: s.label,
-    unit: s.unit_si || "",
+    unit: unitFor(s, units),
     panel: "INPUT",
+    convert: v => toDisplay(s, v, units),  // SI → display
   }));
   const outCols = selectedOutputs.map(o => ({
     key: `out.${o.id}`,
     name: o.label,
-    unit: o.unit || "",
+    unit: outputUnitFor(o, units),
     panel: o.panel.toUpperCase(),
+    convert: v => outputDisplayValue(o, v, units),
   }));
   const allCols = [
-    {key: "__row__", name: "Run #", unit: "", panel: "META"},
+    {key: "__row__", name: "Run #", unit: "", panel: "META", convert: v => v},
     ...inCols,
     ...outCols,
-    {key: "__error__", name: "Error", unit: "", panel: "META"},
+    {key: "__error__", name: "Error", unit: "", panel: "META", convert: v => v},
   ];
 
   // Three-row header: panel, metric name, unit. Then data rows.
   const header1 = allCols.map(c => c.panel);
   const header2 = allCols.map(c => c.name);
   const header3 = allCols.map(c => c.unit ? `(${c.unit})` : "");
-  const dataRows = results.map(r => allCols.map(c => formatRowValue(r[c.key])));
+  const dataRows = results.map(r => allCols.map(c => formatRowValue(c.convert(r[c.key]))));
 
   const aoa = [header1, header2, header3, ...dataRows];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -5101,19 +5107,27 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
     ["Matrix size", `${results.length} runs`],
     [""],
     ["Variables varied"],
-    ["Variable", "Mode", "Min", "Max", "Step", "List", "Balance species"],
-    ...varSpecs.map(s => [
-      s.id, s.mode || (s.kind === "enum" || s.kind === "bool" ? "list" : "range"),
-      s.mode === "list" ? "" : (s.min ?? ""),
-      s.mode === "list" ? "" : (s.max ?? ""),
-      s.mode === "list" ? "" : (s.step ?? ""),
-      Array.isArray(s.list) ? s.list.join(", ") : "",
-      s.balanceSpecies || "",
-    ]),
+    ["Variable", "Unit", "Mode", "Min", "Max", "Step", "List", "Balance species"],
+    ...varSpecs.map(s => {
+      const isEnum = s.kind === "enum" || s.kind === "bool";
+      const u = unitFor(s, units);
+      const dispMin  = s.mode === "list" ? "" : formatRowValue(toDisplay(s, s.min, units));
+      const dispMax  = s.mode === "list" ? "" : formatRowValue(toDisplay(s, s.max, units));
+      const dispStep = s.mode === "list" ? "" : formatRowValue(toDisplayDelta(s, s.step, units));
+      const dispList = Array.isArray(s.list)
+        ? s.list.map(v => isEnum ? v : formatRowValue(toDisplay(s, v, units))).join(", ")
+        : "";
+      return [
+        s.id, u,
+        s.mode || (isEnum ? "list" : "range"),
+        dispMin, dispMax, dispStep, dispList,
+        s.balanceSpecies || "",
+      ];
+    }),
     [""],
     ["Outputs captured"],
     ["Output", "Panel", "Unit"],
-    ...selectedOutputs.map(o => [o.label, o.panel, o.unit || ""]),
+    ...selectedOutputs.map(o => [o.label, o.panel, outputUnitFor(o, units)]),
   ];
   const wsDef = XLSX.utils.aoa_to_sheet(def);
   wsDef["!cols"] = [{wch:36},{wch:14},{wch:12},{wch:12},{wch:12},{wch:36},{wch:18}];
@@ -5277,7 +5291,7 @@ function AutomatePanel(props){
   const downloadExcel = () => {
     if (!results) return;
     writeAutomationExcel(results, activeVarSpecs, effectiveOutputs, {
-      accurate, selectedPanels: effectivePanels,
+      accurate, selectedPanels: effectivePanels, units,
     });
   };
   const resetRun = () => { setResults(null); setProgress(null); setErrMsg(null); };
@@ -5385,7 +5399,7 @@ function AutomatePanel(props){
                         style={{accentColor:C.accent, cursor:"pointer", margin:0}}/>
                       <span style={{flex:1, color:C.txt}}>{v.label}</span>
                       <span style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>
-                        {v.unit_si || v.kind}
+                        {unitFor(v, units) || v.kind}
                       </span>
                     </label>
                   );
@@ -5411,13 +5425,26 @@ function AutomatePanel(props){
           const isEnum = def.kind === "enum" || def.kind === "bool";
           const isFuel = def.kind === "fuel_species";
           const mode = cfg.mode || (isEnum ? "list" : "range");
+          const dispUnit = unitFor(def, units);
+          // Convert SI defaults to display units. cfg.{min,max,step,list} are
+          // stored in SI; we convert here for the input fields and convert
+          // back on commit.
+          const siMin  = cfg.min  ?? def.range?.[0];
+          const siMax  = cfg.max  ?? def.range?.[1];
+          const siStep = cfg.step ?? def.step;
+          const dispMin  = toDisplay(def, siMin, units);
+          const dispMax  = toDisplay(def, siMax, units);
+          const dispStep = toDisplayDelta(def, siStep, units);
+          // Points-count: compute from display units (math is identical, just
+          // shown for the user's UX).
+          const pointCount = Math.max(1, Math.floor(((dispMax - dispMin) / Math.max(dispStep, 1e-12)) + 1.0001));
           return(
             <div key={vid} style={{padding:"8px 10px", background:C.bg3, borderRadius:5,
               border:`1px solid ${C.border}`, display:"grid",
               gridTemplateColumns:"180px 80px 1fr", gap:8, alignItems:"center"}}>
               <div>
                 <div style={{fontSize:11.5, color:C.txt, fontWeight:600}}>{def.label}</div>
-                <div style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>{def.unit_si || def.kind}</div>
+                <div style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>{dispUnit || def.kind}</div>
               </div>
               <select value={mode} onChange={e => updateVarSpec(vid, {mode:e.target.value})}
                 disabled={isEnum}
@@ -5428,36 +5455,41 @@ function AutomatePanel(props){
               <div style={{display:"flex", gap:6, alignItems:"center", flexWrap:"wrap"}}>
                 {mode === "range" && !isEnum && (
                   <>
-                    <NumLabel l="Min">
-                      <NumField value={cfg.min ?? def.range?.[0]} decimals={4}
-                        onCommit={v => updateVarSpec(vid, {min:+v})}
-                        style={{...S.inp, width:75}}/>
+                    <NumLabel l={`Min (${dispUnit})`}>
+                      <NumField value={dispMin} decimals={4}
+                        onCommit={v => updateVarSpec(vid, {min: toSi(def, +v, units)})}
+                        style={{...S.inp, width:80}}/>
                     </NumLabel>
-                    <NumLabel l="Max">
-                      <NumField value={cfg.max ?? def.range?.[1]} decimals={4}
-                        onCommit={v => updateVarSpec(vid, {max:+v})}
-                        style={{...S.inp, width:75}}/>
+                    <NumLabel l={`Max (${dispUnit})`}>
+                      <NumField value={dispMax} decimals={4}
+                        onCommit={v => updateVarSpec(vid, {max: toSi(def, +v, units)})}
+                        style={{...S.inp, width:80}}/>
                     </NumLabel>
-                    <NumLabel l="Step">
-                      <NumField value={cfg.step ?? def.step} decimals={4}
-                        onCommit={v => updateVarSpec(vid, {step:+v})}
-                        style={{...S.inp, width:65}}/>
+                    <NumLabel l={`Step (${dispUnit})`}>
+                      <NumField value={dispStep} decimals={4}
+                        onCommit={v => updateVarSpec(vid, {step: toSiDelta(def, +v, units)})}
+                        style={{...S.inp, width:70}}/>
                     </NumLabel>
                     <span style={{fontSize:10, color:C.txtMuted, fontFamily:"monospace"}}>
-                      → {Math.max(1, Math.floor(((cfg.max ?? def.range?.[1]) - (cfg.min ?? def.range?.[0])) / (cfg.step ?? def.step) + 1))} pts
+                      → {pointCount} pts
                     </span>
                   </>
                 )}
                 {mode === "list" && (
                   <>
                     <input type="text" placeholder={isEnum ? def.choices?.map(c=>c.value).join(", ") : "1.0, 2.0, 3.0"}
-                      value={Array.isArray(cfg.list) ? cfg.list.join(", ") : ""}
+                      value={Array.isArray(cfg.list)
+                        ? cfg.list.map(v => isEnum ? v : toDisplay(def, v, units)).join(", ")
+                        : ""}
                       onChange={e => {
                         const raw = e.target.value.split(",").map(s => s.trim()).filter(Boolean);
-                        const list = isEnum ? raw : raw.map(s => +s).filter(n => Number.isFinite(n));
+                        const list = isEnum
+                          ? raw
+                          : raw.map(s => +s).filter(n => Number.isFinite(n)).map(v => toSi(def, v, units));
                         updateVarSpec(vid, {list});
                       }}
                       style={{...S.inp, flex:1, minWidth:200}}/>
+                    {!isEnum && <span style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>{dispUnit}</span>}
                   </>
                 )}
                 {isFuel && (
@@ -5508,21 +5540,25 @@ function AutomatePanel(props){
           color={accurate ? C.accent : C.txtDim}/>
         <Stat label="Est. runtime"    value={formatRuntime(estimatedSec)}/>
       </div>
-      {/* Tiny preview table — first 8 rows */}
+      {/* Tiny preview table — first 8 rows. Values shown in current units. */}
       <div style={{maxHeight:180, overflow:"auto", border:`1px solid ${C.border}`, borderRadius:4,
         fontFamily:"monospace", fontSize:10, background:C.bg}}>
         <table style={{width:"100%", borderCollapse:"collapse"}}>
           <thead>
             <tr>
               <th style={previewHeaderStyle}>#</th>
-              {activeVarSpecs.map(s => <th key={s.id} style={previewHeaderStyle}>{s.label}</th>)}
+              {activeVarSpecs.map(s => <th key={s.id} style={previewHeaderStyle}>
+                {s.label}{unitFor(s, units) ? ` (${unitFor(s, units)})` : ""}
+              </th>)}
             </tr>
           </thead>
           <tbody>
             {matrix.slice(0, 8).map((r, i) => (
               <tr key={i} style={{borderTop:`1px solid ${C.border}40`}}>
                 <td style={previewCellStyle}>{i+1}</td>
-                {activeVarSpecs.map(s => <td key={s.id} style={previewCellStyle}>{formatRowValue(r[s.id])}</td>)}
+                {activeVarSpecs.map(s => <td key={s.id} style={previewCellStyle}>
+                  {formatRowValue(toDisplay(s, r[s.id], units))}
+                </td>)}
               </tr>
             ))}
             {matrix.length > 8 && (
