@@ -21,8 +21,12 @@ import { estimateRunSeconds, recordRunPerf } from "./perfEstimator";
    UNIT SYSTEM
    ══════════════════════════════════════════════════════════════ */
 const UnitCtx = createContext("SI");
-// Accurate Mode: when on AND user has online access, panels route calcs to the backend (Cantera).
-// Otherwise they use the free in-browser models. Exposed via context to avoid prop-drilling.
+// `accurate` is now DERIVED from Application Mode (accurate = mode !== "free")
+// in App. When true AND user has online access, panels route calcs to the
+// Cantera backend; otherwise they use the in-browser JS reduced-order models.
+// Exposed via context to avoid prop-drilling. The `setAccurate` field is a
+// no-op stub kept for context-shape compatibility — the canonical control is
+// the mode picker in the header.
 const AccurateCtx = createContext({ accurate:false, setAccurate:()=>{}, available:false });
 // Busy tracker — any Cantera call registers a task here while in-flight so the global overlay
 // can show a large "calculations in progress" banner that disappears when all tasks complete.
@@ -1391,7 +1395,8 @@ function HelpModal({show,onClose}){if(!show)return null;
 
       {_h("Header Bar")}
       <p><strong>Unit toggle</strong> — flips the entire UI between SI (K, bar, m/s, MJ/kg) and English (°F, psia, ft/s, BTU/lb). Calculations stay in SI internally; this only changes display.</p>
-      <p><strong>Accurate Mode</strong> — routes calculations to the backend Cantera solver (GRI-Mech 3.0 or Glarborg 2018). Requires an active subscription. When OFF, panels use in-browser reduced-order models accurate for φ ≤ 1.0.</p>
+      <p><strong>Application Mode picker</strong> — the button labeled <code>MODE: …</code>. Four choices: <em>Free</em> (combustion-only panels, in-browser reduced-order JS, accurate for φ ≤ 1.0), <em>Combustion Toolkit</em> (full Cantera combustion + DOE Automation, all φ regimes), <em>Gas Turbine Simulator</em> (Operations Summary + Cycle + LMS100 Mapping, Cantera-backed), and <em>Advanced Mode</em> (everything). The three non-Free modes require an active subscription. The mode banner directly under the tab bar describes the active choice.</p>
+      <p><strong>Theme toggle</strong> — flips the entire UI between dark and light palettes. Affects on-screen panels and exported PNG figures. Persists across sessions.</p>
       <p><strong>Help (?)</strong> — this dialog. <strong>Export Excel</strong> — downloads two workbooks (one in SI, one in English) containing every input, output, sweep, and setting from every panel. <strong>Account</strong> — sign in / out, manage subscription.</p>
 
       {_h("Left Sidebar")}
@@ -1438,14 +1443,14 @@ function HelpModal({show,onClose}){if(!show)return null;
       <p>Back-solves φ and T_ad from measured exhaust O₂ (dry) or CO₂ (dry) by inverting the equilibrium solver. Useful for tuning combustion mode against actual stack measurements. Two-pass solver: initial mix-T guess at φ=0.6, then refines.</p>
 
       {_sub("🏭 Combustor PSR → PFR")}
-      <p>Reduced-order combustor: a Perfectly Stirred Reactor (primary zone, residence time τ_PSR) feeding a Plug Flow Reactor (burnout zone, length L_PFR at velocity V_PFR). Computes thermal NOx (extended Zeldovich) and CO burnout. <strong>Accurate Mode</strong> exposes solver options: PSR seed (cold-ignited / hot-eq / unreacted / autoignition), equilibrium constraint (HP / UV / TP), integration strategy, heat-loss fraction, and kinetic mechanism (GRI-Mech 3.0 / Glarborg 2018).</p>
+      <p>Reduced-order combustor: a Perfectly Stirred Reactor (primary zone, residence time τ_PSR) feeding a Plug Flow Reactor (burnout zone, length L_PFR at velocity V_PFR). Computes thermal NOx (extended Zeldovich) and CO burnout. The non-Free modes (Combustion Toolkit / Advanced) expose Cantera solver options: PSR seed (cold-ignited / hot-eq / unreacted / autoignition), equilibrium constraint (HP / UV / TP), integration strategy, heat-loss fraction, and kinetic mechanism (GRI-Mech 3.0 / Glarborg 2018).</p>
       <p><strong>Run sweep</strong> — 17-point load sweep across the full envelope, results plotted vs load. Cached per build SHA.</p>
 
       {_sub("⚡ Flame Speed & Blowoff")}
       <p>Laminar flame speed from Gülder / Metghalchi-Keck correlations (mixture-weighted). Blowoff via Damköhler comparison (τ_chem vs τ_flow). Premixer stability adds Zukoski blowoff time (τ_BO), Lewis-von Elbe critical gradient (g_c), and Spadaccini-Colket autoignition delay (τ_ign vs τ_res). The PREMIXER SAFE / RISK badge combines all four criteria.</p>
 
-      {_sub("📊 Thermo Database")}
-      <p>NASA 7-coefficient polynomial properties (Cp, H, S, G) for 16 species from 200–3000 K. Pick a species and a temperature range; outputs plot and tabulate.</p>
+      {_sub("📚 Nomenclature")}
+      <p>Single searchable index of every variable, output, and convention used anywhere in the app. Search by short symbol (NOx15, phi, Tad_CC), classical name (Equivalence Ratio, Wobbe), unit, or panel.</p>
 
       {_sub("📘 Assumptions")}
       <p>Single-page reference of every modeling assumption baked into the cycle and combustion solvers — ambient, humid air, compressor, intercooler, combustor, turbine, power & load, fuel properties, MWI derate, engine deck anchors, off-design scaling, and solver numerics. Mirrors the Assumptions sheet in the Excel export.</p>
@@ -1456,7 +1461,7 @@ function HelpModal({show,onClose}){if(!show)return null;
       {_h("Disclaimer")}
       <p style={{fontSize:11,color:C.warm}}><strong>This simulator may not be representative of the LMS100 engine behavior.</strong> All results are reduced-order approximations for educational and preliminary-estimation purposes. Not certified for design, permitting, or safety-critical decisions. See the footer for the full liability disclaimer.</p>
 
-      <p style={{fontSize:10.5,color:C.txtMuted,marginTop:14}}>Calculations use NASA Glenn thermodynamic polynomials, Gülder / Metghalchi-Keck flame speed correlations, global Arrhenius kinetics, extended Zeldovich NOx, Cantera GRI-Mech 3.0 / Glarborg 2018 (Accurate Mode), and an LMS100 4-circuit DLE correlation anchored to the design point.</p>
+      <p style={{fontSize:10.5,color:C.txtMuted,marginTop:14}}>Calculations use NASA Glenn thermodynamic polynomials, Gülder / Metghalchi-Keck flame speed correlations, global Arrhenius kinetics, extended Zeldovich NOx, Cantera GRI-Mech 3.0 / Glarborg 2018 (Combustion Toolkit / Advanced modes), and an LMS100 4-circuit DLE correlation anchored to the design point.</p>
     </div></div></div>);}
 
 function PricingModal({show,onClose,onRequestSignin}){if(!show)return null;
@@ -2124,7 +2129,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         <M l="Safety Margin (τ_ign/τ_res)" v={!isFinite(ignition_margin)?"N/A":(tau_ign_is_lower_bound?">":"")+(ignition_margin>=1e4?ignition_margin.toExponential(1):ignition_margin.toFixed(1))} u="—" c={tau_ign_source==="none"?C.txtMuted:(ignition_safe?C.good:C.warm)} tip={tau_ign_is_lower_bound?"Lower bound on the safety margin — Cantera did not observe ignition within the integration window, so τ_ign (and therefore the margin) is at least this value.":"Ratio τ_ign / τ_res. Values > 3 indicate a robust margin against premixer autoignition. Values < 1 indicate the mixture can autoignite before leaving the premixer."}/>
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
           <Tip text={`PREMIXER SAFE requires BOTH criteria:\n  1) Autoignition margin τ_ign/τ_res ≥ 3 (robust; 1–3 marginal; <1 fails).\n  2) Core-flashback margin V_premix / S_T > 1/0.7 ≈ 1.43, where S_T ≈ S_L·${turb_factor.toFixed(1)} (${H2_frac>0.30?"H₂>30% — includes turbulent wrinkling + Le<1 thermodiffusive":"Le≈1 — turbulent wrinkling only"}).\nFor detailed design replace S_T with measured / CFD values.`}>
-            <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",cursor:"help",background:tau_ign_source==="none"?`${C.txtMuted}1F`:(premixer_safe?`${C.good}1F`:`${C.warm}1F`),color:tau_ign_source==="none"?C.txtMuted:(premixer_safe?C.good:C.warm),border:`1px solid ${tau_ign_source==="none"?C.txtMuted+"44":(premixer_safe?C.good+"44":C.warm+"44")}`}}>{tau_ign_source==="none"?"● NEEDS ACCURATE MODE":"● "+risk_label} ⓘ</span></Tip></div>
+            <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",cursor:"help",background:tau_ign_source==="none"?`${C.txtMuted}1F`:(premixer_safe?`${C.good}1F`:`${C.warm}1F`),color:tau_ign_source==="none"?C.txtMuted:(premixer_safe?C.good:C.warm),border:`1px solid ${tau_ign_source==="none"?C.txtMuted+"44":(premixer_safe?C.good+"44":C.warm+"44")}`}}>{tau_ign_source==="none"?"● NEEDS BACKEND MODE":"● "+risk_label} ⓘ</span></Tip></div>
       </div>
       <div style={{...S.row,gap:8,marginBottom:10}}>
         <M l="Turbulent S_T Estimate" v={uv(units,"vel",S_T_est).toFixed(2)} u={uu(units,"vel")} c={C.violet} tip={`Screening estimate of turbulent flame speed: S_T ≈ S_L · ${turb_factor.toFixed(1)}. Factor ${turb_factor.toFixed(1)} accounts for ${H2_frac>0.30?"turbulent wrinkling AND Le<1 thermodiffusive acceleration (H₂ > 30%)":"turbulent wrinkling only (Le ≈ 1 hydrocarbons)"}. Replace with measured / CFD S_T for detailed design.`}/>
@@ -2161,7 +2166,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         ):accurate?(
           <><strong style={{color:C.accent2,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>⚠ CURVES ARE TRENDS ONLY</strong> — The curves below use the fast Gülder/Metghalchi-Keck correlation scaled to your current Cantera operating point (×{SL_scale.toFixed(2)}). For H₂ blends or rich operation the trend shape may differ from Cantera. Click <strong>Run Cantera Sweep Curves</strong> to replace the trends with ~30 real Cantera flame solves — this takes about 2–3 minutes; a "Calculations in Progress" box will be shown until complete.</>
         ):(
-          <>Accurate mode is off — curves below are computed with the in-browser Gülder/Metghalchi-Keck correlation. Switch to <strong>Accurate</strong> mode and click <strong>Run Cantera Sweep Curves</strong> to replace these trends with first-principles Cantera solves.</>
+          <>Free Mode active — curves below are computed with the in-browser Gülder/Metghalchi-Keck correlation. Switch to <strong>Combustion Toolkit</strong> or <strong>Advanced Mode</strong> via the MODE picker, then click <strong>Run Cantera Sweep Curves</strong> to replace these trends with first-principles Cantera solves.</>
         )}
         {sweepErr&&<div style={{marginTop:6,color:C.warm,fontFamily:"monospace",fontSize:10.5}}>⚠ Sweep failed: {sweepErr}</div>}
       </div>
@@ -2380,7 +2385,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
           <div style={{fontSize:9.5,color:C.txtMuted}}>
             {accurate
               ? "Cantera enthalpy balance: h_mix = Z·h_fuel(T_fuel) + (1−Z)·h_air(T_air), then solve gas.HPX for T."
-              : "Free-version constant-cp approximation (cp_fuel≈2.2, cp_air≈1.005 kJ/kg·K). Switch to ACCURATE for the exact Cantera enthalpy balance."}
+              : "Free-version constant-cp approximation (cp_fuel≈2.2, cp_air≈1.005 kJ/kg·K). Switch to Combustion Toolkit or Advanced Mode for the exact Cantera enthalpy balance."}
           </div>
         </div>
       )}
@@ -3109,8 +3114,8 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
             </button>
           </div>
         ))}
-        {!available&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.warm}12`,border:`1px solid ${C.warm}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Linkages only push values when <strong style={{color:C.warm}}>Accurate Mode</strong> is active. Subscribe to the FULL tier to enable the Cantera-backed cycle solver.</div>}
-        {available&&!accurate&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.accent2}12`,border:`1px solid ${C.accent2}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Turn on <strong style={{color:C.accent2}}>Accurate Mode</strong> (header toggle) to run the cycle solver and activate linkages.</div>}
+        {!available&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.warm}12`,border:`1px solid ${C.warm}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Cycle linkages need an active subscription to run the Cantera backend. The <strong style={{color:C.warm}}>Gas Turbine Simulator</strong> or <strong style={{color:C.warm}}>Advanced Mode</strong> tier enables the cycle solver.</div>}
+        {available&&!accurate&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.accent2}12`,border:`1px solid ${C.accent2}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Switch to <strong style={{color:C.accent2}}>Gas Turbine Simulator</strong> or <strong style={{color:C.accent2}}>Advanced Mode</strong> via the MODE picker in the header to run the cycle solver and activate linkages.</div>}
       </div>
     </div>
 
@@ -3999,8 +4004,8 @@ function CombustorMappingPanel({
         let title, body, color;
         if(!accurate){
           color = C.warm;
-          title = "Accurate Mode is off";
-          body = "Click ACCURATE: OFF in the header to switch it on. The cycle backend needs to run before the mapping can populate (needs T3, P3, humid-air composition, total fuel flow).";
+          title = "Cycle backend not active";
+          body = "Switch to Gas Turbine Simulator or Advanced Mode using the MODE picker in the header. The cycle backend needs to run before the mapping can populate (needs T3, P3, humid-air composition, total fuel flow).";
         } else if(_err){
           color = C.strong;
           title = "Cycle backend error";
@@ -5176,7 +5181,7 @@ function OperationsSummaryPanel({
     {!cycleResult?
       <div style={{padding:"32px 24px",textAlign:"center",background:C.bg2,border:`1px dashed ${C.warm}50`,borderRadius:10,color:C.txtDim}}>
         <div style={{fontSize:13,fontWeight:600,color:C.warm,marginBottom:8}}>Cycle solution not available</div>
-        <div style={{fontSize:11}}>Turn on Accurate Mode in the header. The cycle must run before the summary can populate.</div>
+        <div style={{fontSize:11}}>Switch to Gas Turbine Simulator or Advanced Mode via the MODE picker in the header. The cycle must run before the summary can populate.</div>
       </div>
       :<div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:16,alignItems:"start"}}>
       <div style={{display:"flex",flexDirection:"column",gap:12,minWidth:0}}>
@@ -5340,7 +5345,7 @@ function OperationsSummaryPanel({
           </div>
         </div>
         <button onClick={runSweep} disabled={sweeping||!accurate}
-          title={!accurate?"Requires Accurate Mode":sweeping?"Sweep in progress…":"Run a 17-point load sweep (20-100 %) at the current conditions"}
+          title={!accurate?"Requires Gas Turbine Simulator or Advanced Mode":sweeping?"Sweep in progress…":"Run a 17-point load sweep (20-100 %) at the current conditions"}
           style={{padding:"10px 18px",fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",
             color:sweeping||!accurate?C.txtMuted:C.bg,
             background:sweeping||!accurate?"transparent":C.accent,
@@ -9069,7 +9074,7 @@ function AutomatePanel(props){
       {cycleRequiresAccurate && (
         <div style={{padding:"6px 10px", background:`${C.warm}14`, border:`1px solid ${C.warm}60`,
           borderRadius:4, fontSize:11, color:C.warm, marginBottom:8, fontFamily:"'Barlow',sans-serif", fontWeight:700}}>
-          ⚠ Cycle requires Accurate Mode (Cantera backend). Turn it on in the header before running.
+          ⚠ Cycle requires Gas Turbine Simulator or Advanced Mode (Cantera backend). Switch via the MODE picker in the header before running.
         </div>
       )}
       <div style={{display:"flex", gap:14, marginBottom:8, flexWrap:"wrap", fontSize:11, fontFamily:"'Barlow',sans-serif"}}>
@@ -9989,9 +9994,17 @@ export default function App(){
   // Auto-downgrade if the user loses online/subscribed state while
   // sitting in a non-Free mode. Without this they'd be stuck in a
   // mode whose Cantera calls all 401 / 403.
+  //
+  // CRITICAL: wait for auth.loading to resolve before deciding to
+  // downgrade. Without this guard, a subscribed user with
+  // localStorage.ctk_app_mode = "advanced" gets demoted on the
+  // first render (auth still loading → hasOnline=false), and the
+  // one-shot lift effect below short-circuits because saved="advanced"
+  // already exists — leaving them stuck on Free for the whole session.
   useEffect(() => {
+    if (auth.loading) return;
     if (mode !== "free" && !hasOnline) setModeRaw("free");
-  }, [mode, hasOnline]);
+  }, [mode, hasOnline, auth.loading]);
   // First-load lift: subscribed users with no saved mode (or with
   // saved="free" defaulted in by the useState fallback) get bumped to
   // Advanced so they see the same panel set they had before this
@@ -9999,6 +10012,7 @@ export default function App(){
   const[_modeLifted, setModeLifted] = useState(false);
   useEffect(() => {
     if (_modeLifted) return;
+    if (auth.loading) return;
     if (!hasOnline) return;
     const saved = (() => { try { return localStorage.getItem("ctk_app_mode"); } catch { return null; } })();
     if (!saved){
@@ -10006,7 +10020,7 @@ export default function App(){
       try { localStorage.setItem("ctk_app_mode", "advanced"); } catch {}
     }
     setModeLifted(true);
-  }, [hasOnline, _modeLifted]);
+  }, [hasOnline, _modeLifted, auth.loading]);
   // Kick user out of Account tab if they sign out
   useEffect(()=>{if(!auth.isAuthenticated&&tab==="account")setTab("cycle");},[auth.isAuthenticated,tab]);
 
