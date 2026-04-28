@@ -9572,8 +9572,185 @@ function EngineAmbientSidebar({
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
 
 /* ══════════════════ MAIN APP ══════════════════ */
-const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"mapping",label:"Combustor Mapping",icon:"🎯",engines:["LMS100PB+"]},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"automate",label:"Automate",icon:"🧪"},{id:"nomenclature",label:"Nomenclature",icon:"📚"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
+// ─────────────────────────────────────────────────────────────────────
+//  TAB CATALOG
+//
+//  Each entry can carry two filters that compose:
+//    `engines`: [...] — show only when cycleEngine matches one of these
+//                       (used to hide LMS100-specific Mapping when LM6000 is active)
+//    `modes`:   [...] — show only when the active Application Mode is in this set
+//                       ("free", "ctk", "gts", "advanced")
+//  Visible tabs = TABS_BASE.filter(both filters satisfied OR filter absent).
+//  See APP_MODES below for what each mode includes.
+// ─────────────────────────────────────────────────────────────────────
+const TABS_BASE=[
+  {id:"summary",     label:"Operations Summary",  icon:"📈", modes:["gts","advanced"]},
+  {id:"cycle",       label:"Cycle",               icon:"🛠️", modes:["gts","advanced"]},
+  {id:"mapping",     label:"Combustor Mapping",   icon:"🎯", engines:["LMS100PB+"], modes:["gts","advanced"]},
+  {id:"aft",         label:"Flame Temp & Properties", icon:"🔥", modes:["free","ctk","advanced"]},
+  {id:"exhaust",     label:"Exhaust Analysis",    icon:"🔬", modes:["free","ctk","advanced"]},
+  {id:"combustor",   label:"Combustor PSR→PFR",   icon:"🏭", modes:["free","ctk","advanced"]},
+  {id:"flame",       label:"Flame Speed & Blowoff", icon:"⚡", modes:["free","ctk","advanced"]},
+  {id:"automate",    label:"Automate",            icon:"🧪", modes:["ctk","advanced"]},
+  {id:"nomenclature",label:"Nomenclature",        icon:"📚"},  // always visible (reference)
+  {id:"assumptions", label:"Assumptions",         icon:"📘"},  // always visible (reference)
+];
 const ACCOUNT_TAB={id:"account",label:"Account & Billing",icon:"👤"};
+
+// ─────────────────────────────────────────────────────────────────────
+//  APPLICATION MODES — the four user-selectable workflow tiers.
+//
+//  Each entry:
+//    id           internal key, persisted to localStorage["ctk_app_mode"]
+//    label        button copy ("Free", "Combustion Toolkit", …)
+//    icon         single glyph for the dropdown row
+//    subtitle     one-line description used in the picker rows
+//    requiresSub  true → user must be subscribed; clicking when not
+//                 subscribed pops the pricing modal instead of switching
+//    accent       which C.* token tints the banner strip
+//    bannerStrong leading colored text in the mode banner
+//    bannerBody   descriptive copy shown to the right of bannerStrong
+//
+//  `accurate` (the legacy boolean used everywhere via AccurateCtx) is now
+//  derived: accurate = (mode !== "free"). Free routes calcs through the
+//  in-browser JS reduced-order model; the other three modes route through
+//  the Cantera backend.
+// ─────────────────────────────────────────────────────────────────────
+const APP_MODES = [
+  {
+    id: "free", label: "Free", icon: "○",
+    subtitle: "Combustion analysis · simplified JS model · φ ≤ 1.0",
+    requiresSub: false,
+    accent: "warm",
+    bannerStrong: "⚠ FREE VERSION",
+    bannerBody: "Simplified model, accurate for φ ≤ 1.0 only. Not suitable for RQL, SAC, or other rich/staged combustion systems. Upgrade for exact Cantera-backed results across all regimes.",
+  },
+  {
+    id: "ctk", label: "Combustion Toolkit", icon: "🔥",
+    subtitle: "Full Cantera combustion · all φ regimes · DOE automation",
+    requiresSub: true,
+    accent: "accent",
+    bannerStrong: "🔥 COMBUSTION TOOLKIT",
+    bannerBody: "Full Cantera-backed combustion analysis: AFT, PSR-PFR network, flame speed, exhaust inversion, and automated DOE. All φ regimes — RQL, SAC, and staged combustion stable.",
+  },
+  {
+    id: "gts", label: "Gas Turbine Simulator", icon: "🛠️",
+    subtitle: "Engine deck · cycle + LMS100 four-circuit mapping",
+    requiresSub: true,
+    accent: "accent3",
+    bannerStrong: "🛠️ GAS TURBINE SIMULATOR",
+    bannerBody: "Engine-deck performance for LM6000PF and LMS100PB+. Off-design power, heat rate, T3 / T4 / P3, bleed scheduling, BR-mode ladder. Powered by Cantera HP-equilibrium combustion and Cantera turbine expansion.",
+  },
+  {
+    id: "advanced", label: "Advanced Mode", icon: "🔬",
+    subtitle: "Everything · combustion + cycle + mapping + automation",
+    requiresSub: true,
+    accent: "violet",
+    bannerStrong: "🔬 ADVANCED MODE",
+    bannerBody: "Full toolkit — combustion analysis + engine cycle + LMS100 four-circuit mapping + DOE automation. Cantera Accurate mode active across all panels.",
+  },
+];
+function _modeById(id){ return APP_MODES.find(m => m.id === id) || APP_MODES[0]; }
+
+// ─────────────────────────────────────────────────────────────────────
+//  Application Mode picker — dropdown button shown in the header.
+//
+//  Compact button shows the current mode label; clicking opens an
+//  absolutely-positioned menu listing all four modes with their subtitle.
+//  Clicking a row calls onPick(modeId); the parent's setMode handles the
+//  subscription gate (popping the pricing modal if unsubscribed).
+//  Click-outside (mousedown anywhere outside) closes the menu.
+// ─────────────────────────────────────────────────────────────────────
+function AppModePicker({ mode, onPick, onUnlock, hasOnline }){
+  const[open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const m = _modeById(mode);
+  const accentTok = m.accent;
+  return (
+    <div ref={ref} style={{position:"relative"}}>
+      <button onClick={() => setOpen(o => !o)}
+        title="Application Mode — pick which set of panels to load"
+        style={{padding:"6px 12px", fontSize:11, fontWeight:700,
+          color: C[accentTok], background: `${C[accentTok]}18`,
+          border: `1px solid ${C[accentTok]}`, borderRadius: 6, cursor: "pointer",
+          fontFamily: "'Barlow Condensed',sans-serif", letterSpacing: ".5px",
+          display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap"}}>
+        <span style={{fontSize:13}}>{m.icon}</span>
+        MODE: {m.label.toUpperCase()}
+        <span style={{fontSize:9, marginLeft:2, opacity:.7}}>▾</span>
+      </button>
+      {open && (
+        <div style={{position:"absolute", top:"calc(100% + 6px)", right:0,
+          minWidth: 320, background: C.bg2, border: `1px solid ${C.border}`,
+          borderRadius: 8, boxShadow: `0 8px 24px ${C.bg}99`,
+          zIndex: 50, overflow:"hidden"}}>
+          <div style={{padding:"8px 12px", fontSize:9, fontWeight:700,
+            color: C.txtMuted, textTransform: "uppercase", letterSpacing:"1.2px",
+            background: C.bg3, borderBottom: `1px solid ${C.border}`,
+            fontFamily: "'Barlow Condensed', sans-serif"}}>
+            Application Mode
+          </div>
+          {APP_MODES.map(opt => {
+            const active  = opt.id === mode;
+            const locked  = opt.requiresSub && !hasOnline;
+            const tone    = C[opt.accent];
+            return (
+              <button key={opt.id}
+                onClick={() => {
+                  setOpen(false);
+                  if (locked) onUnlock();
+                  else onPick(opt.id);
+                }}
+                style={{width:"100%", textAlign:"left",
+                  padding:"10px 14px",
+                  display:"flex", alignItems:"flex-start", gap:10,
+                  background: active ? `${tone}15` : "transparent",
+                  border: "none",
+                  borderBottom: `1px solid ${C.border}40`,
+                  cursor: "pointer",
+                  fontFamily: "'Barlow', sans-serif"}}>
+                <span style={{fontSize:18, lineHeight:1, marginTop:1}}>{opt.icon}</span>
+                <span style={{flex:1}}>
+                  <span style={{display:"flex", alignItems:"center", gap:6}}>
+                    <span style={{fontSize:12, fontWeight:700, color: active ? tone : C.txt,
+                      letterSpacing:".3px"}}>{opt.label}</span>
+                    {locked && (
+                      <span title="Requires subscription"
+                        style={{fontSize:9, fontWeight:700, color: C.txtMuted,
+                          padding:"1px 6px", border: `1px solid ${C.border}`,
+                          borderRadius:3, fontFamily:"'Barlow Condensed',sans-serif",
+                          letterSpacing:".5px"}}>
+                        🔒 PRO
+                      </span>
+                    )}
+                    {active && (
+                      <span style={{fontSize:9, fontWeight:700, color: tone,
+                        padding:"1px 6px", border: `1px solid ${tone}80`,
+                        borderRadius:3, fontFamily:"'Barlow Condensed',sans-serif",
+                        letterSpacing:".5px"}}>
+                        ACTIVE
+                      </span>
+                    )}
+                  </span>
+                  <span style={{display:"block", fontSize:10.5,
+                    color: C.txtMuted, lineHeight:1.4, marginTop:2}}>
+                    {opt.subtitle}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function App(){
   // All engineering state below is stored in SI internally (K, atm, m/s, m).
@@ -9735,7 +9912,28 @@ export default function App(){
   const[showHelp,setShowHelp]=useState(false);
   const[showPricing,setShowPricing]=useState(false);
   const[authModal,setAuthModal]=useState(null); // null | "login" | "signup"
-  const[accurate,setAccurate]=useState(false);
+  // ── Application Mode (replaces the old "accurate" boolean) ─────────
+  // Four modes: free / ctk / gts / advanced. See APP_MODES catalog at
+  // the top of this file. The legacy `accurate` flag is DERIVED from
+  // mode (accurate = mode !== "free") so every existing AccurateCtx
+  // consumer keeps working without refactoring.
+  //
+  // Persistence: localStorage["ctk_app_mode"]. On load we downgrade to
+  // "free" if the saved mode requires a subscription the user doesn't
+  // have — that prevents stale state from a previous session leaking
+  // into a logged-out tab.
+  const[mode, setModeRaw] = useState(() => {
+    try {
+      const saved = localStorage.getItem("ctk_app_mode");
+      if (saved && APP_MODES.some(m => m.id === saved)) return saved;
+    } catch {}
+    return "free";   // safe default; will be lifted to "advanced" by the
+                     // auth-aware effect below for subscribed users
+  });
+  const accurate = (mode !== "free");
+  // No-op stub for any future caller that imports setAccurate via
+  // AccurateCtx. The mode picker is the canonical control now.
+  const setAccurate = () => {};
   // ── Theme state ─────────────────────────────────────────────────────
   // Theme is hot-swappable ("dark" ↔ "light"). The actual palette lives at
   // module level in `_activeC` (see DARK_C / LIGHT_C). Toggling here:
@@ -9773,20 +9971,63 @@ export default function App(){
   },[]);
 
   // Accurate-Mode auto-disable if subscription ends / user signs out
-  useEffect(()=>{if(accurate&&!hasOnline)setAccurate(false);},[hasOnline,accurate]);
+  // ── Mode setter with auth gate + persistence ──────────────────────
+  // Centralised mode mutator. If the requested mode requires a
+  // subscription and the user doesn't have one, we pop the pricing
+  // modal AND short-circuit (the mode stays put). This is the single
+  // place that gates non-Free modes — the dropdown calls it directly,
+  // the auth-downgrade effect below calls it on auth-state change.
+  const setMode = useCallback((next) => {
+    const m = _modeById(next);
+    if (m.requiresSub && !hasOnline){
+      setShowPricing(true);
+      return;
+    }
+    setModeRaw(m.id);
+    try { localStorage.setItem("ctk_app_mode", m.id); } catch {}
+  }, [hasOnline]);
+  // Auto-downgrade if the user loses online/subscribed state while
+  // sitting in a non-Free mode. Without this they'd be stuck in a
+  // mode whose Cantera calls all 401 / 403.
+  useEffect(() => {
+    if (mode !== "free" && !hasOnline) setModeRaw("free");
+  }, [mode, hasOnline]);
+  // First-load lift: subscribed users with no saved mode (or with
+  // saved="free" defaulted in by the useState fallback) get bumped to
+  // Advanced so they see the same panel set they had before this
+  // change shipped. Runs ONCE per auth state transition into "online".
+  const[_modeLifted, setModeLifted] = useState(false);
+  useEffect(() => {
+    if (_modeLifted) return;
+    if (!hasOnline) return;
+    const saved = (() => { try { return localStorage.getItem("ctk_app_mode"); } catch { return null; } })();
+    if (!saved){
+      setModeRaw("advanced");
+      try { localStorage.setItem("ctk_app_mode", "advanced"); } catch {}
+    }
+    setModeLifted(true);
+  }, [hasOnline, _modeLifted]);
   // Kick user out of Account tab if they sign out
   useEffect(()=>{if(!auth.isAuthenticated&&tab==="account")setTab("cycle");},[auth.isAuthenticated,tab]);
 
   // Filter tabs by engine — some panels (e.g. Combustor Mapping) are only
   // meaningful for specific engines because they reflect that engine's
   // physical combustor hardware (circuit counts, pilot/main split).
-  const _baseTabs=TABS_BASE.filter(t=>!t.engines||t.engines.includes(cycleEngine));
+  // Compose engine + mode filters: a tab is visible only if BOTH filters
+  // pass (or the filter is absent). Account tab is appended for signed-in
+  // users and is always available regardless of mode.
+  const _baseTabs = TABS_BASE
+    .filter(t => !t.engines || t.engines.includes(cycleEngine))
+    .filter(t => !t.modes   || t.modes.includes(mode));
   const TABS=auth.isAuthenticated?[..._baseTabs,ACCOUNT_TAB]:_baseTabs;
-  // If user is on a tab that's no longer available (engine changed), bounce
-  // them to the Operations Summary so they never land on a blank page.
-  useEffect(()=>{if(!TABS.some(t=>t.id===tab))setTab("summary");
+  // If user is on a tab that's no longer available (engine OR mode
+  // changed it out of the visible set), bounce them to the first
+  // remaining tab so they never land on a blank page.
+  useEffect(()=>{
+    if (TABS.length === 0) return;
+    if (!TABS.some(t => t.id === tab)) setTab(TABS[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[cycleEngine]);
+  },[cycleEngine, mode]);
   // Auto-deactivate the heavy panels when the user navigates AWAY from them,
   // unless they've opted into "stay activated" via the per-panel preference.
   // Default keeps the original UX (deactivate on nav away) — opt-in survives
@@ -10004,12 +10245,16 @@ export default function App(){
               <div style={{fontSize:8.5,color:C.txtMuted,fontFamily:"monospace",letterSpacing:"2px",textTransform:"uppercase"}}>Combustion Engineering Toolkit — Thermal Fluid Sciences & AI</div></div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
-            {hasOnline&&(
-              <button onClick={()=>setAccurate(a=>!a)} title={accurate?"Click to switch OFF — calculations route to the in-browser reduced-order model (faster, accurate for φ ≤ 1.0). The backend Cantera solver is currently active.":"Click to switch ON — calculations route to the backend Cantera solver (GRI-Mech 3.0 / Glarborg 2018, exact across all φ). Subscription required."} style={{padding:"6px 12px",fontSize:11,fontWeight:700,color:accurate?C.bg:C.accent,background:accurate?C.accent:`${C.accent}15`,border:`1px solid ${C.accent}`,borderRadius:6,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",display:"flex",alignItems:"center",gap:6}}>
-                <span style={{width:7,height:7,borderRadius:"50%",background:accurate?C.bg:C.accent,display:"inline-block"}}/>
-                {accurate?"ACCURATE: ON":"ACCURATE: OFF"}
-              </button>
-            )}
+            {/* Application Mode picker — replaces the legacy Accurate
+                toggle. The four modes (Free / Combustion Toolkit / GTS /
+                Advanced) gate which tabs render and route calcs through
+                JS (Free) or Cantera (the rest). See APP_MODES + setMode. */}
+            <AppModePicker
+              mode={mode}
+              hasOnline={hasOnline}
+              onPick={setMode}
+              onUnlock={() => setShowPricing(true)}
+            />
             {/* Theme toggle — flips the active palette between dark and light.
                 The palette swap is implemented as a Proxy + key-based remount
                 (see DARK_C / LIGHT_C / setActiveTheme above). All inline-
@@ -10071,18 +10316,42 @@ export default function App(){
         <div style={{display:"flex",gap:1,padding:"0 20px",background:C.bg,borderBottom:`1px solid ${C.border}`,overflowX:"auto"}}>
           {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"9px 14px",fontSize:11,fontWeight:tab===t.id?600:400,color:tab===t.id?C.accent:C.txtMuted,background:tab===t.id?`${C.accent}0A`:"transparent",border:"none",borderBottom:tab===t.id?`2px solid ${C.accent}`:"2px solid transparent",cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow',sans-serif",letterSpacing:".4px",transition:"all .15s"}}><span style={{marginRight:4}}>{t.icon}</span>{t.label}</button>)}</div>
 
-        {/* FREE-VERSION DISCLAIMER BANNER (hidden when Accurate Mode is active) */}
-        {!(accurate&&hasOnline)&&tab!=="account"&&(
-        <div style={{padding:"10px 20px",background:`${C.warm}12`,borderBottom:`1px solid ${C.warm}35`,display:"flex",alignItems:"center",justifyContent:"space-between",gap:14,flexWrap:"wrap"}}>
-          <div style={{fontSize:11.5,color:C.txt,fontFamily:"'Barlow',sans-serif",lineHeight:1.55,flex:"1 1 320px"}}>
-            <strong style={{color:C.warm,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif"}}>⚠ FREE VERSION</strong> — Simplified model, accurate for <strong>φ ≤ 1.0</strong> only. <span style={{color:C.txtDim}}>Not suitable for RQL, SAC, or other rich/staged combustion systems. Upgrade for exact Cantera-backed results across all regimes.</span>
-          </div>
-          <button onClick={()=>setShowPricing(true)} style={{padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",color:C.bg,background:C.accent,border:"none",borderRadius:6,cursor:"pointer",letterSpacing:".7px",whiteSpace:"nowrap"}}>VIEW PRICING →</button>
-        </div>)}
-        {accurate&&hasOnline&&tab!=="account"&&(
-        <div style={{padding:"8px 20px",background:`${C.accent}12`,borderBottom:`1px solid ${C.accent}35`,fontSize:11.5,color:C.txt,fontFamily:"'Barlow',sans-serif"}}>
-          <strong style={{color:C.accent,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif"}}>✓ ACCURATE MODE ACTIVE</strong> — Calculations route to the backend Cantera solver (GRI-Mech 3.0 or Glarborg 2018 selectable per calculation, mixture-averaged transport, detailed PSR/PFR network).
-        </div>)}
+        {/* MODE BANNER — colour-coded strip describing the active
+            Application Mode. Free shows a "view pricing" CTA; the three
+            subscription modes show informational copy only.
+            Hidden on the Account tab so the billing UI isn't crowded. */}
+        {tab!=="account" && (() => {
+          const m = _modeById(mode);
+          const tone = C[m.accent];
+          return (
+            <div style={{padding:"10px 20px",
+              background:`${tone}12`,
+              borderBottom:`1px solid ${tone}35`,
+              display:"flex",alignItems:"center",justifyContent:"space-between",
+              gap:14,flexWrap:"wrap"}}>
+              <div style={{fontSize:11.5,color:C.txt,
+                fontFamily:"'Barlow',sans-serif",lineHeight:1.55,
+                flex:"1 1 320px"}}>
+                <strong style={{color:tone,letterSpacing:".5px",
+                  fontFamily:"'Barlow Condensed',sans-serif"}}>
+                  {m.bannerStrong}
+                </strong>
+                {" — "}
+                <span style={{color:C.txtDim}}>{m.bannerBody}</span>
+              </div>
+              {mode === "free" && (
+                <button onClick={()=>setShowPricing(true)}
+                  style={{padding:"7px 16px",fontSize:11,fontWeight:700,
+                    fontFamily:"'Barlow Condensed',sans-serif",
+                    color:C.bg,background:C.accent,border:"none",
+                    borderRadius:6,cursor:"pointer",letterSpacing:".7px",
+                    whiteSpace:"nowrap"}}>
+                  VIEW PRICING →
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         <div style={{display:"flex",flex:"1 1 auto",minHeight:0}}>
           {/* SIDEBAR (hidden on Account tab) */}
