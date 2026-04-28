@@ -6830,10 +6830,11 @@ function _heldSliceCaption(slice, units){
     const u = unitFor(v, units);
     return `${v.label} = ${dispVal}${u ? ` ${u}` : ""}`;
   });
-  const note = slice.fallback
-    ? ` (baseline missed the matrix — using mode values; ${slice.count} matching rows)`
-    : ` (${slice.count} rows match the baseline slice)`;
-  return `Held constant: ${parts.join(" · ")}${note}`;
+  // Plain "(N matching rows)" suffix only — the per-variable source
+  // (baseline / mode / picked) lives in the dropdown badges above the
+  // chart, and the pre-run modal warns when baseline doesn't match the
+  // matrix. No need to re-warn the user here.
+  return `Held constant: ${parts.join(" · ")} (${slice.count} matching row${slice.count !== 1 ? "s" : ""})`;
 }
 
 // Per-held-variable dropdown UI. Renders one <select> per held var with
@@ -7351,7 +7352,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
               {gColorCol ? ` · color by ${gColorCol.label}` : ""}
               {gShapeCol ? ` · shape by ${gShapeCol.label}` : ""}
             </div>
-            <div style={{fontSize:10, color: customSliceData.slice?.fallback ? C.warm : C.txtMuted,
+            <div style={{fontSize:10, color: C.txtMuted,
               marginBottom:6, fontFamily:"'Barlow',sans-serif", lineHeight:1.4}}>
               {_heldSliceCaption(customSliceData.slice, units)}
             </div>
@@ -7438,7 +7439,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
                       {ch.yCol.label}{ch.yCol.unit ? ` (${ch.yCol.unit})` : ""} vs {ch.xCol.label}{ch.xCol.unit ? ` (${ch.xCol.unit})` : ""}
                       {ch.gColorCol ? <span style={{color:C.accent, marginLeft:6, fontWeight:600, fontSize:10}}>· color: {ch.gColorCol.label}</span> : null}
                     </div>
-                    <div style={{fontSize:9.5, color: ch.slice?.fallback ? C.warm : C.txtMuted,
+                    <div style={{fontSize:9.5, color: C.txtMuted,
                       marginTop:2, fontFamily:"'Barlow',sans-serif", lineHeight:1.35}}>
                       {_heldSliceCaption(ch.slice, units)}
                     </div>
@@ -7884,7 +7885,57 @@ function AutomatePanel(props){
     setVarSpecs(prev => ({...prev, [vid]: {...(prev[vid]||{}), ...patch}}));
   };
 
-  const startRun = async () => {
+  // ── Pre-run check: which varied inputs have a baseline value that
+  //    ISN'T in their swept set?
+  //
+  //    These are the variables that will trigger the "mode-fallback"
+  //    slice when the user later picks a plot whose held-vars include
+  //    them — meaning the chart slice will be on a value that isn't the
+  //    user's intended baseline. Easier to surface this BEFORE the run
+  //    so the user can fix sidebar values or sweep ranges, rather than
+  //    after they've spent compute time only to see a fallback warning
+  //    in the chart caption.
+  const baselineMismatches = useMemo(() => {
+    if (matrix.length === 0) return [];
+    const out = [];
+    for (const v of activeVarSpecs){
+      // Read swept distinct values for this var directly from the matrix.
+      const colKey = v.id;
+      const isFuelSp = v.kind === "fuel_species";
+      const isOxSp   = v.kind === "ox_species";
+      const sweptSet = new Set();
+      const sweptDisplay = [];
+      for (const row of matrix){
+        let val;
+        if (isFuelSp) val = row.fuel ? row.fuel[v.species] : (row[colKey]);
+        else if (isOxSp) val = row.ox ? row.ox[v.species] : (row[colKey]);
+        else val = row[colKey];
+        if (val == null) continue;
+        const k = (typeof val === "number") ? +val.toPrecision(8) : String(val);
+        if (!sweptSet.has(k)){ sweptSet.add(k); sweptDisplay.push(val); }
+      }
+      // Read baseline for this var.
+      let baseRaw;
+      if (isFuelSp) baseRaw = baseline?.fuel?.[v.species];
+      else if (isOxSp) baseRaw = baseline?.ox?.[v.species];
+      else baseRaw = baseline?.[v.id];
+      if (baseRaw == null) continue;  // no baseline to mismatch against
+      const baseInSwept = sweptDisplay.some(s => _valuesMatch(s, baseRaw));
+      if (!baseInSwept){
+        out.push({ varSpec: v, baselineVal: baseRaw, sweptVals: sweptDisplay });
+      }
+    }
+    return out;
+  }, [matrix, activeVarSpecs, baseline]);
+
+  // Modal state for the pre-run baseline warning. `pendingRun` set to
+  // true when the user clicked Run but the warning is showing → after
+  // they acknowledge we proceed with the actual run.
+  const [showBaselineWarn, setShowBaselineWarn] = useState(false);
+
+  // Actual run logic — separated from `startRun` so the modal's "Run
+  // anyway" can call it directly without re-checking the warning gate.
+  const _runMatrixNow = async () => {
     if (matrix.length === 0) return;
     if (matrixOversized){
       setErrMsg(`Matrix size (${matrixSize.toLocaleString()}) exceeds the ${MAX_MATRIX_SIZE.toLocaleString()} cap. Narrow your ranges before running.`);
@@ -7966,6 +8017,29 @@ function AutomatePanel(props){
       setRunning(false);
       endBusy();
     }
+  };
+  // Public entry: gate on the baseline-mismatch modal first. If any
+  // varied input has a baseline that's not in its swept set, show the
+  // modal; otherwise run immediately.
+  const startRun = () => {
+    if (matrix.length === 0) return;
+    if (matrixOversized){
+      setErrMsg(`Matrix size (${matrixSize.toLocaleString()}) exceeds the ${MAX_MATRIX_SIZE.toLocaleString()} cap. Narrow your ranges before running.`);
+      return;
+    }
+    if (cycleRequiresAccurate){
+      setErrMsg("Cycle (and Combustor Mapping) require Accurate Mode. Turn it on in the header.");
+      return;
+    }
+    if (baselineMismatches.length > 0){
+      setShowBaselineWarn(true);
+      return;
+    }
+    _runMatrixNow();
+  };
+  const proceedAfterWarning = () => {
+    setShowBaselineWarn(false);
+    _runMatrixNow();
   };
   const cancelRun = () => { abortRef.current.aborted = true; };
   const downloadExcel = () => {
@@ -8451,8 +8525,111 @@ function AutomatePanel(props){
           onClose={() => setShowPlots(false)}
         />
       )}
+      {/* Pre-run baseline-mismatch modal */}
+      {showBaselineWarn && (
+        <BaselineMismatchModal
+          mismatches={baselineMismatches}
+          units={units}
+          onCancel={() => setShowBaselineWarn(false)}
+          onProceed={proceedAfterWarning}
+        />
+      )}
     </Step>
   </div>);
+}
+
+// ── BaselineMismatchModal ──
+//   One-time pre-run dialog. Lists each varied input whose sidebar
+//   baseline value isn't one of the values the matrix sweep includes —
+//   meaning that variable can't be slice-pinned on baseline in a future
+//   plot (the plot panel would fall back to mode). Two actions:
+//     • Cancel → close, no run. User can fix sidebar values OR DOE
+//       ranges in Step 3 to make baseline match.
+//     • Run anyway → acknowledge the mismatch, fire the matrix.
+function BaselineMismatchModal({ mismatches, units, onCancel, onProceed }){
+  const fmtVal = (v, raw) => {
+    if (raw == null) return "—";
+    if (typeof raw === "number") return formatRowValue(toDisplay(v, raw, units), unitFor(v, units), v.label);
+    return String(raw);
+  };
+  return (
+    <div onClick={onCancel}
+      style={{position:"fixed", inset:0, zIndex:1000,
+        background:"rgba(0,0,0,0.6)", display:"flex",
+        alignItems:"center", justifyContent:"center", padding:20}}>
+      <div onClick={e => e.stopPropagation()}
+        style={{maxWidth:640, width:"100%", maxHeight:"85vh", overflowY:"auto",
+          background:C.bg2, border:`1px solid ${C.accent2}`, borderRadius:8,
+          boxShadow:"0 16px 48px rgba(0,0,0,0.7)",
+          fontFamily:"'Barlow',sans-serif"}}>
+        <div style={{padding:"14px 18px", borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontSize:14, fontWeight:700, color:C.accent2,
+            fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".7px"}}>
+            ⚠ HEADS UP — BASELINE NOT IN SWEPT RANGE
+          </div>
+          <div style={{fontSize:11, color:C.txtDim, marginTop:4, lineHeight:1.5}}>
+            Some of your sidebar values won't be among the values the
+            matrix actually runs. That means later, when you plot results
+            and want to "hold this variable at baseline," the chart will
+            substitute the most-common value from your matrix instead.
+            Usually fine, but worth knowing before spending compute time.
+          </div>
+        </div>
+        <div style={{padding:"12px 18px"}}>
+          <div style={{display:"grid",
+            gridTemplateColumns:"1fr auto 1fr", gap:"6px 14px",
+            fontSize:11, alignItems:"baseline"}}>
+            <div style={{fontSize:9.5, fontWeight:700, color:C.txtMuted,
+              textTransform:"uppercase", letterSpacing:".6px"}}>Variable</div>
+            <div style={{fontSize:9.5, fontWeight:700, color:C.txtMuted,
+              textTransform:"uppercase", letterSpacing:".6px", textAlign:"center"}}>Sidebar baseline</div>
+            <div style={{fontSize:9.5, fontWeight:700, color:C.txtMuted,
+              textTransform:"uppercase", letterSpacing:".6px"}}>Matrix sweeps</div>
+            {mismatches.map((m, i) => {
+              const v = m.varSpec;
+              const u = unitFor(v, units);
+              return (
+                <Fragment key={i}>
+                  <div style={{color:C.txt, fontWeight:600}}>
+                    {v.label}{u ? <span style={{color:C.txtMuted, fontWeight:400, marginLeft:4}}>({u})</span> : null}
+                  </div>
+                  <div style={{color:C.warm, fontFamily:"monospace", textAlign:"center",
+                    fontSize:11, fontWeight:600}}>
+                    {fmtVal(v, m.baselineVal)}
+                  </div>
+                  <div style={{color:C.txtDim, fontFamily:"monospace", fontSize:10.5,
+                    wordBreak:"break-word"}}>
+                    {m.sweptVals.map(sv => fmtVal(v, sv)).join(", ")}
+                  </div>
+                </Fragment>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{padding:"12px 18px", borderTop:`1px solid ${C.border}`,
+          background:`${C.bg3}`, display:"flex", gap:10, alignItems:"center"}}>
+          <span style={{flex:1, fontSize:10.5, color:C.txtMuted, fontStyle:"italic"}}>
+            Tip: include your sidebar value in each variable's sweep range
+            (Step 3) if you want chart slices to actually use baseline.
+          </span>
+          <button onClick={onCancel}
+            style={{padding:"7px 16px", fontSize:11, fontWeight:600,
+              color:C.txtDim, background:"transparent", border:`1px solid ${C.border}`,
+              borderRadius:5, cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif",
+              letterSpacing:".5px"}}>
+            ← BACK TO EDIT
+          </button>
+          <button onClick={onProceed}
+            style={{padding:"7px 16px", fontSize:11, fontWeight:700,
+              color:C.bg, background:C.accent2, border:"none",
+              borderRadius:5, cursor:"pointer", fontFamily:"'Barlow Condensed',sans-serif",
+              letterSpacing:".5px"}}>
+            ✓ ACKNOWLEDGE & RUN ANYWAY
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // Tiny visual helpers used by AutomatePanel
