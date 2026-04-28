@@ -10,7 +10,8 @@
 //
 //    Temperature units (K, °F, °C, °R)        → integer
 //    Pressure units (bar, psia, psi, Pa, …)   → integer
-//    ppm / ppmvd / ppmv / ppb                 → integer
+//    ppm / ppmvd / ppmv / ppb                 → 1 decimal (emissions
+//                                               precision matters)
 //    Velocity (m/s, ft/s, cm/s)               → 1 decimal
 //    Time (ms, s, μs) when |v| ≥ 0.1          → 1 decimal
 //    Time when |v| <  0.1                     → 4 sig figs (small τ_ign etc.)
@@ -107,7 +108,10 @@ export function smartRound(value, unit, label){
   // Unit-bucket rules
   if (TEMP_UNITS.has(u))     return Math.round(value);
   if (PRESS_UNITS.has(u))    return Math.round(value);
-  if (PPM_UNITS.has(u))      return Math.round(value);
+  // ppm / ppmvd / ppmv / ppb — emissions need 1 decimal of precision
+  // (e.g. NOx = 2.3 ppm vs 3 ppm matters for regulatory reporting and
+  // for distinguishing the H₂ effect across the matrix).
+  if (PPM_UNITS.has(u))      return _roundToDecimals(value, 1);
   if (VEL_UNITS.has(u))      return _roundToDecimals(value, 1);
   if (MASSFLOW_UNITS.has(u)) return _roundToDecimals(value, 1);
   if (_isPercent(u))         return _roundToDecimals(value, 1);
@@ -148,9 +152,9 @@ export function smartFormat(value, unit, label){
     else dec = null;  // fall through
   } else if (isWobbe){
     dec = 1;
-  } else if (TEMP_UNITS.has(u) || PRESS_UNITS.has(u) || PPM_UNITS.has(u)){
+  } else if (TEMP_UNITS.has(u) || PRESS_UNITS.has(u)){
     dec = 0;
-  } else if (VEL_UNITS.has(u) || MASSFLOW_UNITS.has(u) || _isPercent(u)){
+  } else if (PPM_UNITS.has(u) || VEL_UNITS.has(u) || MASSFLOW_UNITS.has(u) || _isPercent(u)){
     dec = 1;
   } else if (TIME_UNITS.has(u)){
     dec = Math.abs(value) >= 0.1 ? 1 : null;
@@ -166,8 +170,11 @@ export function smartFormat(value, unit, label){
     else dec = Math.max(0, 3 - Math.floor(Math.log10(Math.abs(rounded))));
   }
 
-  if (dec === 0 && Math.abs(rounded) >= 1000){
-    return rounded.toLocaleString("en-US");
+  // Thousand separators for values ≥ 1000 — keeps screen display
+  // visually consistent with Excel's "#,##0.0" format code so big NOx /
+  // CO numbers (2,656.3 ppmvd) read the same in both places.
+  if (Math.abs(rounded) >= 1000){
+    return rounded.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
   }
   return rounded.toFixed(dec);
 }
@@ -192,8 +199,8 @@ export function excelNumberFormat(unit, label, sampleValue){
   }
   if (isWobbe) return "#,##0.0";
 
-  if (TEMP_UNITS.has(u) || PRESS_UNITS.has(u) || PPM_UNITS.has(u)) return "#,##0";
-  if (VEL_UNITS.has(u) || MASSFLOW_UNITS.has(u))                   return "#,##0.0";
+  if (TEMP_UNITS.has(u) || PRESS_UNITS.has(u)) return "#,##0";
+  if (PPM_UNITS.has(u) || VEL_UNITS.has(u) || MASSFLOW_UNITS.has(u)) return "#,##0.0";
   if (_isPercent(u))                                                return "0.0";
   if (TIME_UNITS.has(u)){
     if (typeof sampleValue === "number" && Math.abs(sampleValue) >= 0.1) return "#,##0.0";
