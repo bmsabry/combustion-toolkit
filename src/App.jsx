@@ -2486,10 +2486,11 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
     {/* ============== FROM MEASURED O2 ============== */}
     <div style={S.card}>
       <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured O₂ (% dry) {status(bkO2)}</div>
-      {/* Dedicated input bar — right-aligned and visually distinct so the user
-          immediately sees this is the field they need to fill in to drive the
-          analysis below. Lives directly under the title, not inside it. */}
-      <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10,
+      {/* Dedicated input bar — LEFT-aligned so the field sits directly above
+          the result-card labels (PHI / FLAME TEMPERATURE / FUEL-AIR / AIR-FUEL),
+          giving a clean vertical alignment between the user's input and the
+          values it drives. */}
+      <div style={{display:"flex",justifyContent:"flex-start",alignItems:"center",gap:10,
         padding:"8px 12px",marginBottom:10,
         background:`${C.accent}10`,border:`1px solid ${C.accent}45`,borderRadius:6}}>
         <Tip text="Enter the measured O₂ concentration in the exhaust on a dry basis. Typical values: 2–6% for gas turbines, 3–8% for boilers. The analysis below back-solves φ and flame temperature from this single measurement.">
@@ -2536,7 +2537,11 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
     {/* ============== FROM MEASURED CO2 ============== */}
     <div style={S.card}>
       <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured CO₂ (% dry) {status(bkCO2)}</div>
-      <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10,
+      {/* Left-aligned input bar — matches the O₂ block above so both
+          measurement fields sit at the same x-coordinate as the result-card
+          labels (PHI / FLAME TEMPERATURE / FUEL-AIR / AIR-FUEL) directly
+          below them. */}
+      <div style={{display:"flex",justifyContent:"flex-start",alignItems:"center",gap:10,
         padding:"8px 12px",marginBottom:10,
         background:`${C.accent}10`,border:`1px solid ${C.accent}45`,borderRadius:6}}>
         <Tip text="Enter the measured CO₂ concentration in the exhaust on a dry basis. Higher CO₂ indicates richer combustion. The analysis below back-solves φ and flame temperature from this single measurement.">
