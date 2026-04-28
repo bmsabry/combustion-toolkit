@@ -8408,6 +8408,26 @@ function AutomatePanel(props){
   // Snapshot the App's baseline state for use as the "everything else fixed"
   // value in each row. Pass via props so we don't re-grab on every render.
   const baseline = props.baseline;
+  const mode = props.mode;   // Application Mode — gates which panels are
+                             // automatable (CTK can't run cycle/mapping; Advanced can).
+
+  // ── Mode-filtered automatable panel list ─────────────────────────────
+  // Single source of truth for "which panels does this mode allow?" is
+  // TABS_BASE.modes (the same list the header tab bar consumes). We mirror
+  // that filter here so Automate's picker stays in lockstep — adding a
+  // new panel to TABS_BASE with `modes:[…]` automatically updates this
+  // picker without a second edit.
+  const visibleAutomatablePanels = useMemo(() => {
+    return AUTOMATABLE_PANELS.filter(p => {
+      const tab = TABS_BASE.find(t => t.id === p.id);
+      if (!tab || !tab.modes) return true;       // unconstrained → always shown
+      return tab.modes.includes(mode);
+    });
+  }, [mode]);
+  const _allowedSet = useMemo(
+    () => new Set(visibleAutomatablePanels.map(p => p.id)),
+    [visibleAutomatablePanels],
+  );
 
   // ── Wizard state ──
   const [selectedPanels, setSelectedPanels] = useState([]);
@@ -8420,6 +8440,17 @@ function AutomatePanel(props){
   const [errMsg, setErrMsg]     = useState(null);
   const [showPlots, setShowPlots] = useState(false);
   const abortRef = useRef({aborted:false});
+
+  // Prune any previously-selected panel that the new mode disallows.
+  // Without this, switching from Advanced (with cycle+mapping selected)
+  // to Combustion Toolkit would leave stale selections that the runner
+  // would still try to execute — silently producing wrong rows or 401s.
+  useEffect(() => {
+    setSelectedPanels(prev => {
+      const next = prev.filter(id => _allowedSet.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [_allowedSet]);
 
   // Auto-include dependency panels (mapping → cycle)
   const effectivePanels = useMemo(
@@ -8793,7 +8824,7 @@ function AutomatePanel(props){
         Select one or more. Combustor Mapping depends on Cycle internally — if you pick Mapping, Cycle is auto-included. Picking more panels means more outputs per row but also more compute time.
       </div>
       <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(280px,1fr))", gap:8}}>
-        {AUTOMATABLE_PANELS.map(p => {
+        {visibleAutomatablePanels.map(p => {
           const isSel  = selectedPanels.includes(p.id);
           const isAuto = autoIncluded.includes(p.id);
           return(
@@ -10634,7 +10665,7 @@ export default function App(){
                 Conditionally mounting would destroy all panel-internal
                 state on every navigation. */}
             <div style={{display: tab==="automate" ? "block" : "none"}}>
-              <AutomatePanel baseline={{
+              <AutomatePanel mode={mode} baseline={{
                 // Snapshot every input the runner needs as a per-row baseline.
                 // Anything the user doesn't vary stays at this value across rows.
                 // Field names here MUST match the override() keys used in the
