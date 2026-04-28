@@ -6252,14 +6252,78 @@ function _chartSpecToSvgString(spec){
   return s;
 }
 
+// CRC32 over a byte slice — used to compute the PNG chunk CRC when we
+// inject a pHYs (physical pixel dimensions) chunk for DPI metadata.
+// Standard PNG/zlib polynomial. Cached lookup table for speed.
+const _PNG_CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++){
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function _crc32(bytes){
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = _PNG_CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+// Inject a pHYs chunk into the PNG byte stream so PowerPoint, Word, and
+// other consumers know the print resolution. Without this they assume 96
+// DPI and shrink the image accordingly when placed in a document.
+//   pHYs chunk format (PNG spec 11.3.5.3):
+//     4 bytes — pixels per unit X-axis (big-endian unsigned 32-bit)
+//     4 bytes — pixels per unit Y-axis (big-endian unsigned 32-bit)
+//     1 byte  — unit specifier (0 = unknown, 1 = meter)
+//   For 300 DPI: ppm = 300 × 39.3701 = 11811
+async function _addPngDpi(blob, dpi){
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  const ppm = Math.round(dpi * 39.3701);
+  // Find IHDR chunk end so we insert pHYs immediately after it (before IDAT).
+  // PNG header = 8 bytes signature, then chunks: [4 length][4 type][N data][4 crc].
+  // IHDR is always the first chunk → starts at byte 8, length is 13, total 8+4+4+13+4 = 33.
+  const insertAt = 33;
+  // Build pHYs chunk
+  const dataBytes = new Uint8Array(9);
+  const dv = new DataView(dataBytes.buffer);
+  dv.setUint32(0, ppm, false);
+  dv.setUint32(4, ppm, false);
+  dv.setUint8(8, 1);  // unit = meters
+  const typeBytes = new Uint8Array([0x70, 0x48, 0x59, 0x73]);  // "pHYs"
+  const crcInput = new Uint8Array(typeBytes.length + dataBytes.length);
+  crcInput.set(typeBytes, 0);
+  crcInput.set(dataBytes, typeBytes.length);
+  const crc = _crc32(crcInput);
+  const chunk = new Uint8Array(4 + 4 + 9 + 4);  // length + type + data + crc
+  const cv = new DataView(chunk.buffer);
+  cv.setUint32(0, 9, false);
+  chunk.set(typeBytes, 4);
+  chunk.set(dataBytes, 8);
+  cv.setUint32(17, crc, false);
+  // Splice into the original byte stream
+  const out = new Uint8Array(buf.length + chunk.length);
+  out.set(buf.subarray(0, insertAt), 0);
+  out.set(chunk, insertAt);
+  out.set(buf.subarray(insertAt), insertAt + chunk.length);
+  return new Blob([out], { type: "image/png" });
+}
+
 // Convert an SVG markup string to a PNG Blob via canvas. Uses a Blob URL
 // (not a data URL) to avoid hitting the ~2 MB limit on data URLs in
-// older Safari builds. 2× pixel ratio for crisp text on retina screens.
-async function _svgStringToPngBlob(svgString, w, h, scale=2){
+// older Safari builds.
+//
+// `scale` (default 4) sets the output pixel ratio — at the standard 96
+// CSS-pixel base this gives ~384 DPI raster, which is well above the
+// 300 DPI print bar. The pHYs chunk we inject afterwards declares the
+// PNG as 300 DPI so consumers (PowerPoint / Word / Illustrator) place
+// it at the right physical size in documents.
+async function _svgStringToPngBlob(svgString, w, h, scale=4){
   const blob = new Blob([svgString], {type: "image/svg+xml;charset=utf-8"});
   const url = URL.createObjectURL(blob);
   try {
-    return await new Promise((resolve, reject) => {
+    const rawPng = await new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
         try {
@@ -6267,6 +6331,9 @@ async function _svgStringToPngBlob(svgString, w, h, scale=2){
           canvas.width  = Math.round(w * scale);
           canvas.height = Math.round(h * scale);
           const ctx = canvas.getContext("2d");
+          // High-quality interpolation for crisp text at high scale.
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = "high";
           // Solid background so the PNG isn't transparent on white viewers.
           ctx.fillStyle = "#0D1117";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -6277,6 +6344,11 @@ async function _svgStringToPngBlob(svgString, w, h, scale=2){
       img.onerror = () => reject(new Error("SVG failed to load into Image"));
       img.src = url;
     });
+    // Best-effort: tag the PNG as 300 DPI so it imports at print size.
+    // If anything fails, fall back to the raw PNG (still at 4× pixel
+    // density — just no DPI metadata).
+    try { return await _addPngDpi(rawPng, 300); }
+    catch { return rawPng; }
   } finally {
     URL.revokeObjectURL(url);
   }
