@@ -7921,29 +7921,58 @@ function AutomatePanel(props){
                   } else {
                     baseTxt = String(baseRaw);
                   }
+                  // Each row is laid out as a 4-column mini-table (checkbox
+                  // + label | baseline value | unit) with vertical dividers
+                  // between cells and a faint background tint on the value
+                  // cell so the three pieces of information read as
+                  // distinct columns instead of a continuous string.
+                  const u = unitFor(v, units) || v.kind;
+                  const cellBorder = `1px solid ${C.border}80`;
+                  const valueBg = isSel ? "transparent" : `${C.accent2}10`;
                   return(
-                    <label key={v.id} title={v.desc ? `${v.desc}\n\nBaseline: ${baseTxt}${unitFor(v, units) ? ` ${unitFor(v, units)}` : ""}` : `Baseline: ${baseTxt}`}
-                      style={{display:"flex", alignItems:"center", gap:6, padding:"4px 6px",
-                        cursor:"pointer", borderRadius:3,
-                        background: isSel ? `${C.accent}14` : "transparent",
-                        fontSize:11, fontFamily:"'Barlow',sans-serif"}}>
-                      <input type="checkbox" checked={isSel}
-                        onChange={() => toggleVar(v.id)}
-                        style={{accentColor:C.accent, cursor:"pointer", margin:0}}/>
-                      <span style={{flex:1, color:C.txt}}>{v.label}</span>
-                      {/* Baseline value — what the runner uses for this var
-                          when the user doesn't sweep it. Dimmed when the var
-                          IS selected (since then the user is overriding
-                          baseline with a swept range/list). */}
-                      <span style={{fontSize:10, color: isSel ? C.txtMuted : C.accent2,
-                        fontFamily:"monospace", opacity: isSel ? 0.5 : 1,
+                    <label key={v.id} title={v.desc ? `${v.desc}\n\nBaseline: ${baseTxt}${u ? ` ${u}` : ""}` : `Baseline: ${baseTxt}`}
+                      style={{display:"grid",
+                        gridTemplateColumns:"auto 1fr 78px 56px",
+                        alignItems:"stretch", cursor:"pointer", borderRadius:3,
+                        border:`1px solid ${isSel ? C.accent + "60" : C.border + "40"}`,
+                        background: isSel ? `${C.accent}10` : "transparent",
+                        fontSize:11, fontFamily:"'Barlow',sans-serif",
+                        overflow:"hidden"}}>
+                      {/* Cell 1: checkbox */}
+                      <span style={{display:"flex", alignItems:"center",
+                        padding:"4px 6px 4px 6px"}}>
+                        <input type="checkbox" checked={isSel}
+                          onChange={() => toggleVar(v.id)}
+                          style={{accentColor:C.accent, cursor:"pointer", margin:0}}/>
+                      </span>
+                      {/* Cell 2: variable label */}
+                      <span style={{color:C.txt, padding:"4px 6px",
+                        borderLeft: cellBorder,
+                        display:"flex", alignItems:"center"}}>
+                        {v.label}
+                      </span>
+                      {/* Cell 3: baseline value (right-aligned, faint
+                          background, monospace, amber when active baseline,
+                          dim when the variable is being overridden by a sweep) */}
+                      <span style={{fontSize:10.5, fontFamily:"monospace",
+                        color: isSel ? C.txtMuted : C.accent2,
+                        opacity: isSel ? 0.45 : 1,
+                        background: valueBg,
+                        borderLeft: cellBorder,
+                        padding:"4px 8px",
+                        textAlign:"right",
+                        display:"flex", alignItems:"center", justifyContent:"flex-end",
                         whiteSpace:"nowrap"}}
-                        title={`Baseline: ${baseTxt}${unitFor(v, units) ? ` ${unitFor(v, units)}` : ""}`}>
+                        title={`Baseline: ${baseTxt}${u ? ` ${u}` : ""}`}>
                         {baseTxt}
                       </span>
+                      {/* Cell 4: unit */}
                       <span style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace",
+                        borderLeft: cellBorder,
+                        padding:"4px 6px",
+                        display:"flex", alignItems:"center", justifyContent:"flex-start",
                         whiteSpace:"nowrap"}}>
-                        {unitFor(v, units) || v.kind}
+                        {u}
                       </span>
                     </label>
                   );
