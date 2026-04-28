@@ -10474,9 +10474,139 @@ export default function App(){
               emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
               accurate={accurate&&hasOnline}
             />}
-            {/* Water / steam injection — kept right under Engine & Ambient per spec.
-                Applies to AFT, Flame Speed, Combustor, Exhaust, Autoignition AND Cycle. */}
-            <div style={{background:C.bg2,border:`1px solid ${C.accent3}25`,borderRadius:8,padding:12,marginBottom:10}}>
+            {/* ── SIDEBAR INPUT ORDER (per Application Mode spec) ──────
+                  1. Operating Conditions  (Air Temp → Pressure → TFlame_CC →
+                                            phi → FAR → Fuel Temp)
+                  2. Oxidizer composition
+                  3. Fuel composition (with Quick Start hint)
+                  4. Water / Steam Injection (last; secondary lever)
+                  Engine & Ambient (above) is gated to GTS / Advanced.
+                  Emissions Transfer Function (below) is gated to GTS /
+                  Advanced — both modes that include Combustor Mapping. */}
+
+            {/* ── 1. Operating Conditions ───────────────────────────── */}
+            <div style={{background:C.bg2,border:`1px solid ${C.accent}25`,borderRadius:8,padding:12,marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6}}>Operating Conditions</div>
+              <div style={{fontSize:9.5,color:C.txtMuted,lineHeight:1.5,marginBottom:8,fontStyle:"italic"}}>These conditions apply to all tabs. φ=1 is stoichiometric; φ&lt;1 lean; φ&gt;1 rich.</div>
+              {/* Field order per Application Mode spec:
+                    Air Temp → Pressure → TFlame_CC → phi → FAR → Fuel Temp */}
+              {/* ── Air Temp ─────────────────────────────────────────── */}
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, Cantera mixes this with Fuel Temp adiabatically (mass-weighted enthalpy balance with T-dependent NASA polynomials) to get the actual PSR inlet T.">Air Temp ({uu(units,"T")})</label>
+                <NumField value={uv(units,"T",T0)} decimals={2} onCommit={v=>setT0(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.accent3}55`}}/>
+                <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.accent3,marginTop:4}}/>
+                {accurate&&hasOnline&&linkT3&&<LinkChip onBreak={_linkBreakable?()=>setLinkT3(false):null} label="Linked to Cycle T3"/>}
+              </div>
+              {/* ── Pressure ─────────────────────────────────────────── */}
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
+                <NumField value={uv(units,"P",P)} decimals={3} onCommit={v=>setP(uvI(units,"P",v))} style={S.inp}/>
+                {accurate&&hasOnline&&linkP3&&<LinkChip onBreak={_linkBreakable?()=>setLinkP3(false):null} label="Linked to Cycle P3"/>}
+              </div>
+              {/* ── Tflame (adiabatic, complete combustion) — third equivalent
+                   way to express the operating point. φ, FAR, and T_flame are
+                   all interdependent: setting any one determines the other
+                   two given the fuel + ox composition and inlet temps. ── */}
+              {(() => {
+                // Canonical T_flame source: Cantera in accurate mode (matches
+                // the Combustor PSR-PFR panel exactly), JS calcAFT otherwise.
+                const tflame_K = T_flame_canonical;
+                const tflame_disp = Number.isFinite(tflame_K)
+                  ? +uv(units, "T", tflame_K).toFixed(2) : NaN;
+                const fromBackend = accurate && bkSidebarTflame.data?.T_ad_complete > 0;
+                const onTflameCommit = async (v) => {
+                  const T_target_K = uvI(units, "T", +v);
+                  if (!Number.isFinite(T_target_K) || T_target_K <= 0) return;
+                  if (accurate){
+                    try {
+                      const r = await bkCachedFetch("solve_phi_tflame", {
+                        fuel: nonzero(fuel), oxidizer: nonzero(ox),
+                        T_flame_target_K: T_target_K,
+                        T_fuel_K: T_fuel, T_air_K: T0, P_bar: atmToBar(P),
+                        WFR, water_mode: waterMode,
+                      });
+                      if (r && Number.isFinite(r.phi)) {
+                        setPhiClamped(r.phi);
+                        return;
+                      }
+                    } catch (_) { /* fall through to JS */ }
+                  }
+                  const phi_solved = solvePhiForTflame(fuel, ox, T_target_K, T_fuel, T0);
+                  setPhiClamped(phi_solved);
+                };
+                return (
+                  <div style={{marginBottom:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                      <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}
+                        title={fromBackend
+                          ? "Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Source: Cantera /calc/aft → T_ad_complete (matches the value shown on the Combustor PSR-PFR panel). Editing this back-solves φ via JS bisection — typed value may differ ~10–20 °F from the redisplayed value due to the JS↔Cantera solver bias."
+                          : "Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Source: in-browser JS calcAFT. Setting this back-solves φ — pick the φ that produces this T_flame given the current fuel, oxidizer, T_fuel, and T_air. Lean solution only."}>
+                        TFlame_CC ({uu(units,"T")}) {fromBackend?"":"(JS)"}
+                      </label>
+                      <NumField value={tflame_disp} decimals={1} onCommit={onTflameCommit}
+                        title="Type a target T_flame; the lean φ that produces it is back-solved automatically."
+                        style={{width:82,padding:"3px 6px",fontFamily:"monospace",color:C.warm,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.warm}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+                    </div>
+                    <input type="range"
+                      min={units==="SI" ? 1500 : Math.round((1500-273.15)*9/5+32)}
+                      max={units==="SI" ? 2400 : Math.round((2400-273.15)*9/5+32)}
+                      step={units==="SI" ? 5 : 10}
+                      value={Number.isFinite(tflame_disp) ? tflame_disp : 1900}
+                      onChange={e => onTflameCommit(+e.target.value)}
+                      style={{width:"100%",accentColor:C.warm}}/>
+                    <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>
+                      Mutually dependent with φ and FAR — changing one updates the others.
+                    </div>
+                  </div>
+                );
+              })()}
+              {/* ── phi ──────────────────────────────────────────────── */}
+              <div style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>phi (φ)</label>
+                  <NumField value={phi} decimals={4} onCommit={setPhiClamped} title="Type any φ between 0.3 and 1.0 (or drag the slider)"
+                    style={{width:72,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+                </div>
+                <input type="range" min="0.3" max="1.0" step="0.01" value={phi} onChange={e=>setPhi(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
+                <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{phi<0.95?"lean":phi>1.05?"rich":"~stoichiometric"}</div>
+                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={_linkBreakable?()=>setLinkFAR(false):null} label="Linked to Cycle φ_Bulk"/>}
+              </div>
+              {/* ── FAR ──────────────────────────────────────────────── */}
+              <div style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel-Air Ratio by mass. Linked to φ via FAR = φ × FAR_stoich.">Fuel/Air Ratio (mass)</label>
+                  <NumField value={FAR} decimals={5} onCommit={setFAR} title="Type any FAR within the allowed range; φ updates automatically."
+                    style={{width:82,padding:"3px 6px",fontFamily:"monospace",color:C.accent2,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent2}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+                </div>
+                <input type="range" min={0.3*FAR_stoich} max={FAR_stoich} step={FAR_stoich/1000} value={FAR} onChange={e=>setFAR(+e.target.value)} style={{width:"100%",accentColor:C.accent2}}/>
+                <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>Stoichiometric FAR = {FAR_stoich.toFixed(5)} (kg fuel / kg air)</div>
+              </div>
+              {/* ── Fuel Temp (last in Operating Conditions) ─────────── */}
+              <div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel inlet temperature (before adiabatic mixing with air). Independent from Air Temp. Typical values: 290 K (cold fuel line) to 550 K (preheated).">Fuel Temp ({uu(units,"T")})</label>
+                  <button onClick={()=>setTfuel(T0)} title="Copy current Air Temp into Fuel Temp (sets the two streams equal, so adiabatic mixing degenerates to the single-inlet case)." style={{padding:"1px 8px",fontSize:9,fontWeight:700,color:C.orange,background:"transparent",border:`1px solid ${C.orange}50`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>copy Air Temp</button>
+                </div>
+                <NumField value={uv(units,"T",T_fuel)} decimals={2} onCommit={v=>setTfuel(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.orange}55`}}/>
+                <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.orange,marginTop:4}}/>
+              </div>
+            </div>
+
+            {/* ── 2. Oxidizer composition ──────────────────────────── */}
+            <div>
+              <CompEditor title="Oxidizer (mol%)" comp={ox} setComp={setOx} presets={OX_PRESETS} speciesList={OX_SP} accent={C.accent3} initialPreset="Humid Air (60%RH 25°C)"
+                helpText="Enter oxidizer composition in mole percent. 'Dry Air' is the standard. Use humid air, O₂-enriched, or vitiated air for specialized analyses."/>
+              {accurate&&hasOnline&&linkOx&&<div style={{marginTop:-2,marginBottom:8}}><LinkChip onBreak={_linkBreakable?()=>setLinkOx(false):null} label="Linked to Cycle humid air"/></div>}
+            </div>
+
+            {/* ── 3. Fuel composition (with Quick Start hint) ──────── */}
+            <div style={{...hs.box,marginBottom:10,background:`${C.accent2}08`,borderColor:`${C.accent2}18`}}>
+              <strong style={{color:C.accent2,fontSize:11}}>📌 Quick Start:</strong> <span style={{fontSize:10}}>Select a fuel preset below (e.g., "Pipeline NG"), set your equivalence ratio and conditions, then explore each tab. All panels share these settings.</span></div>
+            <CompEditor title="Fuel (mol%)" comp={fuel} setComp={setFuel} presets={FUEL_PRESETS} speciesList={FUEL_SP} accent={C.accent2} initialPreset="Pipeline NG (US)"
+              helpText="Enter fuel composition in mole percent. Select a preset for common fuels or enter custom values. Total must sum to 100%. CO₂ and N₂ in fuel are treated as diluents."/>
+
+            {/* ── 4. Water / Steam Injection (last; secondary lever) ─ */}
+            <div style={{background:C.bg2,border:`1px solid ${C.accent3}25`,borderRadius:8,padding:12,marginTop:10,marginBottom:10}}>
               <div style={{fontSize:10,fontWeight:700,color:C.accent3,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6}}>Water / Steam Injection</div>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
                 <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Water-to-Fuel mass Ratio (WFR). Water / steam injection is the classic NOx-knockdown lever: liquid water absorbs the latent heat of vaporization on the way to flame temperature, dropping T_ad by 100–300 K and cutting thermal NOx exponentially via Zeldovich. Steam gives dilution-only cooling (smaller T drop). Typical gas-turbine DLE WFR: 0.5–1.0.">Water/Fuel Ratio (WFR) ⓘ</label>
@@ -10511,127 +10641,13 @@ export default function App(){
                 </div>
               </div>
             </div>
-            <div style={{...hs.box,marginBottom:10,background:`${C.accent2}08`,borderColor:`${C.accent2}18`}}>
-              <strong style={{color:C.accent2,fontSize:11}}>📌 Quick Start:</strong> <span style={{fontSize:10}}>Select a fuel preset below (e.g., "Pipeline NG"), set your equivalence ratio and conditions, then explore each tab. All panels share these settings.</span></div>
-            <CompEditor title="Fuel (mol%)" comp={fuel} setComp={setFuel} presets={FUEL_PRESETS} speciesList={FUEL_SP} accent={C.accent2} initialPreset="Pipeline NG (US)"
-              helpText="Enter fuel composition in mole percent. Select a preset for common fuels or enter custom values. Total must sum to 100%. CO₂ and N₂ in fuel are treated as diluents."/>
-            <div>
-              <CompEditor title="Oxidizer (mol%)" comp={ox} setComp={setOx} presets={OX_PRESETS} speciesList={OX_SP} accent={C.accent3} initialPreset="Humid Air (60%RH 25°C)"
-                helpText="Enter oxidizer composition in mole percent. 'Dry Air' is the standard. Use humid air, O₂-enriched, or vitiated air for specialized analyses."/>
-              {accurate&&hasOnline&&linkOx&&<div style={{marginTop:-2,marginBottom:8}}><LinkChip onBreak={_linkBreakable?()=>setLinkOx(false):null} label="Linked to Cycle humid air"/></div>}
-            </div>
-            <div style={{background:C.bg2,border:`1px solid ${C.accent}25`,borderRadius:8,padding:12}}>
-              <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6}}>Operating Conditions</div>
-              <div style={{fontSize:9.5,color:C.txtMuted,lineHeight:1.5,marginBottom:8,fontStyle:"italic"}}>These conditions apply to all tabs. φ=1 is stoichiometric; φ&lt;1 lean; φ&gt;1 rich.</div>
-              <div style={{marginBottom:12}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>phi (φ)</label>
-                  <NumField value={phi} decimals={4} onCommit={setPhiClamped} title="Type any φ between 0.3 and 1.0 (or drag the slider)"
-                    style={{width:72,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-                </div>
-                <input type="range" min="0.3" max="1.0" step="0.01" value={phi} onChange={e=>setPhi(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
-                <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{phi<0.95?"lean":phi>1.05?"rich":"~stoichiometric"}</div>
-                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={_linkBreakable?()=>setLinkFAR(false):null} label="Linked to Cycle φ_Bulk"/>}
-              </div>
-              <div style={{marginBottom:10}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel-Air Ratio by mass. Linked to φ via FAR = φ × FAR_stoich.">Fuel/Air Ratio (mass)</label>
-                  <NumField value={FAR} decimals={5} onCommit={setFAR} title="Type any FAR within the allowed range; φ updates automatically."
-                    style={{width:82,padding:"3px 6px",fontFamily:"monospace",color:C.accent2,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent2}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-                </div>
-                <input type="range" min={0.3*FAR_stoich} max={FAR_stoich} step={FAR_stoich/1000} value={FAR} onChange={e=>setFAR(+e.target.value)} style={{width:"100%",accentColor:C.accent2}}/>
-                <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>Stoichiometric FAR = {FAR_stoich.toFixed(5)} (kg fuel / kg air)</div>
-              </div>
-              {/* ── Tflame (adiabatic, complete combustion) — third equivalent
-                   way to express the operating point. φ, FAR, and T_flame are
-                   all interdependent: setting any one determines the other
-                   two given the fuel + ox composition and inlet temps. We
-                   compute T_flame from the current phi and let the user
-                   override it (back-solver finds the lean phi that hits the
-                   target). The displayed value is "live" — recomputes on
-                   every render, so changes to fuel / ox / T_fuel / T_air
-                   are reflected immediately. ── */}
-              {(() => {
-                // Canonical T_flame source: Cantera in accurate mode (matches
-                // the Combustor PSR-PFR panel exactly), JS calcAFT otherwise.
-                const tflame_K = T_flame_canonical;
-                const tflame_disp = Number.isFinite(tflame_K)
-                  ? +uv(units, "T", tflame_K).toFixed(2) : NaN;
-                const fromBackend = accurate && bkSidebarTflame.data?.T_ad_complete > 0;
-                const onTflameCommit = async (v) => {
-                  const T_target_K = uvI(units, "T", +v);
-                  if (!Number.isFinite(T_target_K) || T_target_K <= 0) return;
-                  // Back-solve via the same Cantera path the display uses.
-                  // ONE backend call wraps ~15 internal evaluations (~150 ms
-                  // server-side + ~200 ms wire = ~350 ms total). Falls back
-                  // to JS bisection if the backend errors or in Free Mode.
-                  if (accurate){
-                    try {
-                      const r = await bkCachedFetch("solve_phi_tflame", {
-                        fuel: nonzero(fuel), oxidizer: nonzero(ox),
-                        T_flame_target_K: T_target_K,
-                        T_fuel_K: T_fuel, T_air_K: T0, P_bar: atmToBar(P),
-                        WFR, water_mode: waterMode,
-                      });
-                      if (r && Number.isFinite(r.phi)) {
-                        setPhiClamped(r.phi);
-                        return;
-                      }
-                    } catch (_) { /* fall through to JS */ }
-                  }
-                  // Free Mode (or backend failure) — JS bisection (instant).
-                  const phi_solved = solvePhiForTflame(fuel, ox, T_target_K, T_fuel, T0);
-                  setPhiClamped(phi_solved);
-                };
-                return (
-                  <div style={{marginBottom:10}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                      <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}
-                        title={fromBackend
-                          ? "Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Source: Cantera /calc/aft → T_ad_complete (matches the value shown on the Combustor PSR-PFR panel). Editing this back-solves φ via JS bisection — typed value may differ ~10–20 °F from the redisplayed value due to the JS↔Cantera solver bias."
-                          : "Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Source: in-browser JS calcAFT. Setting this back-solves φ — pick the φ that produces this T_flame given the current fuel, oxidizer, T_fuel, and T_air. Lean solution only."}>
-                        TFlame_CC ({uu(units,"T")}) {fromBackend?"":"(JS)"}
-                      </label>
-                      <NumField value={tflame_disp} decimals={1} onCommit={onTflameCommit}
-                        title="Type a target T_flame; the lean φ that produces it is back-solved automatically."
-                        style={{width:82,padding:"3px 6px",fontFamily:"monospace",color:C.warm,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.warm}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-                    </div>
-                    <input type="range"
-                      min={units==="SI" ? 1500 : Math.round((1500-273.15)*9/5+32)}
-                      max={units==="SI" ? 2400 : Math.round((2400-273.15)*9/5+32)}
-                      step={units==="SI" ? 5 : 10}
-                      value={Number.isFinite(tflame_disp) ? tflame_disp : 1900}
-                      onChange={e => onTflameCommit(+e.target.value)}
-                      style={{width:"100%",accentColor:C.warm}}/>
-                    <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>
-                      Mutually dependent with φ and FAR — changing one updates the others.
-                    </div>
-                  </div>
-                );
-              })()}
-              <div style={{marginBottom:10}}>
-                <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, Cantera mixes this with Fuel Temp adiabatically (mass-weighted enthalpy balance with T-dependent NASA polynomials) to get the actual PSR inlet T.">Air Temp ({uu(units,"T")})</label>
-                <NumField value={uv(units,"T",T0)} decimals={2} onCommit={v=>setT0(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.accent3}55`}}/>
-                <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.accent3,marginTop:4}}/>
-                {accurate&&hasOnline&&linkT3&&<LinkChip onBreak={_linkBreakable?()=>setLinkT3(false):null} label="Linked to Cycle T3"/>}
-              </div>
-              <div style={{marginBottom:10}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel inlet temperature (before adiabatic mixing with air). Independent from Air Temp. Typical values: 290 K (cold fuel line) to 550 K (preheated).">Fuel Temp ({uu(units,"T")})</label>
-                  <button onClick={()=>setTfuel(T0)} title="Copy current Air Temp into Fuel Temp (sets the two streams equal, so adiabatic mixing degenerates to the single-inlet case)." style={{padding:"1px 8px",fontSize:9,fontWeight:700,color:C.orange,background:"transparent",border:`1px solid ${C.orange}50`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>copy Air Temp</button>
-                </div>
-                <NumField value={uv(units,"T",T_fuel)} decimals={2} onCommit={v=>setTfuel(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.orange}55`}}/>
-                <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.orange,marginTop:4}}/>
-              </div>
-              <div><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
-                <NumField value={uv(units,"P",P)} decimals={3} onCommit={v=>setP(uvI(units,"P",v))} style={S.inp}/>
-                {accurate&&hasOnline&&linkP3&&<LinkChip onBreak={_linkBreakable?()=>setLinkP3(false):null} label="Linked to Cycle P3"/>}
-              </div>
-              {/* Water/steam injection (WFR) is now lifted to the dedicated card directly under Engine & Ambient at the top of the sidebar — it drives every Accurate Mode panel from a single source. */}
-            </div>
 
-            {/* ── EMISSIONS TRANSFER FUNCTION — bottom of the sidebar ──── */}
-            <div style={{background:C.bg2,border:`1px solid ${C.violet}30`,borderRadius:8,padding:12,marginTop:10}}>
+            {/* ── EMISSIONS TRANSFER FUNCTION ────────────────────────────
+                Trim multipliers for the Combustor Mapping correlation —
+                only meaningful in modes that include the Mapping panel.
+                Hidden in Free and Combustion Toolkit (no mapping there);
+                visible in Gas Turbine Simulator and Advanced. */}
+            {(mode==="gts"||mode==="advanced")&&<div style={{background:C.bg2,border:`1px solid ${C.violet}30`,borderRadius:8,padding:12,marginTop:10}}>
               <div style={{fontSize:10,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:8}}>Emissions Transfer Function</div>
               <div style={{display:"grid",gridTemplateColumns:"50px 1fr 1fr 1fr",gap:4,alignItems:"center",fontSize:10,fontFamily:"monospace"}}>
                 <div></div>
@@ -10656,7 +10672,7 @@ export default function App(){
               <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic",marginTop:6,lineHeight:1.3}}>
                 Multipliers applied to NOx15 / CO15 / PX36_SEL correlation output based on current BRNDMD. Persists across reloads.
               </div>
-            </div>
+            </div>}
           </div>}
 
           {/* CONTENT */}
