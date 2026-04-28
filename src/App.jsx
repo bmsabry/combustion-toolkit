@@ -6435,55 +6435,82 @@ function _distinctValuesForVar(results, varSpec){
 //  Returns each held entry with `distinct` (the matrix's distinct values
 //  for that var, suitable for a dropdown) and `source` ∈ {"user", "baseline", "mode"}.
 // ─────────────────────────────────────────────────────────────────────────
-function _findHeldSlice(varSpecs, baseline, results, freeVarIds, heldOverrides){
-  const held = [];
+// Sentinel value the user can pick in a held-var dropdown to mean
+// "leave this var free — don't filter on it". Stored in the
+// heldOverrides Map under the var id.
+const HELD_FREE = Symbol.for("ctk.held.free");
+
+function _findHeldSlice(varSpecs, baseline, results, freeVarIds, heldOverrides, opts){
+  // `xIsInput` controls the DEFAULT for vars without a user override:
+  //   X=input  → default to baseline (or mode fallback) → variable IS held.
+  //   X=output → default to free                         → variable is NOT held.
+  // Either way the user gets a dropdown for every candidate (var that
+  // isn't an axis or grouping) so they can switch any of them between
+  // "Free (full spread)" and "Hold at <picked value>".
+  const xIsInput = opts && opts.xIsInput !== false;
+  const candidates = [];      // [{varSpec, value, source, distinct}] — value=null means free
   let anyFallback = false;
+
   for (const v of varSpecs){
     if (freeVarIds.has(v.id)) continue;
     const distinct = _distinctValuesForVar(results, v);
-    let value = null, source = "mode";
-    // (1) User override wins
+
+    // (1) User override wins — including explicit "free this var" sentinel.
     if (heldOverrides && heldOverrides.has(v.id)){
-      value = heldOverrides.get(v.id);
-      source = "user";
-    } else {
-      // (2) Baseline if it's in the matrix
-      const baseVal = _readBaselineVar(baseline, v);
-      const baseInMatrix = baseVal != null && distinct.some(d => _valuesMatch(d, baseVal));
-      if (baseInMatrix){
-        value = baseVal;
-        source = "baseline";
-      } else {
-        // (3) Mode fallback
-        const counts = new Map();
-        const col = _colFromVarSpec(v);
-        for (const r of results){
-          if (r.__error__) continue;
-          const raw = _readRowVarValue(r, col);
-          if (raw == null) continue;
-          const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
-          counts.set(k, (counts.get(k) || 0) + 1);
-        }
-        let bestK = null, bestN = 0, bestRaw = null;
-        for (const [k, n] of counts){
-          if (n > bestN){
-            bestK = k; bestN = n;
-            // Recover the original raw (not the rounded key) by matching distinct[].
-            const match = distinct.find(d => {
-              const dk = (typeof d === "number") ? +d.toPrecision(8) : String(d);
-              return dk === k;
-            });
-            bestRaw = match != null ? match : k;
-          }
-        }
-        value = bestRaw;
-        anyFallback = true;
+      const ov = heldOverrides.get(v.id);
+      if (ov === HELD_FREE){
+        candidates.push({ varSpec: v, value: null, source: "user-free", distinct });
+        continue;
+      }
+      candidates.push({ varSpec: v, value: ov, source: "user", distinct });
+      continue;
+    }
+
+    // (2) No user override — default depends on X kind.
+    if (!xIsInput){
+      // X is an output → default is FREE so the cloud spreads on X.
+      candidates.push({ varSpec: v, value: null, source: "free-default", distinct });
+      continue;
+    }
+
+    // X is an input → default is baseline (or mode fallback).
+    const baseVal = _readBaselineVar(baseline, v);
+    const baseInMatrix = baseVal != null && distinct.some(d => _valuesMatch(d, baseVal));
+    if (baseInMatrix){
+      candidates.push({ varSpec: v, value: baseVal, source: "baseline", distinct });
+      continue;
+    }
+    // (3) Mode fallback — most-common value across all rows.
+    const counts = new Map();
+    const col = _colFromVarSpec(v);
+    for (const r of results){
+      if (r.__error__) continue;
+      const raw = _readRowVarValue(r, col);
+      if (raw == null) continue;
+      const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    let bestN = 0, bestRaw = null;
+    for (const [k, n] of counts){
+      if (n > bestN){
+        bestN = n;
+        const match = distinct.find(d => {
+          const dk = (typeof d === "number") ? +d.toPrecision(8) : String(d);
+          return dk === k;
+        });
+        bestRaw = match != null ? match : k;
       }
     }
-    held.push({ varSpec: v, value, source, distinct });
+    candidates.push({ varSpec: v, value: bestRaw, source: "mode", distinct });
+    anyFallback = true;
   }
+
+  // The actually-held subset (every candidate with a non-null value).
+  // Backward-compatible field name `held` so the slice filter and the
+  // existing caption renderers keep working.
+  const held = candidates.filter(c => c.value != null);
   const count = _countMatchingRows(results, held);
-  return { held, count, fallback: anyFallback };
+  return { held, candidates, count, fallback: anyFallback };
 }
 
 function _countMatchingRows(results, held){
@@ -6755,10 +6782,13 @@ function HeldValuePicker({ slice, units, heldOverrides, setHeldOverrides }){
     return String(raw);
   };
 
-  const onChange = (varId, distinct, idx) => {
+  // Each <select> uses string values: "free" = HELD_FREE sentinel; "i:N"
+  // = pick distinct[N] from this var's distinct values.
+  const onSelectChange = (varId, distinct, raw) => {
     setHeldOverrides(prev => {
       const next = new Map(prev);
-      next.set(varId, distinct[idx]);
+      if (raw === "free")          next.set(varId, HELD_FREE);
+      else if (raw.startsWith("i:")) next.set(varId, distinct[+raw.slice(2)]);
       return next;
     });
   };
@@ -6771,55 +6801,74 @@ function HeldValuePicker({ slice, units, heldOverrides, setHeldOverrides }){
     });
   };
 
+  // Use the candidates list (every varSpec that COULD be held — i.e.,
+  // not the X axis or a grouping var). Each candidate gets a dropdown
+  // with "(Free)" + every distinct matrix value, defaulted to
+  // baseline/mode for input-X plots and to "Free" for output-X plots.
+  const candidates = slice.candidates || slice.held || [];
+  if (candidates.length === 0) return null;
+  const heldCount = candidates.filter(c => c.value != null).length;
+
   return (
     <div style={{padding:"8px 10px", background:`${C.accent}10`, borderRadius:5,
       border:`1px solid ${C.accent}40`, marginBottom:10}}>
       <div style={{fontSize:10, fontWeight:700, color:C.accent,
         textTransform:"uppercase", letterSpacing:".7px", marginBottom:6,
         fontFamily:"'Barlow Condensed',sans-serif"}}>
-        Hold these variables at:  <span style={{color:C.txtMuted, fontWeight:400, textTransform:"none", letterSpacing:0}}>
-          {slice.count} matching row{slice.count !== 1 ? "s" : ""}
+        Filter by other inputs:  <span style={{color:C.txtMuted, fontWeight:400, textTransform:"none", letterSpacing:0}}>
+          {heldCount === 0
+            ? `nothing held — all ${slice.count} valid points shown`
+            : `${heldCount} held → ${slice.count} matching row${slice.count !== 1 ? "s" : ""}`}
         </span>
       </div>
       <div style={{display:"flex", flexWrap:"wrap", gap:10}}>
-        {slice.held.map(h => {
+        {candidates.map(h => {
           const v = h.varSpec;
           const u = unitFor(v, units);
           const distinct = h.distinct || [];
-          // Find current selected index in distinct (by value match).
-          const selIdx = distinct.findIndex(d => _valuesMatch(d, h.value));
-          const sourceColor = h.source === "user"
-            ? C.accent2
-            : h.source === "baseline" ? C.txtDim : C.warm;
-          const sourceLabel = h.source === "user"
-            ? "picked"
-            : h.source === "baseline" ? "baseline" : "mode (baseline missed)";
+          const isHeld = h.value != null;
+          const selIdx = isHeld ? distinct.findIndex(d => _valuesMatch(d, h.value)) : -1;
+          const selectVal = isHeld ? `i:${selIdx >= 0 ? selIdx : 0}` : "free";
+          const sourceColor =
+            h.source === "user"        ? C.accent2 :
+            h.source === "user-free"   ? C.txtDim  :
+            h.source === "baseline"    ? C.txtDim  :
+            h.source === "free-default"? C.txtMuted:
+                                          C.warm;     // mode fallback
+          const sourceLabel =
+            h.source === "user"        ? "picked"          :
+            h.source === "user-free"   ? "free (picked)"   :
+            h.source === "baseline"    ? "baseline"        :
+            h.source === "free-default"? "free (default)"  :
+                                          "mode (baseline missed)";
           return (
             <div key={v.id} style={{display:"flex", flexDirection:"column", gap:2,
-              minWidth:160}}>
+              minWidth:170}}>
               <div style={{display:"flex", alignItems:"baseline", gap:6}}>
                 <span style={{fontSize:10.5, color:C.txtDim, fontFamily:"'Barlow',sans-serif",
                   fontWeight:600}}>{v.label}{u ? ` (${u})` : ""}</span>
                 <span style={{fontSize:8.5, color:sourceColor, fontStyle:"italic"}}>
                   {sourceLabel}
                 </span>
-                {h.source === "user" && (
+                {(h.source === "user" || h.source === "user-free") && (
                   <button onClick={() => reset(v.id)}
                     style={{marginLeft:"auto", padding:"0 4px", fontSize:9,
                       color:C.txtMuted, background:"transparent",
                       border:`1px solid ${C.border}`, borderRadius:2, cursor:"pointer",
                       fontFamily:"'Barlow Condensed',sans-serif"}}
-                    title="Restore baseline / mode default">↺</button>
+                    title="Restore default (baseline for input X, free for output X)">↺</button>
                 )}
               </div>
-              <select value={selIdx >= 0 ? selIdx : 0}
-                onChange={e => onChange(v.id, distinct, +e.target.value)}
+              <select value={selectVal}
+                onChange={e => onSelectChange(v.id, distinct, e.target.value)}
                 style={{padding:"3px 6px", fontSize:11,
-                  background:C.bg, color:C.txt, border:`1px solid ${C.border}`,
+                  background: isHeld ? C.bg : `${C.bg2}`, color: isHeld ? C.txt : C.txtDim,
+                  border:`1px solid ${isHeld ? C.accent2 + "60" : C.border}`,
                   borderRadius:3, fontFamily:"monospace"}}>
-                {distinct.length === 0 && <option value={-1}>(no values)</option>}
+                <option value="free">— Free (don't filter) —</option>
+                {distinct.length === 0 && <option value="i:-1" disabled>(no values)</option>}
                 {distinct.map((d, i) => (
-                  <option key={i} value={i}>{labelFor(v, d)}</option>
+                  <option key={i} value={`i:${i}`}>{labelFor(v, d)}</option>
                 ))}
               </select>
             </div>
@@ -6910,17 +6959,21 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
     // correct behavior is to show the FULL X spread by leaving every
     // input free (the user can still narrow the slice by setting an
     // explicit override in the held-value picker).
+    // Free set = {X (if input)} ∪ groupings. Vars NOT in free become
+    // CANDIDATES that the held-value picker can show. Their default
+    // status (held vs. free) depends on X kind:
+    //   X input  → defaults are baseline (held) so chart reads as a
+    //              clean slice through the cube.
+    //   X output → defaults are FREE (not held) so X's full spread is
+    //              preserved; user can opt-in to hold any candidate.
     const free = new Set();
-    if (xCol.kind === "input"){
-      free.add(xCol.varId);
-    } else {
-      // X is an output → free every varied input so X's full range is
-      // preserved on the chart.
-      for (const v of varSpecs) free.add(v.id);
-    }
+    if (xCol.kind === "input") free.add(xCol.varId);
     if (gColorCol) free.add(gColorCol.varId);
     if (gShapeCol) free.add(gShapeCol.varId);
-    const slice = _findHeldSlice(varSpecs, baseline, results, free, heldOverrides);
+    const slice = _findHeldSlice(
+      varSpecs, baseline, results, free, heldOverrides,
+      { xIsInput: xCol.kind === "input" },
+    );
     const sd = _buildSlicedSeries(results, varSpecs, xCol, yCol, gColorCol, gShapeCol, slice);
     return { ...sd, slice };
   }, [results, varSpecs, baseline, xCol, yCol, gColorCol, gShapeCol, heldOverrides]);
@@ -6951,7 +7004,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
         // (a) Main-effect plot — no grouping. Free = X only.
         {
           const free = new Set([xc.varId]);
-          const slice = _findHeldSlice(varSpecs, baseline, results, free);
+          const slice = _findHeldSlice(varSpecs, baseline, results, free, null, { xIsInput: true });
           const sd = _buildSlicedSeries(results, varSpecs, xc, yc, null, null, slice);
           if (sd.series.length > 0 && !_isYConstant(sd.series)){
             const baseName = `${_sanitizeFilename(yc.label)}_vs_${_sanitizeFilename(xc.label)}`;
@@ -6974,7 +7027,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
           const gVarDef = varSpecs.find(v => v.id === gColor.varId);
           const gRank = gVarDef ? _inputRank(gVarDef) : 9999;
           const free = new Set([xc.varId, gColor.varId]);
-          const slice = _findHeldSlice(varSpecs, baseline, results, free);
+          const slice = _findHeldSlice(varSpecs, baseline, results, free, null, { xIsInput: true });
           const sd = _buildSlicedSeries(results, varSpecs, xc, yc, gColor, null, slice);
           if (sd.series.length === 0 || _isYConstant(sd.series)) continue;
           // Skip if every series collapses to a single point — usually
@@ -7194,7 +7247,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
             baseline value if it's in the matrix, else the most-common
             value. Picking a value sets a user override that takes
             precedence over baseline/mode and triggers a slice recompute. */}
-        {customSliceData && customSliceData.slice && customSliceData.slice.held.length > 0 && (
+        {customSliceData && customSliceData.slice && (customSliceData.slice.candidates?.length > 0 || customSliceData.slice.held.length > 0) && (
           <HeldValuePicker
             slice={customSliceData.slice}
             units={units}
