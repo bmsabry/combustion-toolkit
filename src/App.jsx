@@ -7022,78 +7022,126 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
   const FACET_CAP = 12;
   const customSliceData = useMemo(() => {
     if (!xCol || !yCol) return null;
-    // Free set for the SLICE (which inputs the held-vars picker DOESN'T
-    // touch): X (if input), the primary grouping (color), AND the facet
-    // grouping if set. The facet variable becomes a series-splitter on
-    // the small-multiples grid below the main plot — but it's still
-    // "free" in the sense that the held picker shouldn't pin it.
-    const free = new Set();
-    if (xCol.kind === "input") free.add(xCol.varId);
-    if (gColorCol) free.add(gColorCol.varId);
-    if (gFacetCol) free.add(gFacetCol.varId);
-    const slice = _findHeldSlice(
-      varSpecs, baseline, results, free, heldOverrides,
+
+    // ── Common free set ──
+    // Vars NOT in `commonFree` become candidates the user can hold via
+    // the held-vars picker. We treat the facet variable as free so it
+    // doesn't appear in the picker (it has its own role — splitting the
+    // small-multiples grid below).
+    const commonFree = new Set();
+    if (xCol.kind === "input") commonFree.add(xCol.varId);
+    if (gColorCol) commonFree.add(gColorCol.varId);
+    if (gFacetCol) commonFree.add(gFacetCol.varId);
+    const commonSlice = _findHeldSlice(
+      varSpecs, baseline, results, commonFree, heldOverrides,
       { xIsInput: xCol.kind === "input" },
     );
-    // Main plot — color grouping only, IGNORE the facet (the facet
-    // appears as small-multiples below). This is the "overall view"
-    // the user sees on top: same chart they'd get with no secondary
-    // grouping picked.
+
+    // ── Main plot ──
+    // The main plot should read like the chart the user would get if
+    // they HADN'T picked a secondary grouping — i.e. one clean line
+    // per color group, no facet smearing. So we pin the facet variable
+    // to a single value (baseline if it's in the matrix; otherwise the
+    // most-common matrix value). This is the SAME logic _findHeldSlice
+    // uses for any other held variable.
+    let mainFacetPin = null;
+    if (gFacetCol){
+      const fSpec = varSpecs.find(v => v.id === gFacetCol.varId);
+      if (fSpec){
+        const distinct = _distinctValuesForVar(results, fSpec);
+        const baseVal = _readBaselineVar(baseline, fSpec);
+        const baseInMatrix = baseVal != null && distinct.some(d => _valuesMatch(d, baseVal));
+        let pinValue = null, pinSource = "mode";
+        if (baseInMatrix){ pinValue = baseVal; pinSource = "baseline"; }
+        else {
+          // mode fallback
+          const counts = new Map();
+          const col = _colFromVarSpec(fSpec);
+          for (const r of results){
+            if (r.__error__) continue;
+            const raw = _readRowVarValue(r, col);
+            if (raw == null) continue;
+            const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
+            counts.set(k, (counts.get(k) || 0) + 1);
+          }
+          let bestN = 0;
+          for (const [k, n] of counts){
+            if (n > bestN){
+              bestN = n;
+              const match = distinct.find(d => {
+                const dk = (typeof d === "number") ? +d.toPrecision(8) : String(d);
+                return dk === k;
+              });
+              pinValue = match != null ? match : k;
+            }
+          }
+        }
+        mainFacetPin = { varSpec: fSpec, value: pinValue, source: pinSource, distinct };
+      }
+    }
+    const mainHeld = mainFacetPin
+      ? [...commonSlice.held, mainFacetPin]
+      : commonSlice.held;
+    const mainSlice = {
+      held: mainHeld,
+      candidates: commonSlice.candidates,
+      count: _countMatchingRows(results, mainHeld),
+      fallback: commonSlice.fallback || (mainFacetPin && mainFacetPin.source === "mode"),
+    };
     const mainSd = _buildSlicedSeries(
-      results, varSpecs, xCol, yCol, gColorCol, null, slice,
+      results, varSpecs, xCol, yCol, gColorCol, null, mainSlice,
     );
 
-    // Facet panels — only built when secondary grouping is set.
+    // ── Facet panels ──
+    // Each panel uses commonSlice.held PLUS the facet variable pinned
+    // to that panel's value. So all panels share the same held vars
+    // (P, WFR, etc.) and differ ONLY in the facet variable.
     let facets = null;
     let facetOverflow = false;
     if (gFacetCol){
-      // Distinct facet values present in matching rows AFTER applying
-      // the user's held-slice. So if the user holds e.g. L_PFR=0.5,
-      // facets only show WFR values that exist at L_PFR=0.5.
-      const heldVals = (slice.held || []);
-      const colFacet = _colFromVarSpec(gFacetCol);
-      const facetSeen = new Map();   // rounded key → original raw
-      for (const r of results){
-        if (r.__error__) continue;
-        // Apply held filter (if any) before considering this row's facet
-        let ok = true;
-        for (const h of heldVals){
-          const col = _colFromVarSpec(h.varSpec);
-          if (!_valuesMatch(_readRowVarValue(r, col), h.value)){ ok = false; break; }
+      const fSpec = varSpecs.find(v => v.id === gFacetCol.varId);
+      if (fSpec){
+        const colFacet = _colFromVarSpec(fSpec);
+        // Distinct facet values present in rows that satisfy commonSlice.
+        const facetSeen = new Map();
+        for (const r of results){
+          if (r.__error__) continue;
+          let ok = true;
+          for (const h of commonSlice.held){
+            const col = _colFromVarSpec(h.varSpec);
+            if (!_valuesMatch(_readRowVarValue(r, col), h.value)){ ok = false; break; }
+          }
+          if (!ok) continue;
+          const raw = _readRowVarValue(r, colFacet);
+          if (raw == null) continue;
+          const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
+          if (!facetSeen.has(k)) facetSeen.set(k, raw);
         }
-        if (!ok) continue;
-        const raw = _readRowVarValue(r, colFacet);
-        if (raw == null) continue;
-        const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
-        if (!facetSeen.has(k)) facetSeen.set(k, raw);
-      }
-      let facetVals = [...facetSeen.values()];
-      if (facetVals.every(v => typeof v === "number")) facetVals.sort((a, b) => a - b);
-      else facetVals.sort((a, b) => String(a).localeCompare(String(b)));
-      if (facetVals.length > FACET_CAP){
-        facetOverflow = true;
-        facetVals = facetVals.slice(0, FACET_CAP);
-      }
+        let facetVals = [...facetSeen.values()];
+        if (facetVals.every(v => typeof v === "number")) facetVals.sort((a, b) => a - b);
+        else facetVals.sort((a, b) => String(a).localeCompare(String(b)));
+        if (facetVals.length > FACET_CAP){
+          facetOverflow = true;
+          facetVals = facetVals.slice(0, FACET_CAP);
+        }
 
-      facets = facetVals.map(fVal => {
-        // Build a derived slice that ALSO holds the facet variable at
-        // this panel's value. We mutate the held list in-place for this
-        // panel only (don't touch the original `slice`).
-        const panelHeld = [
-          ...heldVals,
-          { varSpec: gFacetCol.varId === xCol.varId ? null : { id: gFacetCol.varId, kind: gFacetCol.kindRaw, label: gFacetCol.label, species: gFacetCol.species }, value: fVal },
-        ].filter(h => h.varSpec);
-        const panelSlice = { held: panelHeld, candidates: panelHeld, count: 0, fallback: false };
-        const sd = _buildSlicedSeries(
-          results, varSpecs, xCol, yCol, gColorCol, null, panelSlice,
-        );
-        return {
-          facetValue: fVal,
-          facetLabel: _plotFmtVal(gFacetCol, fVal),
-          ...sd,
-          pointCount: sd.series.reduce((acc, s) => acc + s.points.length, 0),
-        };
-      });
+        facets = facetVals.map(fVal => {
+          const panelHeld = [
+            ...commonSlice.held,
+            { varSpec: fSpec, value: fVal, source: "facet-panel" },
+          ];
+          const panelSlice = { held: panelHeld, candidates: panelHeld, count: 0, fallback: false };
+          const sd = _buildSlicedSeries(
+            results, varSpecs, xCol, yCol, gColorCol, null, panelSlice,
+          );
+          return {
+            facetValue: fVal,
+            facetLabel: _plotFmtVal(gFacetCol, fVal),
+            ...sd,
+            pointCount: sd.series.reduce((acc, s) => acc + s.points.length, 0),
+          };
+        });
+      }
     }
 
     // Compute SHARED axis bounds across the main plot AND every facet
@@ -7134,7 +7182,9 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
 
     return {
       ...mainSd,
-      slice,
+      slice: commonSlice,    // for the held-vars picker (excludes facet)
+      mainSlice,             // what the main chart actually filtered on
+      mainFacetPin,          // facet variable + pinned value used for main
       facets,
       facetOverflow,
       facetTotalCount: gFacetCol ? (facets ? facets.length : 0) : 0,
@@ -7539,7 +7589,16 @@ ${panels}
             </div>
             <div style={{fontSize:10, color: C.txtMuted,
               marginBottom:6, fontFamily:"'Barlow',sans-serif", lineHeight:1.4}}>
-              {_heldSliceCaption(customSliceData.slice, units)}
+              {_heldSliceCaption(customSliceData.mainSlice || customSliceData.slice, units)}
+              {customSliceData.mainFacetPin && (
+                <div style={{marginTop:2, color: C.warm, fontStyle:"italic"}}>
+                  Main plot pinned to {gFacetCol.label}
+                  {" = "}{_plotFmtVal(gFacetCol, customSliceData.mainFacetPin.value)}
+                  {gFacetCol.unit ? ` ${gFacetCol.unit}` : ""}
+                  {customSliceData.mainFacetPin.source === "mode" ? " (mode — baseline missed matrix)" : " (baseline)"}
+                  . See faceted panels below for full {gFacetCol.label} variation.
+                </div>
+              )}
             </div>
             <MultiSeriesChart
               series={customSliceData.series}
