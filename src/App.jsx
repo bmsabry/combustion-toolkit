@@ -1322,9 +1322,18 @@ function brBandsFromSweep(sweepData){
 const hs={box:{fontSize:10.5,lineHeight:1.55,color:C.txtDim,padding:"10px 12px",background:`${C.accent}08`,border:`1px solid ${C.accent}18`,borderRadius:6,marginBottom:10,fontFamily:"'Barlow',sans-serif"},em:{color:C.accent,fontWeight:600},warn:{color:C.accent2,fontWeight:600}};
 
 // ── Help Components ──
+// LinkChip — sidebar status indicator for "this value is following the Cycle".
+// When `onBreak` is a function, a BREAK button is shown so the user can
+// disconnect (Advanced Mode). When `onBreak` is null/undefined the chip is a
+// read-only indicator — used in Gas Turbine Simulator mode where the cycle is
+// always the source of truth and the link is not user-breakable.
 function LinkChip({onBreak,label}){return(<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4,padding:"3px 7px",background:`${C.accent}15`,border:`1px solid ${C.accent}50`,borderRadius:4,fontSize:9.5,fontFamily:"monospace"}}>
   <span style={{color:C.accent}}>🔗 {label}</span>
-  <button onClick={onBreak} title="Stop pulling this value from the Cycle panel" style={{padding:"1px 6px",fontSize:8.5,fontWeight:700,color:C.accent2,background:"transparent",border:`1px solid ${C.accent2}70`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>BREAK</button>
+  {onBreak ? (
+    <button onClick={onBreak} title="Stop pulling this value from the Cycle panel" style={{padding:"1px 6px",fontSize:8.5,fontWeight:700,color:C.accent2,background:"transparent",border:`1px solid ${C.accent2}70`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>BREAK</button>
+  ) : (
+    <span title="Linked by Application Mode — engine mode always follows the cycle" style={{padding:"1px 6px",fontSize:8.5,fontWeight:700,color:C.txtMuted,background:"transparent",border:`1px solid ${C.border}`,borderRadius:3,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>LOCKED</span>
+  )}
 </div>);}
 
 function HelpBox({children,title="ℹ️ How It Works"}){const[open,setOpen]=useState(false);return(<div style={{marginBottom:10}}>
@@ -3062,7 +3071,7 @@ function AssumptionsPanel(){
       • linkP3  → sidebar Pressure        = P3
       • linkFAR → sidebar phi (and FAR)   = cycle-computed phi at target T4
 */
-function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx,setLinkOx,result,loading,err}){
+function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx,setLinkOx,result,loading,err,mode}){
   const units=useContext(UnitCtx);
   const {accurate,available}=useContext(AccurateCtx);
   const fmtT=K=>uv(units,"T",K).toFixed(1)+" "+uu(units,"T");
@@ -3099,21 +3108,37 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
         <div style={{fontSize:10.5,color:C.txtMuted,marginBottom:10,lineHeight:1.45,fontFamily:"'Barlow',sans-serif"}}>
           When a linkage is ON, the cycle output drives that sidebar field so <strong style={{color:C.accent}}>every other panel (AFT, Flame Speed, Combustor, Exhaust, Autoignition)</strong> runs at the engine's actual state. Break link to regain manual control.
         </div>
-        {[
-          {on:linkT3,set:setLinkT3,label:"Air Temp → T3",tip:"Sidebar Air Temp (K) ← cycle T3 (combustor inlet / HPC exit)"},
-          {on:linkP3,set:setLinkP3,label:"Pressure → P3",tip:"Sidebar Pressure ← cycle P3 (combustor inlet pressure)"},
-          {on:linkFAR,set:setLinkFAR,label:"φ → cycle φ_Bulk (flame zone)",tip:"Sidebar φ ← cycle's flame-zone φ_Bulk = φ₄ / combustor_air_frac. This is the equivalence ratio actually seen by the primary flame (richer than the diluted combustor exit φ₄). Drives T_ad on Flame Temp and the PSR-PFR / Flame Speed / Blowoff / Exhaust panels, which all model the flame — not the diluted exit."},
-          {on:linkOx,set:setLinkOx,label:"Oxidizer comp → humid air @ ambient",tip:"Sidebar Oxidizer composition ← cycle's computed humid-air mol % at ambient T/RH. Required for T_ad on Flame Temp to match T4 on this panel (they use the same mechanism and same air)."},
-        ].map(l=>(
-          <div key={l.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",border:`1px solid ${l.on?C.accent:C.border}`,borderRadius:6,marginBottom:6,background:l.on?`${C.accent}10`:"transparent"}}>
-            <div style={{fontSize:11,color:C.txt,fontFamily:"monospace"}} title={l.tip}>
-              <span style={{marginRight:6,opacity:l.on?1:.3}}>🔗</span>{l.label}
+        {(() => {
+          // Toggles are user-controlled ONLY in Advanced Mode. In Gas
+          // Turbine Simulator the linkages are forced ON (engine mode is
+          // always linked by spec); the buttons render but are disabled
+          // and labeled LOCKED so the user can see the wiring.
+          const canToggle = (mode === "advanced");
+          return [
+            {on:linkT3,set:setLinkT3,label:"Air Temp → T3",tip:"Sidebar Air Temp (K) ← cycle T3 (combustor inlet / HPC exit)"},
+            {on:linkP3,set:setLinkP3,label:"Pressure → P3",tip:"Sidebar Pressure ← cycle P3 (combustor inlet pressure)"},
+            {on:linkFAR,set:setLinkFAR,label:"φ → cycle φ_Bulk (flame zone)",tip:"Sidebar φ ← cycle's flame-zone φ_Bulk = φ₄ / combustor_air_frac. This is the equivalence ratio actually seen by the primary flame (richer than the diluted combustor exit φ₄). Drives T_ad on Flame Temp and the PSR-PFR / Flame Speed / Blowoff / Exhaust panels, which all model the flame — not the diluted exit."},
+            {on:linkOx,set:setLinkOx,label:"Oxidizer comp → humid air @ ambient",tip:"Sidebar Oxidizer composition ← cycle's computed humid-air mol % at ambient T/RH. Required for T_ad on Flame Temp to match T4 on this panel (they use the same mechanism and same air)."},
+          ].map(l=>(
+            <div key={l.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",border:`1px solid ${l.on?C.accent:C.border}`,borderRadius:6,marginBottom:6,background:l.on?`${C.accent}10`:"transparent"}}>
+              <div style={{fontSize:11,color:C.txt,fontFamily:"monospace"}} title={l.tip}>
+                <span style={{marginRight:6,opacity:l.on?1:.3}}>🔗</span>{l.label}
+              </div>
+              <button onClick={canToggle?(()=>l.set(!l.on)):undefined}
+                disabled={!canToggle}
+                title={canToggle?undefined:"Engine mode (Gas Turbine Simulator) keeps cycle linkages always ON. Switch to Advanced Mode to break individual links."}
+                style={{padding:"3px 10px",fontSize:10,fontWeight:700,
+                  color:!canToggle?C.txtMuted:(l.on?C.bg:C.accent),
+                  background:!canToggle?"transparent":(l.on?C.accent:"transparent"),
+                  border:`1px solid ${!canToggle?C.border:C.accent}`,
+                  borderRadius:4,
+                  cursor:canToggle?"pointer":"not-allowed",
+                  fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>
+                {!canToggle ? "LOCKED" : (l.on ? "LINKED" : "BREAK · OFF")}
+              </button>
             </div>
-            <button onClick={()=>l.set(!l.on)} style={{padding:"3px 10px",fontSize:10,fontWeight:700,color:l.on?C.bg:C.accent,background:l.on?C.accent:"transparent",border:`1px solid ${C.accent}`,borderRadius:4,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>
-              {l.on?"LINKED":"BREAK · OFF"}
-            </button>
-          </div>
-        ))}
+          ));
+        })()}
         {!available&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.warm}12`,border:`1px solid ${C.warm}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Cycle linkages need an active subscription to run the Cantera backend. The <strong style={{color:C.warm}}>Gas Turbine Simulator</strong> or <strong style={{color:C.warm}}>Advanced Mode</strong> tier enables the cycle solver.</div>}
         {available&&!accurate&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.accent2}12`,border:`1px solid ${C.accent2}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Switch to <strong style={{color:C.accent2}}>Gas Turbine Simulator</strong> or <strong style={{color:C.accent2}}>Advanced Mode</strong> via the MODE picker in the header to run the cycle solver and activate linkages.</div>}
       </div>
@@ -9828,10 +9853,22 @@ export default function App(){
   const CYCLE_AIRFRAC_DEFAULT={"LM6000PF":0.85,"LMS100PB+":0.89};
   const CYCLE_LPFR_DEFAULT_M ={"LM6000PF":0.21336,"LMS100PB+":0.13716};   // 0.70 ft / 0.45 ft
   const[cycleAirFrac,setCycleAirFrac]=useState(CYCLE_AIRFRAC_DEFAULT["LM6000PF"]);
-  const[linkT3,setLinkT3]=useState(true);
-  const[linkP3,setLinkP3]=useState(true);
-  const[linkFAR,setLinkFAR]=useState(true);
-  const[linkOx,setLinkOx]=useState(true);
+  // ── Cycle linkage flags (raw user-controlled state) ───────────────
+  // Raw flags hold the user's preference inside Advanced Mode. The
+  // EFFECTIVE link state used everywhere else (sidebar chips, the
+  // App-level cycle-result propagation effects, the CyclePanel toggles)
+  // is DERIVED from `mode` further below:
+  //   free / ctk    → all OFF (cycle never runs; no source to link to)
+  //   gts           → all ON  (cycle drives every combustion variable;
+  //                            engine-mode always linked by spec — no
+  //                            break-link button exposed)
+  //   advanced      → the raw flags ARE the effective state; user
+  //                   controls them via the CyclePanel toggles + the
+  //                   sidebar BREAK chips
+  const[linkT3Raw,setLinkT3]=useState(true);
+  const[linkP3Raw,setLinkP3]=useState(true);
+  const[linkFARRaw,setLinkFAR]=useState(true);
+  const[linkOxRaw,setLinkOx]=useState(true);
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
   // Premixer stability inputs. D_fh = flameholder diameter (Zukoski τ_BO).
   // L_premix / V_premix = premixer geometry (autoignition safety: τ_res < τ_ign).
@@ -9970,6 +10007,19 @@ export default function App(){
   // No-op stub for any future caller that imports setAccurate via
   // AccurateCtx. The mode picker is the canonical control now.
   const setAccurate = () => {};
+
+  // ── Effective cycle linkages (derived from mode) ──────────────────
+  // free/ctk → false (no cycle running)
+  // gts      → true  (engine mode is always linked)
+  // advanced → user-controlled via the *Raw flags above
+  const linkT3  = (mode === "advanced") ? linkT3Raw  : (mode === "gts");
+  const linkP3  = (mode === "advanced") ? linkP3Raw  : (mode === "gts");
+  const linkFAR = (mode === "advanced") ? linkFARRaw : (mode === "gts");
+  const linkOx  = (mode === "advanced") ? linkOxRaw  : (mode === "gts");
+  // The sidebar BREAK button is only meaningful in Advanced. We pass
+  // null for onBreak in non-Advanced modes so LinkChip suppresses
+  // the button (showing the chip as a read-only status indicator).
+  const _linkBreakable = (mode === "advanced");
   // ── Theme state ─────────────────────────────────────────────────────
   // Theme is hot-swappable ("dark" ↔ "light"). The actual palette lives at
   // module level in `_activeC` (see DARK_C / LIGHT_C). Toggling here:
@@ -10401,8 +10451,12 @@ export default function App(){
         <div style={{display:"flex",flex:"1 1 auto",minHeight:0}}>
           {/* SIDEBAR (hidden on Account tab) */}
           {tab!=="account"&&<div style={{width:255,flexShrink:0,borderRight:`1px solid ${C.border}`,padding:"12px 10px",overflowY:"auto",background:`${C.bg}CC`}}>
-            {/* Engine & Ambient (lifted from CyclePanel) — drives the entire toolkit when Accurate Mode is on */}
-            <EngineAmbientSidebar
+            {/* Engine & Ambient — only relevant when the cycle solver is
+                actually running. Hidden in Free and Combustion Toolkit
+                modes (combustion-only workflows that never invoke the
+                cycle deck); visible in Gas Turbine Simulator and
+                Advanced where the cycle drives downstream values. */}
+            {(mode==="gts"||mode==="advanced")&&<EngineAmbientSidebar
               engine={cycleEngine} setEngine={setCycleEngine}
               Pamb={cyclePamb} setPamb={setCyclePamb}
               Tamb={cycleTamb} setTamb={setCycleTamb}
@@ -10419,7 +10473,7 @@ export default function App(){
               bleedAirFrac={bleedAirFrac}
               emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
               accurate={accurate&&hasOnline}
-            />
+            />}
             {/* Water / steam injection — kept right under Engine & Ambient per spec.
                 Applies to AFT, Flame Speed, Combustor, Exhaust, Autoignition AND Cycle. */}
             <div style={{background:C.bg2,border:`1px solid ${C.accent3}25`,borderRadius:8,padding:12,marginBottom:10}}>
@@ -10464,7 +10518,7 @@ export default function App(){
             <div>
               <CompEditor title="Oxidizer (mol%)" comp={ox} setComp={setOx} presets={OX_PRESETS} speciesList={OX_SP} accent={C.accent3} initialPreset="Humid Air (60%RH 25°C)"
                 helpText="Enter oxidizer composition in mole percent. 'Dry Air' is the standard. Use humid air, O₂-enriched, or vitiated air for specialized analyses."/>
-              {accurate&&hasOnline&&linkOx&&<div style={{marginTop:-2,marginBottom:8}}><LinkChip onBreak={()=>setLinkOx(false)} label="Linked to Cycle humid air"/></div>}
+              {accurate&&hasOnline&&linkOx&&<div style={{marginTop:-2,marginBottom:8}}><LinkChip onBreak={_linkBreakable?()=>setLinkOx(false):null} label="Linked to Cycle humid air"/></div>}
             </div>
             <div style={{background:C.bg2,border:`1px solid ${C.accent}25`,borderRadius:8,padding:12}}>
               <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6}}>Operating Conditions</div>
@@ -10477,7 +10531,7 @@ export default function App(){
                 </div>
                 <input type="range" min="0.3" max="1.0" step="0.01" value={phi} onChange={e=>setPhi(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{phi<0.95?"lean":phi>1.05?"rich":"~stoichiometric"}</div>
-                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={()=>setLinkFAR(false)} label="Linked to Cycle φ_Bulk"/>}
+                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={_linkBreakable?()=>setLinkFAR(false):null} label="Linked to Cycle φ_Bulk"/>}
               </div>
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
@@ -10559,7 +10613,7 @@ export default function App(){
                 <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, Cantera mixes this with Fuel Temp adiabatically (mass-weighted enthalpy balance with T-dependent NASA polynomials) to get the actual PSR inlet T.">Air Temp ({uu(units,"T")})</label>
                 <NumField value={uv(units,"T",T0)} decimals={2} onCommit={v=>setT0(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.accent3}55`}}/>
                 <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.accent3,marginTop:4}}/>
-                {accurate&&hasOnline&&linkT3&&<LinkChip onBreak={()=>setLinkT3(false)} label="Linked to Cycle T3"/>}
+                {accurate&&hasOnline&&linkT3&&<LinkChip onBreak={_linkBreakable?()=>setLinkT3(false):null} label="Linked to Cycle T3"/>}
               </div>
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
@@ -10571,7 +10625,7 @@ export default function App(){
               </div>
               <div><label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
                 <NumField value={uv(units,"P",P)} decimals={3} onCommit={v=>setP(uvI(units,"P",v))} style={S.inp}/>
-                {accurate&&hasOnline&&linkP3&&<LinkChip onBreak={()=>setLinkP3(false)} label="Linked to Cycle P3"/>}
+                {accurate&&hasOnline&&linkP3&&<LinkChip onBreak={_linkBreakable?()=>setLinkP3(false):null} label="Linked to Cycle P3"/>}
               </div>
               {/* Water/steam injection (WFR) is now lifted to the dedicated card directly under Engine & Ambient at the top of the sidebar — it drives every Accurate Mode panel from a single source. */}
             </div>
@@ -10645,6 +10699,7 @@ export default function App(){
               mappingTables={mappingTables} emTfMults={emTfMults}
             />}
             {tab==="cycle"&&<CyclePanel
+              mode={mode}
               linkT3={linkT3} setLinkT3={setLinkT3}
               linkP3={linkP3} setLinkP3={setLinkP3}
               linkFAR={linkFAR} setLinkFAR={setLinkFAR}
