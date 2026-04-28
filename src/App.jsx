@@ -7510,6 +7510,63 @@ function _seriesAllPositive(series){
   return series.every(s => s.points.every(p => p.y > 0));
 }
 
+// ── ListInput — local-state text field for the DOE "List" mode ──
+//
+// The naive `<input value={cfg.list...} onChange={parse-on-every-keystroke}>`
+// pattern caused awful typing UX: every keystroke parsed the comma-separated
+// string, normalized to SI, called updateVarSpec → triggered a full
+// AutomatePanel re-render → recomputed matrix size estimate → shifted page
+// layout. Result: typing felt sluggish and the page jumped while you typed.
+//
+// This component decouples typing from upstream re-renders:
+//   - Local string state holds whatever the user is typing, including
+//     incomplete values like "30," or "30, 4" with trailing commas/spaces.
+//   - Upstream `onCommit` only fires on blur or Enter, when the user
+//     signals they're done editing. Then we parse, drop blanks/NaN, convert
+//     display→SI, and ship the SI list to varSpecs.
+//   - Re-syncs from props if the upstream value changes externally (e.g.
+//     user clears it from elsewhere).
+function ListInput({ isEnum, def, units, list, placeholder, onCommit, style }){
+  // Format the upstream SI list as a display string for the input.
+  const formatFromList = useCallback((arr) => {
+    if (!Array.isArray(arr) || arr.length === 0) return "";
+    if (isEnum) return arr.join(", ");
+    return arr.map(v => toDisplay(def, v, units)).join(", ");
+  }, [isEnum, def, units]);
+
+  const [text, setText] = useState(() => formatFromList(list));
+  // Re-sync from props when the upstream list changes from outside (mode
+  // toggle, reset, programmatic clear). We compare the formatted upstream
+  // string against the local text — if different, accept upstream.
+  useEffect(() => {
+    const upstream = formatFromList(list);
+    setText(prev => (prev === upstream ? prev : upstream));
+    // Only re-sync on upstream changes; ignore our own setText calls below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list, formatFromList]);
+
+  const commit = () => {
+    const raw = text.split(",").map(s => s.trim()).filter(Boolean);
+    const parsed = isEnum
+      ? raw
+      : raw.map(s => +s).filter(n => Number.isFinite(n)).map(v => toSi(def, v, units));
+    // Re-format what we accepted, so the input snaps to the canonical
+    // form (drops NaN tokens, removes trailing commas, etc.) AFTER the user
+    // has finished typing.
+    setText(formatFromList(parsed));
+    onCommit(parsed);
+  };
+
+  return (
+    <input type="text" placeholder={placeholder}
+      value={text}
+      onChange={e => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } }}
+      style={style}/>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    AUTOMATION PANEL (tab UI)
    ──────────────────────────────────────────────────────────────────────────
@@ -8050,18 +8107,15 @@ function AutomatePanel(props){
                 )}
                 {mode === "list" && (
                   <>
-                    <input type="text" placeholder={isEnum ? def.choices?.map(c=>c.value).join(", ") : "1.0, 2.0, 3.0"}
-                      value={Array.isArray(cfg.list)
-                        ? cfg.list.map(v => isEnum ? v : toDisplay(def, v, units)).join(", ")
-                        : ""}
-                      onChange={e => {
-                        const raw = e.target.value.split(",").map(s => s.trim()).filter(Boolean);
-                        const list = isEnum
-                          ? raw
-                          : raw.map(s => +s).filter(n => Number.isFinite(n)).map(v => toSi(def, v, units));
-                        updateVarSpec(vid, {list});
-                      }}
-                      style={{...S.inp, flex:1, minWidth:200}}/>
+                    <ListInput
+                      isEnum={isEnum}
+                      def={def}
+                      units={units}
+                      list={cfg.list}
+                      placeholder={isEnum ? def.choices?.map(c=>c.value).join(", ") : "e.g. 1.0, 2.0, 3.0"}
+                      onCommit={(parsedSiList) => updateVarSpec(vid, {list: parsedSiList})}
+                      style={{...S.inp, flex:1, minWidth:200}}
+                    />
                     {!isEnum && <span style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>{dispUnit}</span>}
                   </>
                 )}
