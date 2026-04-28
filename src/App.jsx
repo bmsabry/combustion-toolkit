@@ -931,7 +931,15 @@ function Chart({data,xK,yK,xL,yL,color="#2DD4BF",w=540,h=250,marker=null,markerC
   // bands: [{x0, x1, color}] in x-axis units. Drawn as background rectangles
   // BEHIND gridlines and the data line. Used to shade BR-mode regions on the
   // cycle load-sweep plots; safe to omit elsewhere.
-  bands=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;const p={t:22,r:y2K?58:28,b:44,l:60};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn,yx;if(yMin!=null&&yMax!=null){yn=yMin;yx=yMax;}else{let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}yn=yMin!=null?yMin:yn_-(yx_-yn_)*0.05;yx=yMax!=null?yMax:yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;}const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;
+  bands=null}){if(!data||!data.length)return<div style={{color:C.txtMuted,padding:20,fontSize:13,fontFamily:"monospace"}}>No data</div>;
+// ── Chart layout & typography (figure-quality polish) ─────────────────
+//   Axis padding bumped to make room for the larger tick + title fonts.
+//   Tick labels: 12 px, semibold, full-contrast txt color (was 9 px / dim).
+//   Axis titles:  14 px, bold (was 10 px, dim).
+//   Major gridlines:  C.grid at 0.75 px.
+//   Minor gridlines:  C.grid at 0.3 px, 4× density (between major ticks).
+//   Data line stroke 2.5 (was 2). Marker label 12 px bold.
+const p={t:28,r:y2K?80:40,b:60,l:78};const W=w-p.l-p.r,H=h-p.t-p.b;const xs=data.map(d=>d[xK]),ys=data.map(d=>d[yK]);const xn=xMin!=null?xMin:Math.min(...xs),xx=xMax!=null?xMax:Math.max(...xs);let yn,yx;if(yMin!=null&&yMax!=null){yn=yMin;yx=yMax;}else{let yn_=Math.min(...ys),yx_=Math.max(...ys);if(yn_===yx_){yn_-=1;yx_+=1;}yn=yMin!=null?yMin:yn_-(yx_-yn_)*0.05;yx=yMax!=null?yMax:yx_+(yx_-yn_)*0.05;if(yn_>=0&&yn<0)yn=0;}const sx=v=>p.l+(v-xn)/(xx-xn||1)*W,sy=v=>p.t+H-(v-yn)/(yx-yn||1)*H;
 // Staircase path: hold each y constant from x_i to x_{i+1}, then jump to y_{i+1}.
 // Used for piecewise-constant series like BRNDMD vs load.
 const buildStep=(arr,xKey,yKey,syFn)=>{
@@ -951,7 +959,11 @@ const pts = step
     if (!(x1c > x0c)) return null;
     const xa = sx(x0c), xb = sx(x1c);
     return (<rect key={`band${i}`} x={xa} y={p.t} width={Math.max(0, xb - xa)} height={H} fill={b.color} stroke="none"/>);
-  })}{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".5"/><text x={p.l-5} y={sy(v)+3.5} fill={C.axis} fontSize="9" textAnchor="end" fontFamily="monospace">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".5"/><text x={sx(v)} y={h-p.b+15} fill={C.axis} fontSize="9" textAnchor="middle" fontFamily="monospace">{fmtX(v)}</text></g>)}{(!bands || bands.length===0) && <path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/>}<path d={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2" strokeLinejoin="round" strokeDasharray="5 3"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+5} y={sy2(v)+3.5} fill={c2} fontSize="8.5" textAnchor="start" fontFamily="monospace">{fmt(v)}</text>)}</>}{hLines&&hLines.map((hl,i)=>hl.y>=yn&&hl.y<=yx?<g key={`hl${i}`}><line x1={p.l} y1={sy(hl.y)} x2={w-p.r} y2={sy(hl.y)} stroke={hl.color} strokeWidth="1.5" strokeDasharray="6 4" opacity="0.9"/><text x={w-p.r-6} y={sy(hl.y)-4} fill={hl.color} fontSize="9.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" textAnchor="end" letterSpacing=".5px">{hl.label} · {hl.y.toFixed(1)}</text></g>:null)}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="end" fontFamily="monospace">PSR</text><text x={sx(vline)+4} y={p.t+11} fill={C.txtMuted} fontSize="8.5" textAnchor="start" fontFamily="monospace">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={markerColor||C.warm} strokeWidth="1" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="4" fill={markerColor||C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-8:8)} y={sy(marker.y)-8} fill={markerColor||C.warm} fontSize="10" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-3} fill={C.txtMuted} fontSize="10" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={12} y={p.t+H/2} fill={color} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,12,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-14} y={p.t+H/2} fill={c2} fontSize="9.5" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-14},${p.t+H/2})`}>{y2L}</text>}</svg>);}
+  })}{/* Minor gridlines: 4 sub-divisions between each major y/x tick. */}
+{yTk.slice(0,-1).map((v,i)=>{const dy=(yTk[1]-yTk[0])/4;return [1,2,3].map(k=><line key={`yMin${i}_${k}`} x1={p.l} y1={sy(v+k*dy)} x2={w-p.r} y2={sy(v+k*dy)} stroke={C.grid} strokeWidth=".3" opacity=".55"/>);})}
+{xTk.slice(0,-1).map((v,i)=>{const dx=(xTk[1]-xTk[0])/4;return [1,2,3].map(k=><line key={`xMin${i}_${k}`} x1={sx(v+k*dx)} y1={p.t} x2={sx(v+k*dx)} y2={p.t+H} stroke={C.grid} strokeWidth=".3" opacity=".55"/>);})}
+{/* Major gridlines + tick labels. */}
+{yTk.map((v,i)=><g key={i}><line x1={p.l} y1={sy(v)} x2={w-p.r} y2={sy(v)} stroke={C.grid} strokeWidth=".75"/><line x1={p.l-5} y1={sy(v)} x2={p.l} y2={sy(v)} stroke={C.axis} strokeWidth="1"/><text x={p.l-8} y={sy(v)+4} fill={C.txt} fontSize="12" textAnchor="end" fontFamily="monospace" fontWeight="500">{fmt(v)}</text></g>)}{xTk.map((v,i)=><g key={i}><line x1={sx(v)} y1={p.t} x2={sx(v)} y2={p.t+H} stroke={C.grid} strokeWidth=".75"/><line x1={sx(v)} y1={p.t+H} x2={sx(v)} y2={p.t+H+5} stroke={C.axis} strokeWidth="1"/><text x={sx(v)} y={h-p.b+19} fill={C.txt} fontSize="12" textAnchor="middle" fontFamily="monospace" fontWeight="500">{fmtX(v)}</text></g>)}{(!bands || bands.length===0) && <path d={`${pts} L${sx(xs[xs.length-1]).toFixed(1)},${(p.t+H)} L${sx(xs[0]).toFixed(1)},${(p.t+H)} Z`} fill={`url(#${gid})`}/>}<path d={pts} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/>{y2K&&pts2&&<path d={pts2} fill="none" stroke={c2} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" strokeDasharray="6 4"/>}{y2K&&<>{Array.from({length:nY+1},(_,i)=>y2n+(y2x-y2n)*i/nY).map((v,i)=><text key={`y2${i}`} x={w-p.r+8} y={sy2(v)+4} fill={c2} fontSize="11" textAnchor="start" fontFamily="monospace" fontWeight="600">{fmt(v)}</text>)}</>}{hLines&&hLines.map((hl,i)=>hl.y>=yn&&hl.y<=yx?<g key={`hl${i}`}><line x1={p.l} y1={sy(hl.y)} x2={w-p.r} y2={sy(hl.y)} stroke={hl.color} strokeWidth="1.5" strokeDasharray="6 4" opacity="0.9"/><text x={w-p.r-6} y={sy(hl.y)-5} fill={hl.color} fontSize="12" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" textAnchor="end" letterSpacing=".5px">{hl.label} · {hl.y.toFixed(1)}</text></g>:null)}{vline!=null&&vline>xn&&vline<xx&&<g><line x1={sx(vline)} y1={p.t} x2={sx(vline)} y2={p.t+H} stroke={C.txtMuted} strokeWidth="1" strokeDasharray="3 3" opacity=".7"/><text x={sx(vline)-5} y={p.t+13} fill={C.txtMuted} fontSize="11" textAnchor="end" fontFamily="monospace" fontWeight="600">PSR</text><text x={sx(vline)+5} y={p.t+13} fill={C.txtMuted} fontSize="11" textAnchor="start" fontFamily="monospace" fontWeight="600">PFR</text></g>}{marker&&<g><line x1={sx(marker.x)} y1={p.t} x2={sx(marker.x)} y2={p.t+H} stroke={markerColor||C.warm} strokeWidth="1.25" strokeDasharray="4 3"/><circle cx={sx(marker.x)} cy={sy(marker.y)} r="5" fill={markerColor||C.warm} stroke={C.bg} strokeWidth="2"/><text x={sx(marker.x)+(sx(marker.x)>w/2?-10:10)} y={sy(marker.y)-9} fill={markerColor||C.warm} fontSize="12" fontFamily="monospace" fontWeight="700" textAnchor={sx(marker.x)>w/2?"end":"start"}>{marker.label}</text></g>}<text x={p.l+W/2} y={h-8} fill={C.txt} fontSize="14" fontWeight="700" textAnchor="middle" fontFamily="'Barlow',sans-serif">{xL}</text><text x={16} y={p.t+H/2} fill={color} fontSize="14" fontWeight="700" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(-90,16,${p.t+H/2})`}>{yL}</text>{y2K&&<text x={w-16} y={p.t+H/2} fill={c2} fontSize="14" fontWeight="700" textAnchor="middle" fontFamily="'Barlow',sans-serif" transform={`rotate(90,${w-16},${p.t+H/2})`}>{y2L}</text>}</svg>);}
 function HBar({data,w=540,h=180}){if(!data)return null;const entries=Object.entries(data).filter(([_,v])=>v>0.05).sort((a,b)=>b[1]-a[1]);if(!entries.length)return null;const pa={t:6,r:78,b:6,l:48};const bH=Math.min(22,(h-pa.t-pa.b)/entries.length-3);const mx=Math.max(...entries.map(e=>e[1]));const W=w-pa.l-pa.r;const clr={CO2:C.warm,H2O:C.accent,N2:C.accent3,O2:"#38BDF8",Ar:"#64748B",CH4:C.accent2,C2H6:C.orange,C3H8:"#F59E0B",H2:C.good,CO:"#FB923C",NO:C.strong,OH:C.violet,H:"#FDE68A",O:"#FCA5A5"};return(<svg viewBox={`0 0 ${w} ${h}`} style={{width:"100%",maxWidth:w}}>{entries.map(([sp,val],i)=>{const y=pa.t+i*(bH+3);const bw=val/mx*W;return(<g key={sp}><text x={pa.l-4} y={y+bH/2+4} fill={C.txtDim} fontSize="11" textAnchor="end" fontFamily="monospace">{fmt(sp)}</text><rect x={pa.l} y={y} width={Math.max(1,bw)} height={bH} rx="2" fill={clr[sp]||"#64748B"} opacity=".85"/><text x={pa.l+bw+4} y={y+bH/2+4} fill={C.txt} fontSize="10" fontFamily="monospace">{val.toFixed(2)}%</text></g>);})}</svg>);}
 
 // ── Multi-series scatter/line chart for the Automate "Plot Data" panel.
@@ -981,10 +993,15 @@ function MultiSeriesChart({
   if (allPts.length === 0){
     return <div style={{color:C.txtMuted, padding:20, fontSize:13, fontFamily:"monospace"}}>No data</div>;
   }
-  // Reserve ~24 px per legend row at the bottom (legendCols entries per row).
+  // Reserve ~26 px per legend row at the bottom (legendCols entries per row).
+  // Bumped from 18 → 24 to fit the larger 13 px legend font with breathing.
   const nLegendRows = Math.ceil(series.length / Math.max(1, legendCols));
-  const legendH = nLegendRows * 18 + 8;
-  const p = { t: 24, r: 18, b: 50 + legendH, l: 70 };
+  const legendH = nLegendRows * 24 + 10;
+  // Padding tuned for figure-quality typography:
+  //   bottom = 64 (axis title baseline) + legendH
+  //   left   = 86 (room for 14 px y-title rotated + 12 px tick labels)
+  //   top    = 28, right = 24
+  const p = { t: 28, r: 24, b: 64 + legendH, l: 86 };
   const W = w - p.l - p.r, H = h - p.t - p.b;
 
   const xs = allPts.map(d => d.x);
@@ -1053,33 +1070,57 @@ function MultiSeriesChart({
     <svg xmlns="http://www.w3.org/2000/svg" viewBox={`0 0 ${w} ${h}`}
       width={w} height={h}
       style={{width:"100%", maxWidth:w, height:"auto"}}>
-      {/* Solid background — required for PNG export so charts read on dark
-          docs and don't render with transparent canvas-default. */}
+      {/* Solid background — required for PNG export so charts read on the
+          current theme background and don't render with transparent canvas. */}
       <rect x="0" y="0" width={w} height={h} fill={C.bg}/>
-      {/* Gridlines + Y tick labels */}
+      {/* Minor gridlines — 4 sub-divisions per major tick, very faint.
+          Skipped on log Y because log spacing makes minor placement awkward. */}
+      {!yLog && yTk.slice(0,-1).map((v,i) => {
+        const dy = (yTk[1] - yTk[0]) / 4;
+        return [1,2,3].map(k => (
+          <line key={`yMin${i}_${k}`}
+            x1={p.l} y1={yToPx(v + k*dy)} x2={w - p.r} y2={yToPx(v + k*dy)}
+            stroke={C.grid} strokeWidth=".3" opacity=".5"/>
+        ));
+      })}
+      {!xCategorical && xTk.slice(0,-1).map((tk,i) => {
+        if (i+1 >= xTk.length) return null;
+        const dx = (xTk[1].v - xTk[0].v) / 4;
+        return [1,2,3].map(k => (
+          <line key={`xMin${i}_${k}`}
+            x1={xToPx(tk.v + k*dx)} y1={p.t}
+            x2={xToPx(tk.v + k*dx)} y2={p.t + H}
+            stroke={C.grid} strokeWidth=".3" opacity=".5"/>
+        ));
+      })}
+      {/* Major gridlines + Y tick labels */}
       {yTk.map((v,i) => (
         <g key={`y${i}`}>
           <line x1={p.l} y1={yToPx(v)} x2={w - p.r} y2={yToPx(v)}
-            stroke={C.grid} strokeWidth=".5"/>
-          <text x={p.l - 6} y={yToPx(v) + 3.5} fill={C.axis} fontSize="9"
-            textAnchor="end" fontFamily="monospace">{fmt(v)}</text>
+            stroke={C.grid} strokeWidth=".75"/>
+          <line x1={p.l - 6} y1={yToPx(v)} x2={p.l} y2={yToPx(v)}
+            stroke={C.axis} strokeWidth="1"/>
+          <text x={p.l - 9} y={yToPx(v) + 4} fill={C.txt} fontSize="12"
+            textAnchor="end" fontFamily="monospace" fontWeight="500">{fmt(v)}</text>
         </g>
       ))}
-      {/* X tick lines + labels */}
+      {/* X major gridlines + tick labels */}
       {xTk.map((tk,i) => (
         <g key={`x${i}`}>
           <line x1={xToPx(tk.v)} y1={p.t} x2={xToPx(tk.v)} y2={p.t + H}
-            stroke={C.grid} strokeWidth=".5"/>
-          <text x={xToPx(tk.v)} y={h - p.b + 14} fill={C.axis} fontSize="9"
-            textAnchor="middle" fontFamily="monospace"
-            transform={xCategorical ? `rotate(-25, ${xToPx(tk.v)}, ${h - p.b + 14})` : ""}>
+            stroke={C.grid} strokeWidth=".75"/>
+          <line x1={xToPx(tk.v)} y1={p.t + H} x2={xToPx(tk.v)} y2={p.t + H + 6}
+            stroke={C.axis} strokeWidth="1"/>
+          <text x={xToPx(tk.v)} y={h - p.b + 19} fill={C.txt} fontSize="12"
+            textAnchor="middle" fontFamily="monospace" fontWeight="500"
+            transform={xCategorical ? `rotate(-25, ${xToPx(tk.v)}, ${h - p.b + 19})` : ""}>
             {tk.label}
           </text>
         </g>
       ))}
       {/* Axis frame */}
-      <rect x={p.l} y={p.t} width={W} height={H} fill="none" stroke={C.border} strokeWidth="1"/>
-      {/* Series — one path per series; circles for each point */}
+      <rect x={p.l} y={p.t} width={W} height={H} fill="none" stroke={C.axis} strokeWidth="1.25"/>
+      {/* Series — one path per series; bigger markers for readability */}
       {series.map((s, sIdx) => {
         const pts = (s.points || []).filter(d =>
           Number.isFinite(d.x) && Number.isFinite(d.y) && (!yLog || d.y > 0)
@@ -1092,37 +1133,38 @@ function MultiSeriesChart({
         return (
           <g key={`s${sIdx}`}>
             {connectLines && pts.length >= 2 && (
-              <path d={path} fill="none" stroke={s.color} strokeWidth="1.8"
-                strokeLinejoin="round" strokeLinecap="round" opacity="0.85"/>
+              <path d={path} fill="none" stroke={s.color} strokeWidth="2.25"
+                strokeLinejoin="round" strokeLinecap="round" opacity="0.92"/>
             )}
             {pts.map((d,i) => _renderMarker(marker,
-              xToPx(d.x), yToPx(d.y), 3.5, s.color, C.bg, `pt${sIdx}_${i}`))}
+              xToPx(d.x), yToPx(d.y), 4.5, s.color, C.bg, `pt${sIdx}_${i}`))}
           </g>
         );
       })}
-      {/* Axis titles */}
-      <text x={p.l + W/2} y={h - p.b + 38} fill={C.txtDim} fontSize="11"
-        textAnchor="middle" fontFamily="'Barlow',sans-serif" fontWeight="600">
+      {/* Axis titles — 14 px bold, full-contrast text */}
+      <text x={p.l + W/2} y={h - p.b + 46} fill={C.txt} fontSize="14"
+        textAnchor="middle" fontFamily="'Barlow',sans-serif" fontWeight="700">
         {xLabel}
       </text>
-      <text x={14} y={p.t + H/2} fill={C.txtDim} fontSize="11"
-        textAnchor="middle" fontFamily="'Barlow',sans-serif" fontWeight="600"
-        transform={`rotate(-90, 14, ${p.t + H/2})`}>
+      <text x={20} y={p.t + H/2} fill={C.txt} fontSize="14"
+        textAnchor="middle" fontFamily="'Barlow',sans-serif" fontWeight="700"
+        transform={`rotate(-90, 20, ${p.t + H/2})`}>
         {yLabel}{yLog ? " (log₁₀)" : ""}
       </text>
-      {/* Legend — wrap into legendCols columns × nLegendRows rows */}
+      {/* Legend — wrap into legendCols columns × nLegendRows rows.
+          Bumped to 13 px font + 24 px row pitch for readability. */}
       {series.map((s, i) => {
         const colW = W / Math.max(1, legendCols);
         const r = Math.floor(i / legendCols), c = i % legendCols;
         const lx = p.l + c * colW + 2;
-        const ly = h - legendH + 6 + r * 18;
+        const ly = h - legendH + 12 + r * 24;
         const marker = s.marker || "circle";
         return (
           <g key={`lg${i}`}>
-            <line x1={lx} y1={ly} x2={lx + 18} y2={ly} stroke={s.color} strokeWidth="2.5"/>
-            {_renderMarker(marker, lx + 9, ly, 3.5, s.color, C.bg, `lgm${i}`)}
-            <text x={lx + 24} y={ly + 3.5} fill={C.txtDim} fontSize="10"
-              fontFamily="'Barlow',sans-serif">{s.name}</text>
+            <line x1={lx} y1={ly} x2={lx + 22} y2={ly} stroke={s.color} strokeWidth="3"/>
+            {_renderMarker(marker, lx + 11, ly, 4.5, s.color, C.bg, `lgm${i}`)}
+            <text x={lx + 30} y={ly + 4.5} fill={C.txt} fontSize="13"
+              fontFamily="'Barlow',sans-serif" fontWeight="500">{s.name}</text>
           </g>
         );
       })}
@@ -1179,7 +1221,62 @@ function _renderMarker(shape, cx, cy, r, color, bgColor, key){
 }
 
 /* ══════════════════ UI COMPONENTS ══════════════════ */
-const C={bg:"#0D1117",bg2:"#161B22",bg3:"#1C2128",border:"#30363D",accent:"#2DD4BF",accent2:"#FBBF24",accent3:"#60A5FA",warm:"#F87171",good:"#4ADE80",violet:"#A78BFA",orange:"#FB923C",strong:"#EF4444",txt:"#F0F6FC",txtDim:"#C9D1D9",txtMuted:"#8B949E",grid:"#21262D",axis:"#8B949E"};
+// ── Theme palettes ─────────────────────────────────────────────────────
+// Two palettes share identical KEYS so every `C.x` read works in both.
+// Hue-matched accents are kept consistent — saturation/lightness are tuned
+// per theme so they pop against their respective backgrounds (pastel-on-
+// black for dark, saturated-on-near-white for light).
+const DARK_C = {
+  bg:"#0D1117", bg2:"#161B22", bg3:"#1C2128",
+  border:"#30363D",
+  accent:"#2DD4BF", accent2:"#FBBF24", accent3:"#60A5FA",
+  warm:"#F87171", good:"#4ADE80", violet:"#A78BFA",
+  orange:"#FB923C", strong:"#EF4444",
+  txt:"#F0F6FC", txtDim:"#C9D1D9", txtMuted:"#8B949E",
+  grid:"#21262D", axis:"#8B949E",
+};
+const LIGHT_C = {
+  bg:"#FAFBFC", bg2:"#FFFFFF", bg3:"#F0F2F5",
+  border:"#D0D7DE",
+  // Saturated accents that read well on white (vs. the pastel set used
+  // on near-black). Same hue as DARK so brand recognition is preserved.
+  accent:"#0E8C7C", accent2:"#B97D00", accent3:"#0969DA",
+  warm:"#CF222E", good:"#1A7F37", violet:"#6639BA",
+  orange:"#BF5A0E", strong:"#A40E26",
+  txt:"#1F2328", txtDim:"#3A3F45", txtMuted:"#656D76",
+  grid:"#E4E8EC", axis:"#656D76",
+};
+// `_activeC` is the live palette every C.x read resolves to. Toggling the
+// theme (a) reassigns this binding and (b) bumps a counter on App that's
+// passed as React `key` to the panel container, forcing a clean re-mount
+// so every inline-style site picks up the new palette without us having
+// to refactor thousands of `style={{background: C.bg}}` sites into hooks.
+let _activeC = DARK_C;
+function _readActiveTheme(){
+  try { return localStorage.getItem("ctk_theme") === "light" ? "light" : "dark"; }
+  catch { return "dark"; }
+}
+// Initialize at module load from localStorage so the very first render of
+// any panel function (which runs BEFORE App's useEffect commits) already
+// sees the user's persisted theme — no flash of the default theme.
+_activeC = _readActiveTheme() === "light" ? LIGHT_C : DARK_C;
+function setActiveTheme(name){
+  _activeC = name === "light" ? LIGHT_C : DARK_C;
+  try { localStorage.setItem("ctk_theme", name); } catch {}
+}
+// `C` proxies onto whatever `_activeC` currently is, so every existing
+// `C.bg` / `C.accent` / `${C.warm}50` reference Just Works without edits.
+const C = new Proxy({}, {
+  get(_, key){ return _activeC[key]; },
+  // ownKeys + getOwnPropertyDescriptor are needed if any code does
+  // Object.keys(C) or {...C} — which a few places do (e.g. AccountPanel
+  // takes C as a prop). Forward them onto the active palette.
+  ownKeys(){ return Reflect.ownKeys(_activeC); },
+  getOwnPropertyDescriptor(_, key){
+    return Reflect.getOwnPropertyDescriptor(_activeC, key);
+  },
+  has(_, key){ return key in _activeC; },
+});
 
 // BR-mode (BRNDMD) tint palette — used to shade chart backgrounds in the
 // cycle load-sweep dashboard. Cool→warm progression maps to operational
@@ -9475,7 +9572,7 @@ function EngineAmbientSidebar({
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
 
 /* ══════════════════ MAIN APP ══════════════════ */
-const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"mapping",label:"Combustor Mapping",icon:"🎯",engines:["LMS100PB+"]},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"automate",label:"Automate",icon:"🧪"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"nomenclature",label:"Nomenclature",icon:"📚"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
+const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"mapping",label:"Combustor Mapping",icon:"🎯",engines:["LMS100PB+"]},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"automate",label:"Automate",icon:"🧪"},{id:"nomenclature",label:"Nomenclature",icon:"📚"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
 const ACCOUNT_TAB={id:"account",label:"Account & Billing",icon:"👤"};
 
 export default function App(){
@@ -9639,6 +9736,20 @@ export default function App(){
   const[showPricing,setShowPricing]=useState(false);
   const[authModal,setAuthModal]=useState(null); // null | "login" | "signup"
   const[accurate,setAccurate]=useState(false);
+  // ── Theme state ─────────────────────────────────────────────────────
+  // Theme is hot-swappable ("dark" ↔ "light"). The actual palette lives at
+  // module level in `_activeC` (see DARK_C / LIGHT_C). Toggling here:
+  //   1. updates `_activeC` (so any FUTURE C.x reads return new colors)
+  //   2. bumps `themeRev`, which is passed as a React `key` to the panel
+  //      tree below — that key change forces a clean re-mount and every
+  //      inline-style site picks up the new palette without us refactoring
+  //      thousands of `style={{background: C.bg}}` references into hooks.
+  const[theme, setTheme] = useState(() => _readActiveTheme());
+  const[themeRev, setThemeRev] = useState(0);
+  useEffect(() => {
+    setActiveTheme(theme);
+    setThemeRev(r => r + 1);
+  }, [theme]);
   // Clear-cache button feedback — briefly flips to "✓ CLEARED" after a click.
   const[cacheCleared,setCacheCleared]=useState(false);
   // PSR reactor options (lifted from CombustorPanel so they can be captured in Excel export).
@@ -9879,7 +9990,7 @@ export default function App(){
   return(
     <UnitCtx.Provider value={units}>
     <AccurateCtx.Provider value={{accurate:accurate&&hasOnline,setAccurate,available:hasOnline}}>
-      <div style={{fontFamily:"'Barlow','Segoe UI',sans-serif",background:C.bg,color:C.txt,minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+      <div key={themeRev} style={{fontFamily:"'Barlow','Segoe UI',sans-serif",background:C.bg,color:C.txt,minHeight:"100vh",display:"flex",flexDirection:"column"}}>
         <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700;800&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet"/>
         <HelpModal show={showHelp} onClose={()=>setShowHelp(false)}/>
         <PricingModal show={showPricing} onClose={()=>setShowPricing(false)} onRequestSignin={(m)=>setAuthModal(m||"login")}/>
@@ -9899,6 +10010,28 @@ export default function App(){
                 {accurate?"ACCURATE: ON":"ACCURATE: OFF"}
               </button>
             )}
+            {/* Theme toggle — flips the active palette between dark and light.
+                The palette swap is implemented as a Proxy + key-based remount
+                (see DARK_C / LIGHT_C / setActiveTheme above). All inline-
+                style sites that reference C.* automatically pick up the new
+                palette on the next render. */}
+            <button onClick={()=>{
+              const next = theme === "light" ? "dark" : "light";
+              // Mutate the active palette synchronously BEFORE the React
+              // re-render so the very first render after the click already
+              // sees the new colors (no flash of the previous theme).
+              setActiveTheme(next);
+              setTheme(next);
+            }}
+              title={theme==="light" ? "Switch to dark theme" : "Switch to light theme"}
+              style={{padding:"6px 10px",fontSize:11,fontWeight:700,
+                color:C.txtDim, background:"transparent",
+                border:`1px solid ${C.border}`, borderRadius:6, cursor:"pointer",
+                fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px",
+                display:"flex", alignItems:"center", gap:5}}>
+              <span style={{fontSize:13}}>{theme==="light" ? "☀" : "☾"}</span>
+              {theme==="light" ? "LIGHT" : "DARK"}
+            </button>
             {/* Cache clear — wipes in-memory + persisted backend response cache.
                 Use after a backend deploy that changed correlation internals
                 without bumping the frontend build SHA, or anytime you want
@@ -10212,7 +10345,6 @@ export default function App(){
               psrActive={psrActive} setPsrActive={setPsrActive}
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
-            {tab==="props"&&<PropsPanel/>}
             {/* AutomatePanel is always mounted (just hidden when not the
                 active tab) so an in-progress run, captured results, the
                 wizard state, and the Plot Data panel survive tab switches.
