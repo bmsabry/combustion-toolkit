@@ -6986,7 +6986,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
   const [customXId, setCustomXId] = useState(() => sortedInputs[0]?.id || allCols[0]?.id || null);
   const [customYId, setCustomYId] = useState(() => sortedOutputs[0]?.id || outputCols[0]?.id || null);
   const [customGColorId, setCustomGColorId] = useState(null);
-  const [customGShapeId, setCustomGShapeId] = useState(null);
+  const [customGFacetId, setCustomGFacetId] = useState(null);
   const [customLog, setCustomLog] = useState(false);
   // Per-held-var overrides — when set, takes precedence over baseline/mode.
   // Map<varId, value>. Reset whenever X/Y/grouping changes (the held set
@@ -6997,7 +6997,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
   const xCol      = useMemo(() => allCols.find(c => c.id === customXId)      || null, [allCols, customXId]);
   const yCol      = useMemo(() => allCols.find(c => c.id === customYId)      || null, [allCols, customYId]);
   const gColorCol = useMemo(() => allCols.find(c => c.id === customGColorId) || null, [allCols, customGColorId]);
-  const gShapeCol = useMemo(() => allCols.find(c => c.id === customGShapeId) || null, [allCols, customGShapeId]);
+  const gFacetCol = useMemo(() => allCols.find(c => c.id === customGFacetId) || null, [allCols, customGFacetId]);
 
   // When X/Y/grouping changes, drop any overrides for vars that ARE NOW
   // free (so stale entries don't leak), but keep overrides for vars that
@@ -7007,7 +7007,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
     const free = new Set();
     if (xCol?.kind === "input") free.add(xCol.varId);
     if (gColorCol)              free.add(gColorCol.varId);
-    if (gShapeCol)              free.add(gShapeCol.varId);
+    if (gFacetCol)              free.add(gFacetCol.varId);
     setHeldOverrides(prev => {
       let changed = false;
       const next = new Map();
@@ -7017,39 +7017,130 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
       }
       return changed ? next : prev;
     });
-  }, [xCol, gColorCol, gShapeCol]);
+  }, [xCol, gColorCol, gFacetCol]);
 
+  const FACET_CAP = 12;
   const customSliceData = useMemo(() => {
     if (!xCol || !yCol) return null;
-    // Free vars: X (if input) ∪ groupings.
-    //
-    // CRITICAL: when X is an OUTPUT (not an input), every input must
-    // remain free or X collapses to whatever value it takes at the
-    // single held slice. Example: X=τ_total, where τ_total =
-    // τ_PSR + L_PFR / V_PFR. If we hold L_PFR at one value, τ_total
-    // is mathematically constant across the slice and the chart
-    // becomes a vertical stack of points at one X value. The DOE-
-    // correct behavior is to show the FULL X spread by leaving every
-    // input free (the user can still narrow the slice by setting an
-    // explicit override in the held-value picker).
-    // Free set = {X (if input)} ∪ groupings. Vars NOT in free become
-    // CANDIDATES that the held-value picker can show. Their default
-    // status (held vs. free) depends on X kind:
-    //   X input  → defaults are baseline (held) so chart reads as a
-    //              clean slice through the cube.
-    //   X output → defaults are FREE (not held) so X's full spread is
-    //              preserved; user can opt-in to hold any candidate.
+    // Free set for the SLICE (which inputs the held-vars picker DOESN'T
+    // touch): X (if input), the primary grouping (color), AND the facet
+    // grouping if set. The facet variable becomes a series-splitter on
+    // the small-multiples grid below the main plot — but it's still
+    // "free" in the sense that the held picker shouldn't pin it.
     const free = new Set();
     if (xCol.kind === "input") free.add(xCol.varId);
     if (gColorCol) free.add(gColorCol.varId);
-    if (gShapeCol) free.add(gShapeCol.varId);
+    if (gFacetCol) free.add(gFacetCol.varId);
     const slice = _findHeldSlice(
       varSpecs, baseline, results, free, heldOverrides,
       { xIsInput: xCol.kind === "input" },
     );
-    const sd = _buildSlicedSeries(results, varSpecs, xCol, yCol, gColorCol, gShapeCol, slice);
-    return { ...sd, slice };
-  }, [results, varSpecs, baseline, xCol, yCol, gColorCol, gShapeCol, heldOverrides]);
+    // Main plot — color grouping only, IGNORE the facet (the facet
+    // appears as small-multiples below). This is the "overall view"
+    // the user sees on top: same chart they'd get with no secondary
+    // grouping picked.
+    const mainSd = _buildSlicedSeries(
+      results, varSpecs, xCol, yCol, gColorCol, null, slice,
+    );
+
+    // Facet panels — only built when secondary grouping is set.
+    let facets = null;
+    let facetOverflow = false;
+    if (gFacetCol){
+      // Distinct facet values present in matching rows AFTER applying
+      // the user's held-slice. So if the user holds e.g. L_PFR=0.5,
+      // facets only show WFR values that exist at L_PFR=0.5.
+      const heldVals = (slice.held || []);
+      const colFacet = _colFromVarSpec(gFacetCol);
+      const facetSeen = new Map();   // rounded key → original raw
+      for (const r of results){
+        if (r.__error__) continue;
+        // Apply held filter (if any) before considering this row's facet
+        let ok = true;
+        for (const h of heldVals){
+          const col = _colFromVarSpec(h.varSpec);
+          if (!_valuesMatch(_readRowVarValue(r, col), h.value)){ ok = false; break; }
+        }
+        if (!ok) continue;
+        const raw = _readRowVarValue(r, colFacet);
+        if (raw == null) continue;
+        const k = (typeof raw === "number") ? +raw.toPrecision(8) : String(raw);
+        if (!facetSeen.has(k)) facetSeen.set(k, raw);
+      }
+      let facetVals = [...facetSeen.values()];
+      if (facetVals.every(v => typeof v === "number")) facetVals.sort((a, b) => a - b);
+      else facetVals.sort((a, b) => String(a).localeCompare(String(b)));
+      if (facetVals.length > FACET_CAP){
+        facetOverflow = true;
+        facetVals = facetVals.slice(0, FACET_CAP);
+      }
+
+      facets = facetVals.map(fVal => {
+        // Build a derived slice that ALSO holds the facet variable at
+        // this panel's value. We mutate the held list in-place for this
+        // panel only (don't touch the original `slice`).
+        const panelHeld = [
+          ...heldVals,
+          { varSpec: gFacetCol.varId === xCol.varId ? null : { id: gFacetCol.varId, kind: gFacetCol.kindRaw, label: gFacetCol.label, species: gFacetCol.species }, value: fVal },
+        ].filter(h => h.varSpec);
+        const panelSlice = { held: panelHeld, candidates: panelHeld, count: 0, fallback: false };
+        const sd = _buildSlicedSeries(
+          results, varSpecs, xCol, yCol, gColorCol, null, panelSlice,
+        );
+        return {
+          facetValue: fVal,
+          facetLabel: _plotFmtVal(gFacetCol, fVal),
+          ...sd,
+          pointCount: sd.series.reduce((acc, s) => acc + s.points.length, 0),
+        };
+      });
+    }
+
+    // Compute SHARED axis bounds across the main plot AND every facet
+    // panel so all charts read back-to-back at the same scale (Tufte-
+    // style small multiples). Without this each panel auto-scales to
+    // its own data and visual comparison is lost.
+    const allSeries = [
+      ...(mainSd.series || []),
+      ...(facets ? facets.flatMap(f => f.series) : []),
+    ];
+    let sharedXMin = null, sharedXMax = null, sharedYMin = null, sharedYMax = null;
+    if (!mainSd.xCategorical){
+      const xs = allSeries.flatMap(s => s.points.map(p => p.x)).filter(Number.isFinite);
+      if (xs.length){
+        sharedXMin = Math.min(...xs);
+        sharedXMax = Math.max(...xs);
+        if (sharedXMin === sharedXMax){ sharedXMin -= 1; sharedXMax += 1; }
+        else {
+          const pad = (sharedXMax - sharedXMin) * 0.05;
+          sharedXMin -= pad; sharedXMax += pad;
+          if (Math.min(...xs) >= 0 && sharedXMin < 0) sharedXMin = 0;
+        }
+      }
+    }
+    {
+      const ys = allSeries.flatMap(s => s.points.map(p => p.y)).filter(Number.isFinite);
+      if (ys.length){
+        sharedYMin = Math.min(...ys);
+        sharedYMax = Math.max(...ys);
+        if (sharedYMin === sharedYMax){ sharedYMin -= 1; sharedYMax += 1; }
+        else {
+          const pad = (sharedYMax - sharedYMin) * 0.05;
+          sharedYMin -= pad; sharedYMax += pad;
+          if (Math.min(...ys) >= 0 && sharedYMin < 0) sharedYMin = 0;
+        }
+      }
+    }
+
+    return {
+      ...mainSd,
+      slice,
+      facets,
+      facetOverflow,
+      facetTotalCount: gFacetCol ? (facets ? facets.length : 0) : 0,
+      sharedXMin, sharedXMax, sharedYMin, sharedYMax,
+    };
+  }, [results, varSpecs, baseline, xCol, yCol, gColorCol, gFacetCol, heldOverrides]);
 
   // ── Auto-plot grid ───────────────────────────────────────────────
   // For each captured output × each varied input X, generate:
@@ -7084,7 +7175,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
             out.push({
               key: `${yc.id}__vs__${xc.id}`,
               title: `${yc.label} vs ${xc.label}`,
-              xCol: xc, yCol: yc, gColorCol: null, gShapeCol: null,
+              xCol: xc, yCol: yc, gColorCol: null, gFacetCol: null,
               data: sd, slice,
               logHint: _shouldLogAxis(sd.series),
               yRank, xRank, gRank: 0,
@@ -7112,7 +7203,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
           out.push({
             key: `${yc.id}__vs__${xc.id}__by__${gColor.id}`,
             title: `${yc.label} vs ${xc.label} · colored by ${gColor.label}`,
-            xCol: xc, yCol: yc, gColorCol: gColor, gShapeCol: null,
+            xCol: xc, yCol: yc, gColorCol: gColor, gFacetCol: null,
             data: sd, slice,
             logHint: _shouldLogAxis(sd.series),
             yRank, xRank, gRank,
@@ -7169,15 +7260,17 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
         w: 960, h: 600,
         xCategorical: customSliceData.xCategorical,
         xLabels: customSliceData.xLabels,
+        xMin: customSliceData.sharedXMin, xMax: customSliceData.sharedXMax,
+        yMin: customSliceData.sharedYMin, yMax: customSliceData.sharedYMax,
         yLog: customLog && _seriesAllPositive(customSliceData.series),
         legendCols: customSliceData.series.length > 6 ? 3 : 2,
+        connectLines: xCol.kind === "input",
       };
       const svg = _chartSpecToSvgString(props);
       const png = await _svgStringToPngBlob(svg, props.w, props.h);
       const colSuf = gColorCol ? `_color_${_sanitizeFilename(gColorCol.label)}` : "";
-      const shpSuf = gShapeCol ? `_shape_${_sanitizeFilename(gShapeCol.label)}` : "";
       const logSuffix = props.yLog ? "_logy" : "";
-      const fname = `${_sanitizeFilename(yCol.label)}_vs_${_sanitizeFilename(xCol.label)}${colSuf}${shpSuf}${logSuffix}.png`;
+      const fname = `${_sanitizeFilename(yCol.label)}_vs_${_sanitizeFilename(xCol.label)}${colSuf}${logSuffix}.png`;
       _triggerBlobDownload(png, fname);
     } catch (e){
       console.error("custom plot export failed:", e);
@@ -7185,7 +7278,87 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
     } finally {
       setExporting(null);
     }
-  }, [xCol, yCol, gColorCol, gShapeCol, customSliceData, customLog]);
+  }, [xCol, yCol, gColorCol, customSliceData, customLog]);
+
+  // Export the entire facet grid as one composed SVG → PNG. Builds a
+  // single big <svg> containing all panels in a 3-column grid plus a
+  // shared title bar, then runs it through the standard PNG-converter
+  // pipeline (4× pixel ratio + 300 DPI metadata).
+  const exportFacetGrid = useCallback(async () => {
+    if (!gFacetCol || !customSliceData?.facets?.length) return;
+    setExporting("facets");
+    try {
+      const facets = customSliceData.facets;
+      const N = facets.length;
+      const cols = N <= 2 ? N : (N <= 6 ? 3 : 4);
+      const rows = Math.ceil(N / cols);
+      const PW = 520;            // per-panel width
+      const PH = 380;            // per-panel height
+      const TITLE_H = 50;        // top header strip
+      const FOOTER_H = 60;       // shared legend strip
+      const GAP = 12;
+      const PADDING = 16;
+      const TOTAL_W = PADDING * 2 + cols * PW + (cols - 1) * GAP;
+      const TOTAL_H = PADDING * 2 + TITLE_H + rows * PH + (rows - 1) * GAP + FOOTER_H;
+      const sharedYLog = customLog && _seriesAllPositive(facets.flatMap(f => f.series));
+      const xLabel = `${xCol.label}${xCol.unit ? ` (${xCol.unit})` : ""}`;
+      const yLabel = `${yCol.label}${yCol.unit ? ` (${yCol.unit})` : ""}`;
+      const facetVarLabel = `${gFacetCol.label}${gFacetCol.unit ? ` (${gFacetCol.unit})` : ""}`;
+
+      // Render each facet panel to its own SVG string, then nest each
+      // inside a <g transform="translate(...)"> within an outer <svg>.
+      const panels = facets.map((f, i) => {
+        const r = Math.floor(i / cols), c = i % cols;
+        const x = PADDING + c * (PW + GAP);
+        const y = PADDING + TITLE_H + r * (PH + GAP);
+        const panelSvg = _chartSpecToSvgString({
+          series: f.series,
+          xLabel, yLabel,
+          w: PW, h: PH,
+          xCategorical: f.xCategorical,
+          xLabels: f.xLabels,
+          xMin: customSliceData.sharedXMin, xMax: customSliceData.sharedXMax,
+          yMin: customSliceData.sharedYMin, yMax: customSliceData.sharedYMax,
+          yLog: sharedYLog,
+          legendCols: 1,
+          connectLines: xCol.kind === "input",
+        });
+        // Strip the outer <svg ...> wrapper from the panel — we keep its
+        // inner content and wrap in a translate group.
+        const inner = panelSvg
+          .replace(/^<svg[^>]*>/, '')
+          .replace(/<\/svg>$/, '');
+        const titleY = y - 6;
+        return `
+<g transform="translate(${x},${y})">${inner}</g>
+<text x="${x + PW/2}" y="${titleY}" fill="${C.txt}" font-size="13" font-family="'Barlow Condensed',sans-serif" font-weight="700" text-anchor="middle">
+  ${facetVarLabel.split("(")[0].trim()} = ${f.facetLabel}${gFacetCol.unit ? ` ${gFacetCol.unit}` : ""}
+</text>`;
+      }).join("");
+
+      const heading = `${yLabel} vs ${xLabel} — faceted by ${facetVarLabel}`;
+      const subHeading = gColorCol ? `Color: ${gColorCol.label}` : "Single series per panel";
+
+      const composed = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TOTAL_W} ${TOTAL_H}" width="${TOTAL_W}" height="${TOTAL_H}">
+<rect x="0" y="0" width="${TOTAL_W}" height="${TOTAL_H}" fill="${C.bg}"/>
+<text x="${TOTAL_W/2}" y="22" fill="${C.accent}" font-size="16" font-family="'Barlow Condensed',sans-serif" font-weight="700" text-anchor="middle" letter-spacing=".7px">${heading}</text>
+<text x="${TOTAL_W/2}" y="40" fill="${C.txtDim}" font-size="11" font-family="'Barlow',sans-serif" text-anchor="middle">${subHeading} · ${N} panels · shared X/Y axes</text>
+${panels}
+</svg>`;
+
+      const png = await _svgStringToPngBlob(composed, TOTAL_W, TOTAL_H);
+      const colSuf = gColorCol ? `_color_${_sanitizeFilename(gColorCol.label)}` : "";
+      const facSuf = `_facet_${_sanitizeFilename(gFacetCol.label)}`;
+      const logSuf = sharedYLog ? "_logy" : "";
+      const fname = `${_sanitizeFilename(yCol.label)}_vs_${_sanitizeFilename(xCol.label)}${colSuf}${facSuf}${logSuf}.png`;
+      _triggerBlobDownload(png, fname);
+    } catch (e){
+      console.error("facet grid export failed:", e);
+      alert(`Facet export failed: ${e.message || e}`);
+    } finally {
+      setExporting(null);
+    }
+  }, [gFacetCol, gColorCol, xCol, yCol, customSliceData, customLog]);
 
   const exportSingleAuto = useCallback(async (ch) => {
     setExporting(ch.key);
@@ -7307,12 +7480,12 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
           gap:12, marginBottom:10}}>
           <ColPicker label="X axis" cols={allCols} value={customXId} onChange={setCustomXId}/>
           <ColPicker label="Y axis" cols={allCols} value={customYId} onChange={setCustomYId}/>
-          <ColPicker label="Group by COLOR" cols={inputCols} value={customGColorId}
+          <ColPicker label="Group by COLOR (primary)" cols={inputCols} value={customGColorId}
             onChange={setCustomGColorId}
             allowNone={true} noneLabel="(no color grouping)"/>
-          <ColPicker label="Group by SHAPE" cols={inputCols} value={customGShapeId}
-            onChange={setCustomGShapeId}
-            allowNone={true} noneLabel="(no shape grouping)"/>
+          <ColPicker label="Secondary Grouping (Facet Below)" cols={inputCols} value={customGFacetId}
+            onChange={setCustomGFacetId}
+            allowNone={true} noneLabel="(no faceting — single chart only)"/>
         </div>
         {/* ── Held-constant value pickers ─────────────────────────────
             One dropdown per held variable, populated with the distinct
@@ -7341,8 +7514,20 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
               cursor: (!xCol || !yCol || !customSliceData || customSliceData.series.length === 0) ? "not-allowed" : "pointer",
               opacity: (!xCol || !yCol || !customSliceData || customSliceData.series.length === 0) ? 0.4 : 1,
               fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px"}}>
-            {exporting === "custom" ? "⏳ EXPORTING…" : "📥 EXPORT PNG"}
+            {exporting === "custom" ? "⏳ EXPORTING…" : "📥 EXPORT MAIN PNG"}
           </button>
+          {gFacetCol && customSliceData?.facets?.length > 0 && (
+            <button onClick={exportFacetGrid}
+              disabled={exporting === "facets"}
+              style={{padding:"5px 12px", fontSize:11, fontWeight:700,
+                color: C.bg, background: C.good, border: "none", borderRadius:4,
+                cursor: "pointer",
+                fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px"}}>
+              {exporting === "facets"
+                ? "⏳ COMPOSING…"
+                : `📥 EXPORT FACETS PNG (${customSliceData.facets.length})`}
+            </button>
+          )}
         </div>
         {xCol && yCol && customSliceData && customSliceData.series.length > 0 ? (
           <div style={{background:C.bg2, borderRadius:6, padding:8}}>
@@ -7350,7 +7535,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
               fontFamily:"'Barlow',sans-serif"}}>
               {yCol.label}{yCol.unit ? ` (${yCol.unit})` : ""} vs {xCol.label}{xCol.unit ? ` (${xCol.unit})` : ""}
               {gColorCol ? ` · color by ${gColorCol.label}` : ""}
-              {gShapeCol ? ` · shape by ${gShapeCol.label}` : ""}
+              {gFacetCol ? ` · faceted below by ${gFacetCol.label}` : ""}
             </div>
             <div style={{fontSize:10, color: C.txtMuted,
               marginBottom:6, fontFamily:"'Barlow',sans-serif", lineHeight:1.4}}>
@@ -7363,6 +7548,8 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
               w={760} h={420}
               xCategorical={customSliceData.xCategorical}
               xLabels={customSliceData.xLabels}
+              xMin={customSliceData.sharedXMin} xMax={customSliceData.sharedXMax}
+              yMin={customSliceData.sharedYMin} yMax={customSliceData.sharedYMax}
               yLog={customLog && _seriesAllPositive(customSliceData.series)}
               legendCols={customSliceData.series.length > 6 ? 3 : 2}
               // Output X axis = scatter cloud (no natural ordering of points
@@ -7370,6 +7557,62 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
               // markers stand alone instead of zigzagging.
               connectLines={xCol.kind === "input"}
             />
+            {/* ── Faceted small-multiples grid ─────────────────────────
+                Same X/Y axes as the main plot above, but split by the
+                user's secondary grouping variable. Each panel shows only
+                rows where the facet variable equals that value, with the
+                primary color grouping preserved. Shared axis bounds make
+                panels back-to-back comparable. */}
+            {gFacetCol && customSliceData.facets && customSliceData.facets.length > 0 && (
+              <div style={{marginTop:14, paddingTop:12, borderTop:`1px solid ${C.border}`}}>
+                <div style={{fontSize:11, fontWeight:700, color:C.accent,
+                  fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".6px",
+                  textTransform:"uppercase", marginBottom:4}}>
+                  Faceted by {gFacetCol.label} — small-multiples comparison
+                </div>
+                <div style={{fontSize:10, color:C.txtMuted, marginBottom:8,
+                  fontFamily:"'Barlow',sans-serif", lineHeight:1.4}}>
+                  {customSliceData.facets.length} panel{customSliceData.facets.length !== 1 ? "s" : ""} ·
+                  shared X / Y axes · same color set as the main plot above.
+                  {customSliceData.facetOverflow && (
+                    <span style={{color:C.warm, marginLeft:6}}>
+                      ⚠ Capped at {FACET_CAP} panels — pick a coarser grouping for fewer facets.
+                    </span>
+                  )}
+                </div>
+                <div style={{display:"grid",
+                  gridTemplateColumns: `repeat(${customSliceData.facets.length <= 2 ? customSliceData.facets.length : (customSliceData.facets.length <= 6 ? 3 : 4)}, minmax(0, 1fr))`,
+                  gap:10}}>
+                  {customSliceData.facets.map((f, i) => (
+                    <div key={i} style={{background:C.bg, padding:6, borderRadius:5,
+                      border:`1px solid ${C.border}`}}>
+                      <div style={{fontSize:11, fontWeight:600, color:C.txt,
+                        fontFamily:"'Barlow',sans-serif", marginBottom:2,
+                        textAlign:"center"}}>
+                        {gFacetCol.label} = {f.facetLabel}{gFacetCol.unit ? ` ${gFacetCol.unit}` : ""}
+                      </div>
+                      <div style={{fontSize:9, color:C.txtMuted,
+                        fontFamily:"monospace", marginBottom:4, textAlign:"center"}}>
+                        {f.pointCount} point{f.pointCount !== 1 ? "s" : ""}
+                      </div>
+                      <MultiSeriesChart
+                        series={f.series}
+                        xLabel={`${xCol.label}${xCol.unit ? ` (${xCol.unit})` : ""}`}
+                        yLabel={`${yCol.label}${yCol.unit ? ` (${yCol.unit})` : ""}`}
+                        w={460} h={300}
+                        xCategorical={f.xCategorical}
+                        xLabels={f.xLabels}
+                        xMin={customSliceData.sharedXMin} xMax={customSliceData.sharedXMax}
+                        yMin={customSliceData.sharedYMin} yMax={customSliceData.sharedYMax}
+                        yLog={customLog && _seriesAllPositive(f.series)}
+                        legendCols={f.series.length > 4 ? 2 : 1}
+                        connectLines={xCol.kind === "input"}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div style={{padding:14, color:C.txtMuted, fontSize:12, fontStyle:"italic",
