@@ -609,7 +609,7 @@ if(cycleResult){
     ["Load",fmtN(cycleLoad,1),"%"],
     ["Intercooler Coolant T (LMS100 only)",cycleEngine==="LMS100PB+"?fmtN(uv(u,"T",cycleTcool),2):"n/a",uu(u,"T")],
     ["Combustor Air Fraction (flame/total)",fmtN(cycleAirFrac,3),"—"],
-    ["Fuel Temperature",fmtN(uv(u,"T",cr.T_fuel_K??cycleTamb),2),uu(u,"T")],
+    ["Fuel Temp",fmtN(uv(u,"T",cr.T_fuel_K??cycleTamb),2),uu(u,"T")],
     ["Water/Fuel Mass Ratio (WFR)",fmtN(cr.WFR??WFR,3),"kg_water/kg_fuel"],
     ["Water Injection Mode",(cr.WFR??WFR)>0?((cr.water_mode||waterMode)==="steam"?"Steam":"Liquid (absorbs h_fg)"):"off","—"],
     ["Water Inlet Temperature",(cr.WFR??WFR)>0?fmtN(uv(u,"T",cr.T_water_K??T_water),1):"n/a",uu(u,"T")],
@@ -1814,7 +1814,7 @@ function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setC
         </div>:null}
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <div style={S.card}><div style={S.cardT}>T_ad vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Yellow marker shows current φ. Peak T_ad typically occurs near φ≈1.05 due to dissociation effects.</div><Chart data={sweep} xK="phi" yK="T_ad" xL="Equivalence Ratio (φ)" yL={`Temperature (${uu(units,"T")})`} color={C.accent} marker={mk}/></div>
+      <div style={S.card}><div style={S.cardT}>T_ad vs phi</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Yellow marker shows current φ. Peak T_ad typically occurs near φ≈1.05 due to dissociation effects.</div><Chart data={sweep} xK="phi" yK="T_ad" xL="phi (φ)" yL={`Temperature (${uu(units,"T")})`} color={C.accent} marker={mk}/></div>
       <div style={S.card}><div style={S.cardT}>Equilibrium Products (mol%){usingT4&&<span style={{color:C.warm,fontWeight:400}}> — at T₄ conditions</span>}</div>
         <div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Major species at equilibrium. Lean mixtures (φ&lt;1) show excess O₂; rich mixtures (φ&gt;1) show CO and H₂.</div>
         {usingT4?<div style={{background:`${C.warm}0F`,border:`1px solid ${C.warm}44`,borderRadius:5,padding:"6px 10px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",marginBottom:8}}>📍 Re-equilibrated at <span style={{color:C.warm,fontWeight:700}}>T₄ = {uv(units,"T",T4_for_backend).toFixed(0)} {uu(units,"T")}</span> (turbine inlet) instead of T_ad = {uv(units,"T",result?.T_ad).toFixed(0)} {uu(units,"T")}. NO and OH equilibrium are sensitive to product temperature — the diluted, cooler products carry less of these minor species than the hot flame zone.</div>
@@ -2075,7 +2075,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       )}
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <div style={S.card}><div style={S.cardT}>Laminar Flame Speed vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Peak S_L occurs near stoichiometric (slightly rich for hydrocarbons, φ≈1.8 for H₂).</div><Chart data={sweep} xK="phi" yK="SL" xL="Equivalence Ratio (φ)" yL={`Flame Speed (${uu(units,"SL")})`} color={C.violet} marker={mk}/></div>
+      <div style={S.card}><div style={S.cardT}>Laminar Flame Speed vs phi</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Peak S_L occurs near stoichiometric (slightly rich for hydrocarbons, φ≈1.8 for H₂).</div><Chart data={sweep} xK="phi" yK="SL" xL="phi (φ)" yL={`Flame Speed (${uu(units,"SL")})`} color={C.violet} marker={mk}/></div>
       <div style={S.card}><div style={S.cardT}>Damköhler Number vs Flow Velocity</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Da decreases linearly with velocity. Below Da=1 (horizontal line), blowoff occurs.</div><Chart data={daSw} xK="V" yK="Da" xL={`Velocity (${uu(units,"vel")})`} yL="Damköhler Number" color={C.accent2}/></div>
       <div style={S.card}><div style={S.cardT}>Flame Speed vs Pressure</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>S_L decreases with pressure (exponent β ≈ -0.3 to -0.4 for hydrocarbons).</div><Chart data={pSw} xK="P" yK="SL" xL={`Pressure (${uu(units,"P")})`} yL={`Flame Speed (${uu(units,"SL")})`} color={C.accent3}/></div>
       <div style={S.card}><div style={S.cardT}>Flame Speed vs Unburned Temperature</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>S_L increases strongly with preheat temperature (exponent α ≈ 1.5–2.0).</div><Chart data={tSw} xK="T" yK="SL" xL={`Unburned Temperature (${uu(units,"T")})`} yL={`Flame Speed (${uu(units,"SL")})`} color={C.accent}/></div>
@@ -2312,9 +2312,9 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
         <M l="NOx at PSR Exit" v={((accurate&&backendNet?backendNet.NO_ppm_psr:net.NO_ppm_psr)??0).toFixed(1)} u="ppmvd" c={C.orange} tip="NO concentration leaving the PSR (entering the PFR). Growth between this value and 'NOx at Exit' is pure PFR-stage Zeldovich — small PSR/exit gap means most NOx is formed in the primary zone."/>
         <M l="CO at PSR Exit" v={((accurate&&backendNet?backendNet.CO_ppm_psr:net.CO_ppm_psr)??0).toFixed(1)} u="ppmvd" c={C.accent2} tip="CO concentration leaving the PSR (entering the PFR). In lean premixed combustors CO peaks at the PSR exit and is burned out in the PFR — so PSR CO minus exit CO is the burnout margin."/>
         <M l="NOx at Exit" v={net.NO_ppm_exit.toFixed(1)} u="ppm" c={C.warm} tip="Nitric oxide concentration at combustor exit (wet, actual O₂). Primarily thermal NOx from the Zeldovich mechanism."/>
-        <M l="NOx @ 15% O₂" v={net.NO_ppm_15O2.toFixed(1)} u="ppmvd" c={C.strong} tip="NOx corrected to 15% O₂ dry — the standard regulatory reporting basis for gas turbines and boilers."/>
+        <M l="NOx15" v={net.NO_ppm_15O2.toFixed(1)} u="ppmvd" c={C.strong} tip="NOx corrected to 15% O₂ dry — the standard regulatory reporting basis for gas turbines and boilers."/>
         <M l="CO at Exit" v={net.CO_ppm_exit.toFixed(1)} u="ppm" c={C.accent2} tip="Carbon monoxide at exit (wet, actual O₂). High CO indicates incomplete combustion — reduce φ, increase τ, or lengthen PFR."/>
-        <M l="CO @ 15% O₂" v={net.CO_ppm_15O2.toFixed(1)} u="ppmvd" c={C.orange} tip="CO corrected to 15% O₂ dry — the same regulatory reporting basis used for NOx. Formula: CO × (20.95−15)/(20.95−O₂_dry)."/>
+        <M l="CO15" v={net.CO_ppm_15O2.toFixed(1)} u="ppmvd" c={C.orange} tip="CO corrected to 15% O₂ dry — the same regulatory reporting basis used for NOx. Formula: CO × (20.95−15)/(20.95−O₂_dry)."/>
         <M l="Exhaust O₂ (dry)" v={net.O2_pct.toFixed(1)} u="%" c={C.accent3} tip="Residual oxygen in exhaust on a dry basis. Used for emissions correction and combustion efficiency."/>
       </div>
 
@@ -2327,9 +2327,9 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
       </div></div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>Temperature Profile (PSR → PFR)</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Well-mixed plateau across the PSR, then constant through the adiabatic PFR (no heat loss in this model). Dashed line marks the PSR/PFR boundary.</div><Chart data={pfrDisp} xK="x" yK="T" xL={`Position along combustor (${uu(units,"lenSmall")})`} yL={`Temperature (${uu(units,"T")})`} color={C.accent2} vline={uv(units,"lenSmall",net.L_psr_cm)}/></div>
-      <div style={S.card}><div style={S.cardT}>NOx & CO @ 15% O₂ (PSR → PFR)</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>All ppm values corrected to 15% O₂ dry (regulatory reporting basis). Solid: NOx (flat across PSR, grows linearly in PFR via Zeldovich). Dashed: CO (PSR floor, first-order burnout in PFR). Vertical dashed line marks the PSR/PFR boundary.</div><Chart data={pfrDisp} xK="x" yK="NO_ppm_15O2" xL={`Position along combustor (${uu(units,"lenSmall")})`} yL="NOx @ 15% O₂ (ppmvd)" color={C.warm} y2K="CO_ppm_15O2" c2={C.accent2} y2L="CO @ 15% O₂ (ppmvd)" vline={uv(units,"lenSmall",net.L_psr_cm)}/></div>
+      <div style={S.card}><div style={S.cardT}>NOx15 & CO15 (PSR → PFR)</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>All ppm values corrected to 15% O₂ dry (regulatory reporting basis). Solid: NOx (flat across PSR, grows linearly in PFR via Zeldovich). Dashed: CO (PSR floor, first-order burnout in PFR). Vertical dashed line marks the PSR/PFR boundary.</div><Chart data={pfrDisp} xK="x" yK="NO_ppm_15O2" xL={`Position along combustor (${uu(units,"lenSmall")})`} yL="NOx15 (ppmvd)" color={C.warm} y2K="CO_ppm_15O2" c2={C.accent2} y2L="CO15 (ppmvd)" vline={uv(units,"lenSmall",net.L_psr_cm)}/></div>
     </div>
-    <div style={S.card}><div style={S.cardT}>Emissions vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Classic NOx-CO tradeoff: lean mixtures reduce NOx but increase CO. Lean premixed combustors operate at φ ≈ 0.5–0.6 for low emissions.</div><Chart data={emSw} xK="phi" yK="NO" xL="Equivalence Ratio (φ)" yL="NOx @ 15% O₂ (ppm)" color={C.warm} y2K="CO" c2={C.accent2} y2L="CO (ppm)" w={700} h={270}/></div>
+    <div style={S.card}><div style={S.cardT}>Emissions vs Equivalence Ratio</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Classic NOx-CO tradeoff: lean mixtures reduce NOx but increase CO. Lean premixed combustors operate at φ ≈ 0.5–0.6 for low emissions.</div><Chart data={emSw} xK="phi" yK="NO" xL="phi (φ)" yL="NOx15 (ppm)" color={C.warm} y2K="CO" c2={C.accent2} y2L="CO (ppm)" w={700} h={270}/></div>
     </>}
   </div>);}
 
@@ -2392,7 +2392,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
         {accurate&&rO2.cc?<div style={{padding:12,background:`${C.orange}0A`,border:`1px solid ${C.orange}40`,borderRadius:6}}>
           <div style={{fontSize:11,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Complete Combustion <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— stack / diluted-exit readings</span></div>
           <div style={{...S.row,gap:6}}>
-            <M l="Equivalence Ratio (φ)" v={rO2.cc.phi.toFixed(3)} u="—" c={C.orange} tip="Inverted assuming no dissociation."/>
+            <M l="phi" v={rO2.cc.phi.toFixed(3)} u="—" c={C.orange} tip="Inverted assuming no dissociation."/>
             <M l="Flame Temperature" v={uv(units,"T",rO2.cc.T_ad).toFixed(0)} u={uu(units,"T")} c={C.orange} tip="T_ad under the complete-combustion assumption."/>
             <M l="Fuel/Air (mass)" v={rO2.cc.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.orange} tip="Fuel/air mass ratio from complete-combustion inversion."/>
             <M l="Air/Fuel (mass)" v={(1/(rO2.cc.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.orange} tip="Air/fuel mass ratio."/>
@@ -2407,7 +2407,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
         <div style={{padding:12,background:`${C.accent}0A`,border:`1px solid ${C.accent}40`,borderRadius:6}}>
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1</span></div>
           <div style={{...S.row,gap:6}}>
-            <M l="Equivalence Ratio (φ)" v={rO2.phi.toFixed(3)} u="—" c={C.accent} tip="Inverted using full Cantera HP equilibrium (includes CO, OH, NO dissociation)."/>
+            <M l="phi" v={rO2.phi.toFixed(3)} u="—" c={C.accent} tip="Inverted using full Cantera HP equilibrium (includes CO, OH, NO dissociation)."/>
             <M l="Flame Temperature" v={uv(units,"T",rO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="T_ad under the full-equilibrium assumption."/>
             <M l="Fuel/Air (mass)" v={rO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip="Fuel/air mass ratio from equilibrium inversion."/>
             <M l="Air/Fuel (mass)" v={(1/(rO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip="Air/fuel mass ratio."/>
@@ -2439,7 +2439,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
         {accurate&&rCO2.cc?<div style={{padding:12,background:`${C.orange}0A`,border:`1px solid ${C.orange}40`,borderRadius:6}}>
           <div style={{fontSize:11,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Complete Combustion <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— stack / diluted-exit readings</span></div>
           <div style={{...S.row,gap:6}}>
-            <M l="Equivalence Ratio (φ)" v={rCO2.cc.phi.toFixed(3)} u="—" c={C.orange} tip="Inverted assuming no dissociation."/>
+            <M l="phi" v={rCO2.cc.phi.toFixed(3)} u="—" c={C.orange} tip="Inverted assuming no dissociation."/>
             <M l="Flame Temperature" v={uv(units,"T",rCO2.cc.T_ad).toFixed(0)} u={uu(units,"T")} c={C.orange} tip="T_ad under the complete-combustion assumption."/>
             <M l="Fuel/Air (mass)" v={rCO2.cc.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.orange} tip="Fuel/air mass ratio from complete-combustion inversion."/>
             <M l="Air/Fuel (mass)" v={(1/(rCO2.cc.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.orange} tip="Air/fuel mass ratio."/>
@@ -2454,7 +2454,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
         <div style={{padding:12,background:`${C.accent}0A`,border:`1px solid ${C.accent}40`,borderRadius:6}}>
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1</span></div>
           <div style={{...S.row,gap:6}}>
-            <M l="Equivalence Ratio (φ)" v={rCO2.phi.toFixed(3)} u="—" c={C.accent} tip="Inverted using full Cantera HP equilibrium."/>
+            <M l="phi" v={rCO2.phi.toFixed(3)} u="—" c={C.accent} tip="Inverted using full Cantera HP equilibrium."/>
             <M l="Flame Temperature" v={uv(units,"T",rCO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="T_ad under the full-equilibrium assumption."/>
             <M l="Fuel/Air (mass)" v={rCO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip="Fuel/air mass ratio from equilibrium inversion."/>
             <M l="Air/Fuel (mass)" v={(1/(rCO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip="Air/fuel mass ratio."/>
@@ -2470,7 +2470,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
       <div style={S.card}><div style={S.cardT}>Flame Temperature vs Exhaust O₂</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Higher exhaust O₂ → leaner combustion → lower flame temperature. Coral marker shows your measurement.</div><Chart data={o2Sweep} xK="O2" yK="T_ad" xL="Exhaust O₂ (%)" yL={`Flame Temperature (${uu(units,"T")})`} color={C.warm} marker={{x:measO2,y:uv(units,"T",rO2.T_ad),label:`${uv(units,"T",rO2.T_ad).toFixed(0)} ${uu(units,"T")}`}}/></div>
-      <div style={S.card}><div style={S.cardT}>Equivalence Ratio vs Exhaust O₂</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Direct mapping from exhaust O₂ to φ. At 0% O₂, φ ≈ 1.0 (stoichiometric).</div><Chart data={o2Sweep} xK="O2" yK="phi" xL="Exhaust O₂ (%)" yL="Equivalence Ratio (φ)" color={C.accent} marker={{x:measO2,y:rO2.phi,label:`φ=${rO2.phi.toFixed(3)}`}}/></div>
+      <div style={S.card}><div style={S.cardT}>phi vs Exhaust O₂</div><div style={{fontSize:9.5,color:C.txtMuted,marginBottom:6}}>Direct mapping from exhaust O₂ to φ. At 0% O₂, φ ≈ 1.0 (stoichiometric).</div><Chart data={o2Sweep} xK="O2" yK="phi" xL="Exhaust O₂ (%)" yL="phi (φ)" color={C.accent} marker={{x:measO2,y:rO2.phi,label:`φ=${rO2.phi.toFixed(3)}`}}/></div>
     </div></div>);}
 
 function PropsPanel(){
@@ -2522,6 +2522,297 @@ function AssumptionsGroup({title,subtitle,children}){
     </div>
   </div>);
 }
+// ─────────────────────────────────────────────────────────────────────────
+//  NOMENCLATURE PANEL
+//
+//  Single, searchable index of every variable, output, and convention used
+//  anywhere in the app. Sources of truth:
+//
+//    1. AUTO_VARS    — every input the DOE/Automation tab can vary
+//    2. AUTO_OUTPUTS — every result the DOE/Automation tab can capture
+//    3. NOMENCLATURE_EXTRA — concepts not in the catalogs above
+//                            (cycle station numbers, common subscripts,
+//                            ppm vs ppmvd, dry vs wet, sign conventions)
+//
+//  When a label has been renamed for industry-standard brevity, the long
+//  form is exposed via NOMENCLATURE_LONGNAMES so users can search for the
+//  classical name (e.g. "Equivalence Ratio") and still find the entry that
+//  now displays as "phi".
+// ─────────────────────────────────────────────────────────────────────────
+const NOMENCLATURE_LONGNAMES = {
+  // Operating point (renamed for industry naming):
+  phi:               "Equivalence ratio (mass-of-fuel / mass-of-fuel-stoich at the same air); the lean/rich knob.",
+  FAR:               "Fuel/Air mass ratio.",
+  T_flame:           "TFlame_CC — adiabatic flame T, complete combustion (no dissociation), at the 3-stream mixed inlet. The third equivalent way to express the operating point alongside phi and FAR.",
+  T_air:             "Air Temp — combustor air-side inlet temperature (before adiabatic mixing with fuel).",
+  T_fuel:            "Fuel Temp — fuel-side inlet temperature (before adiabatic mixing with air).",
+  P:                 "Combustor static pressure.",
+  WFR:               "Water-injection mass per unit fuel mass (kg water / kg fuel).",
+  // Outputs:
+  NOx_15_psr:        "PSR-PFR exit NOx mole fraction, corrected to 15% O₂ on a dry basis (regulatory standard for stationary gas turbines).",
+  CO_15_psr:         "PSR-PFR exit CO mole fraction, corrected to 15% O₂ dry.",
+  NOx15_mapping:     "Combustor-mapping correlation NOx, corrected to 15% O₂ dry.",
+  CO15_mapping:      "Combustor-mapping correlation CO, corrected to 15% O₂ dry.",
+  T_ad:              "Tad_eq — adiabatic flame T computed by Cantera HP equilibrium with full dissociation (NO, OH, etc. allowed).",
+  T_ad_complete:     "Tad_CC — adiabatic flame T assuming complete combustion to CO₂ + H₂O + O₂ + N₂ only (no dissociation). Always higher than Tad_eq.",
+  T_ad_equilibrium:  "Tad_eq reference value displayed alongside the kinetic PSR/PFR temperatures.",
+  T_ad_complete_comb:"Tad_CC reference value displayed alongside the kinetic PSR/PFR temperatures.",
+  T1:                "Compressor inlet T (≡ ambient).",
+  T2:                "Low-pressure compressor exit T.",
+  T2c:               "Intercooler exit T (LMS100 only).",
+  T3:                "Combustor inlet T = high-pressure compressor exit T.",
+  T4:                "Combustor exit / turbine inlet T (firing temperature).",
+  T5:                "Turbine exit T.",
+  T_Bulk:            "Flame-zone T at the (T3, P3, phi_Bulk) point — what the flame actually sees before dilution.",
+  P3:                "Combustor inlet pressure = HPC exit pressure.",
+  phi4:              "Equivalence ratio at the combustor exit station 4 (post-dilution).",
+  phi_Bulk:          "Equivalence ratio in the flame zone before dilution.",
+  FAR4:              "Mass-basis fuel/air ratio at station 4.",
+  FAR_Bulk:          "Mass-basis fuel/air ratio in the flame zone (= FAR4 / combustor_air_frac).",
+};
+
+// Concepts that have no AUTO_VARS / AUTO_OUTPUTS entry — combustion
+// vocabulary the user encounters in chart axes, tooltips, and the
+// Excel export. Listed in the Nomenclature panel under "Conventions".
+const NOMENCLATURE_EXTRA = [
+  { symbol: "ppm",     fullName: "Parts per million (mole)",  unit: "—",   group: "Units & conventions",
+    desc: "Mole fraction × 1e6. Wet basis unless stated. For emissions, always check whether the value is corrected to 15% O₂ dry (ppmvd) or just raw wet ppm." },
+  { symbol: "ppmvd",   fullName: "Parts per million by volume, dry",  unit: "—", group: "Units & conventions",
+    desc: "Mole fraction on a dry basis (H₂O removed) × 1e6. The standard regulatory reporting unit for NOx and CO. Higher than wet ppm by ~10–20% depending on combustion." },
+  { symbol: "@ 15% O₂", fullName: "Corrected to 15% O₂ dry", unit: "—",  group: "Units & conventions",
+    desc: "Standard correction for stationary gas-turbine emissions: ppm_15 = ppm_actual × (20.95 − 15) / (20.95 − O₂_dry%). Removes the dilution effect of excess air." },
+  { symbol: "wet basis",  fullName: "Wet (includes H₂O) mole fractions", unit: "—", group: "Units & conventions",
+    desc: "Mole fractions where H₂O is part of the total moles. Native Cantera output." },
+  { symbol: "dry basis",  fullName: "Dry (H₂O removed) mole fractions", unit: "—", group: "Units & conventions",
+    desc: "Mole fractions after H₂O is mathematically removed and the rest renormalised to sum to 1. The basis used for stack-O₂ readings and emissions correction." },
+  { symbol: "Cantera mode", fullName: "Accurate vs Free computation mode", unit: "—", group: "Modes",
+    desc: "Accurate Mode routes solves to the Cantera backend (full kinetics, validated NASA polynomials, GRI-Mech 3.0 by default). Free Mode runs reduced-order JS correlations in the browser — ~5% the cost and ~95% the accuracy." },
+  { symbol: "linkT3",  fullName: "Cycle linkage: Air Temp ← T3", unit: "—", group: "Cycle linkages",
+    desc: "When ON, the sidebar Air Temp tracks the latest cycle T3. Auto-broken if the user varies Air Temp in Automation." },
+  { symbol: "linkP3",  fullName: "Cycle linkage: Pressure ← P3", unit: "—", group: "Cycle linkages",
+    desc: "When ON, the sidebar Pressure tracks the latest cycle P3. Auto-broken if the user varies Pressure in Automation." },
+  { symbol: "linkFAR", fullName: "Cycle linkage: phi ← phi_Bulk", unit: "—", group: "Cycle linkages",
+    desc: "When ON, the sidebar phi tracks the latest cycle phi_Bulk. Auto-broken if the user varies phi, FAR, or TFlame_CC in Automation." },
+  { symbol: "PSR",     fullName: "Perfectly Stirred Reactor", unit: "—", group: "Combustor model",
+    desc: "Idealized well-mixed primary zone with finite residence time τ_PSR. All inputs instantly mix to the PSR's volume-averaged state." },
+  { symbol: "PFR",     fullName: "Plug Flow Reactor", unit: "—", group: "Combustor model",
+    desc: "Adiabatic constant-pressure burnout zone downstream of the PSR. State varies along the axial coordinate; no back-mixing." },
+  { symbol: "τ",       fullName: "Residence time / characteristic time", unit: "ms", group: "Combustor model",
+    desc: "τ_PSR = primary-zone residence; τ_PFR = burnout-zone residence; τ_total = τ_PSR + τ_PFR; τ_chem = chemical time = (S_L²)/α; τ_flow = L_char / V_ref." },
+  { symbol: "S_L",     fullName: "Laminar flame speed", unit: "cm/s", group: "Flame physics",
+    desc: "Speed at which a laminar flame front propagates into the unburned mixture. Computed via Gülder or Metghalchi-Keck correlations in Free Mode; via Cantera FreeFlame in Accurate Mode." },
+  { symbol: "Da",      fullName: "Damköhler number", unit: "—", group: "Flame physics",
+    desc: "Da = τ_flow / τ_chem. Da > 1 → mixing-limited (stable); Da < 1 → reaction-limited (blowout risk)." },
+  { symbol: "WI",      fullName: "Wobbe Index = HHV_vol / √SG", unit: "BTU/scf", group: "Fuel properties",
+    desc: "Energy delivered per unit pressure drop across a fixed orifice. Two fuels with the same WI deliver the same heat input on the same hardware without retuning." },
+  { symbol: "MWI",     fullName: "Modified Wobbe Index = LHV_vol / √(SG · T_fuel/520°R)", unit: "BTU/scf·√°R", group: "Fuel properties",
+    desc: "GE-convention fuel-flexibility metric. Includes the Fuel Temp dependency (cold fuel → denser → more energy per scf at the same WI)." },
+  { symbol: "LHV",     fullName: "Lower Heating Value (water vapor in products)", unit: "MJ/kg or BTU/lb", group: "Fuel properties",
+    desc: "Heat released per unit fuel when product H₂O is in the vapor phase. The standard for gas turbines (which exhaust at T >> 100 °C)." },
+  { symbol: "HHV",     fullName: "Higher Heating Value (water condensed)", unit: "MJ/kg or BTU/lb", group: "Fuel properties",
+    desc: "LHV plus the heat of vaporisation of all water formed. Used for boiler ratings; for GTs always quote LHV." },
+  { symbol: "SG",      fullName: "Specific gravity (relative to air)", unit: "—", group: "Fuel properties",
+    desc: "MW_fuel / MW_air. Drives orifice flow and Wobbe Index." },
+];
+
+// Categorise an AUTO_VARS entry into a Nomenclature group.
+function _nomenGroupForVar(v){
+  if (v.group === "operating_point") return "Operating point";
+  if (["T_air","T_fuel","P","WFR","water_mode"].includes(v.id)) return "Operating point";
+  if (["P_amb","T_amb","RH","load_pct","T_cool","engine","emissionsMode","com_air_frac","bleed_open_pct","bleed_valve_size_pct"].includes(v.id)) return "Cycle (engine & ambient)";
+  if (v.id.startsWith("map")) return "Combustor mapping (DLE 4-circuit)";
+  if (["tau_psr","L_pfr","V_pfr","heatLossFrac"].includes(v.id)) return "Combustor PSR-PFR";
+  if (["velocity","Lchar","Dfh","Lpremix","Vpremix"].includes(v.id)) return "Flame speed & blowoff";
+  if (["measO2","measCO2"].includes(v.id)) return "Exhaust analysis";
+  if (v.kind === "fuel_species") return "Fuel composition";
+  if (v.kind === "ox_species")   return "Oxidizer composition";
+  return "Other inputs";
+}
+
+// Categorise an AUTO_OUTPUTS entry by panel.
+function _nomenGroupForOutput(o){
+  return ({
+    cycle: "Cycle outputs (gas turbine)",
+    mapping: "Combustor mapping outputs",
+    aft: "Flame Temp & Properties outputs",
+    exhaust: "Exhaust analysis outputs",
+    combustor: "Combustor PSR-PFR outputs",
+    flame: "Flame speed & blowoff outputs",
+  })[o.panel] || "Other outputs";
+}
+
+function NomenclaturePanel(){
+  const [search, setSearch] = useState("");
+  const q = search.trim().toLowerCase();
+
+  // Build the full searchable list once. AUTO_VARS and AUTO_OUTPUTS are
+  // module-level constants so a single useMemo with [] deps is correct.
+  const entries = useMemo(() => {
+    const out = [];
+    for (const v of AUTO_VARS){
+      out.push({
+        kind: "input",
+        symbol: v.label,
+        fullName: NOMENCLATURE_LONGNAMES[v.id] || v.label,
+        unitSI: v.unit_si || "",
+        unitEN: v.unit_en || v.unit_si || "",
+        group: _nomenGroupForVar(v),
+        panels: v.panels,
+        desc: v.desc || "",
+        searchKeys: [v.id, v.label, v.unit_si, v.unit_en, NOMENCLATURE_LONGNAMES[v.id] || "", v.desc || "", _nomenGroupForVar(v)].filter(Boolean).join(" ").toLowerCase(),
+      });
+    }
+    for (const o of AUTO_OUTPUTS){
+      const uSI = o.unit_si || o.unit || "";
+      const uEN = o.unit_en || o.unit || uSI;
+      out.push({
+        kind: "output",
+        symbol: o.label,
+        fullName: NOMENCLATURE_LONGNAMES[o.id] || o.label,
+        unitSI: uSI,
+        unitEN: uEN,
+        group: _nomenGroupForOutput(o),
+        panels: [o.panel],
+        desc: NOMENCLATURE_LONGNAMES[o.id] || o.label,
+        searchKeys: [o.id, o.label, uSI, uEN, NOMENCLATURE_LONGNAMES[o.id] || "", o.panel, _nomenGroupForOutput(o)].filter(Boolean).join(" ").toLowerCase(),
+      });
+    }
+    for (const x of NOMENCLATURE_EXTRA){
+      out.push({
+        kind: "concept",
+        symbol: x.symbol,
+        fullName: x.fullName,
+        unitSI: x.unit || "",
+        unitEN: x.unit || "",
+        group: x.group,
+        panels: [],
+        desc: x.desc,
+        searchKeys: [x.symbol, x.fullName, x.unit, x.desc, x.group].filter(Boolean).join(" ").toLowerCase(),
+      });
+    }
+    return out;
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!q) return entries;
+    return entries.filter(e => e.searchKeys.includes(q));
+  }, [entries, q]);
+
+  // Group preserves insertion order — so groups appear in the order their
+  // first member was added (vars → outputs → concepts).
+  const grouped = useMemo(() => {
+    const m = new Map();
+    for (const e of filtered){
+      if (!m.has(e.group)) m.set(e.group, []);
+      m.get(e.group).push(e);
+    }
+    return [...m.entries()];
+  }, [filtered]);
+
+  const totalCount = entries.length;
+  const matchCount = filtered.length;
+
+  return (
+    <div style={{display:"flex", flexDirection:"column", gap:12}}>
+      <HelpBox title="📚 Nomenclature — every symbol used anywhere in this app">
+        <p style={{margin:"0 0 6px"}}>
+          A single index of every input variable, output, and convention. Search by short symbol
+          (e.g. <code>NOx15</code>, <code>phi</code>, <code>Tad_CC</code>), by classical name
+          (<code>Equivalence Ratio</code>, <code>Wobbe</code>), by unit, or by panel.
+        </p>
+        <p style={{margin:0, color:C.txtMuted}}>
+          Showing <strong>{matchCount}</strong> of <strong>{totalCount}</strong> entries.
+        </p>
+      </HelpBox>
+
+      <div style={{display:"flex", alignItems:"center", gap:10}}>
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search symbols, names, units, descriptions, panels…"
+          style={{
+            flex:1, padding:"8px 12px", fontSize:13,
+            background: C.bg, color: C.txt,
+            border: `1px solid ${C.border}`, borderRadius: 6,
+            fontFamily: "'Barlow', sans-serif", outline: "none",
+          }}
+        />
+        {search && (
+          <button onClick={() => setSearch("")}
+            style={{padding:"6px 12px", fontSize:11, fontWeight:700,
+              color: C.txtDim, background: "transparent",
+              border: `1px solid ${C.border}`, borderRadius: 4, cursor: "pointer",
+              fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: ".5px"}}>
+            CLEAR
+          </button>
+        )}
+      </div>
+
+      {grouped.length === 0 && (
+        <div style={{padding:14, color:C.txtMuted, fontSize:12, fontStyle:"italic",
+          fontFamily:"monospace", textAlign:"center"}}>
+          No entries match "{search}". Try a shorter or different keyword.
+        </div>
+      )}
+
+      {grouped.map(([group, items]) => (
+        <div key={group} style={{background:C.bg2, border:`1px solid ${C.border}`,
+          borderRadius:8, padding:14}}>
+          <div style={{fontSize:12, fontWeight:700, color:C.accent,
+            letterSpacing:".6px", marginBottom:8,
+            fontFamily:"'Barlow Condensed', sans-serif",
+            textTransform:"uppercase"}}>
+            {group} <span style={{color:C.txtMuted, fontWeight:400}}>· {items.length}</span>
+          </div>
+          <div style={{display:"grid",
+            gridTemplateColumns:"170px 90px 1fr",
+            gap:8, padding:"4px 6px",
+            borderBottom:`1px solid ${C.border}`,
+            fontSize:9, color:C.txtMuted, textTransform:"uppercase",
+            letterSpacing:"1.2px", fontFamily:"monospace", fontWeight:700}}>
+            <div>Symbol</div><div>Unit (SI / EN)</div><div>Definition</div>
+          </div>
+          {items.map((e, i) => (
+            <div key={`${e.symbol}_${i}`} style={{display:"grid",
+              gridTemplateColumns:"170px 90px 1fr",
+              gap:8, padding:"6px 6px",
+              borderBottom: i === items.length-1 ? "none" : `1px solid ${C.border}25`,
+              fontSize:11, fontFamily:"'Barlow', sans-serif"}}>
+              <div style={{fontFamily:"monospace", fontWeight:700,
+                color: e.kind === "input" ? C.accent3 : e.kind === "output" ? C.accent2 : C.txtDim,
+                wordBreak:"break-word"}}>
+                {e.symbol}
+                <div style={{fontSize:8.5, color:C.txtMuted, fontWeight:400,
+                  textTransform:"uppercase", letterSpacing:".4px", marginTop:1}}>
+                  {e.kind}
+                </div>
+              </div>
+              <div style={{fontFamily:"monospace", color:C.txtMuted, fontSize:10}}>
+                {e.unitSI === e.unitEN || !e.unitEN
+                  ? (e.unitSI || "—")
+                  : `${e.unitSI || "—"} / ${e.unitEN}`}
+              </div>
+              <div style={{color:C.txt, lineHeight:1.5}}>
+                <div style={{color:C.txt, fontWeight:600}}>{e.fullName}</div>
+                {e.desc && e.desc !== e.fullName && (
+                  <div style={{color:C.txtMuted, fontSize:10.5, marginTop:2}}>{e.desc}</div>
+                )}
+                {e.panels && e.panels.length > 0 && (
+                  <div style={{fontSize:9.5, color:C.txtDim, marginTop:3,
+                    fontFamily:"monospace", letterSpacing:".3px"}}>
+                    panels: {e.panels.join(", ")}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function AssumptionsPanel(){
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ How to read this page">
@@ -2707,7 +2998,7 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
           When a linkage is ON, the cycle output drives that sidebar field so <strong style={{color:C.accent}}>every other panel (AFT, Flame Speed, Combustor, Exhaust, Autoignition)</strong> runs at the engine's actual state. Break link to regain manual control.
         </div>
         {[
-          {on:linkT3,set:setLinkT3,label:"Air Temperature → T3",tip:"Sidebar Air Temperature (K) ← cycle T3 (combustor inlet / HPC exit)"},
+          {on:linkT3,set:setLinkT3,label:"Air Temp → T3",tip:"Sidebar Air Temp (K) ← cycle T3 (combustor inlet / HPC exit)"},
           {on:linkP3,set:setLinkP3,label:"Pressure → P3",tip:"Sidebar Pressure ← cycle P3 (combustor inlet pressure)"},
           {on:linkFAR,set:setLinkFAR,label:"φ → cycle φ_Bulk (flame zone)",tip:"Sidebar φ ← cycle's flame-zone φ_Bulk = φ₄ / combustor_air_frac. This is the equivalence ratio actually seen by the primary flame (richer than the diluted combustor exit φ₄). Drives T_ad on Flame Temp and the PSR-PFR / Flame Speed / Blowoff / Exhaust panels, which all model the flame — not the diluted exit."},
           {on:linkOx,set:setLinkOx,label:"Oxidizer comp → humid air @ ambient",tip:"Sidebar Oxidizer composition ← cycle's computed humid-air mol % at ambient T/RH. Required for T_ad on Flame Temp to match T4 on this panel (they use the same mechanism and same air)."},
@@ -9184,7 +9475,7 @@ function EngineAmbientSidebar({
 function Logo({size=28}){return(<svg width={size} height={size} viewBox="0 0 40 40" fill="none"><rect x="2" y="2" width="36" height="36" rx="6" stroke={C.accent} strokeWidth="2.5" fill="none"/><path d="M10 28 L14 12 L20 22 L26 12 L30 28" stroke={C.accent2} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="20" cy="18" r="3" fill={C.accent} opacity=".6"/></svg>);}
 
 /* ══════════════════ MAIN APP ══════════════════ */
-const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"mapping",label:"Combustor Mapping",icon:"🎯",engines:["LMS100PB+"]},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"automate",label:"Automate",icon:"🧪"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
+const TABS_BASE=[{id:"summary",label:"Operations Summary",icon:"📈"},{id:"cycle",label:"Cycle",icon:"🛠️"},{id:"mapping",label:"Combustor Mapping",icon:"🎯",engines:["LMS100PB+"]},{id:"aft",label:"Flame Temp & Properties",icon:"🔥"},{id:"exhaust",label:"Exhaust Analysis",icon:"🔬"},{id:"combustor",label:"Combustor PSR→PFR",icon:"🏭"},{id:"flame",label:"Flame Speed & Blowoff",icon:"⚡"},{id:"automate",label:"Automate",icon:"🧪"},{id:"props",label:"Thermo Database",icon:"📊"},{id:"nomenclature",label:"Nomenclature",icon:"📚"},{id:"assumptions",label:"Assumptions",icon:"📘"}];
 const ACCOUNT_TAB={id:"account",label:"Account & Billing",icon:"👤"};
 
 export default function App(){
@@ -9733,7 +10024,7 @@ export default function App(){
               <div style={{fontSize:9.5,color:C.txtMuted,lineHeight:1.5,marginBottom:8,fontStyle:"italic"}}>These conditions apply to all tabs. φ=1 is stoichiometric; φ&lt;1 lean; φ&gt;1 rich.</div>
               <div style={{marginBottom:12}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>Equivalence Ratio (φ)</label>
+                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>phi (φ)</label>
                   <NumField value={phi} decimals={4} onCommit={setPhiClamped} title="Type any φ between 0.3 and 1.0 (or drag the slider)"
                     style={{width:72,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
                 </div>
@@ -9798,7 +10089,7 @@ export default function App(){
                         title={fromBackend
                           ? "Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Source: Cantera /calc/aft → T_ad_complete (matches the value shown on the Combustor PSR-PFR panel). Editing this back-solves φ via JS bisection — typed value may differ ~10–20 °F from the redisplayed value due to the JS↔Cantera solver bias."
                           : "Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Source: in-browser JS calcAFT. Setting this back-solves φ — pick the φ that produces this T_flame given the current fuel, oxidizer, T_fuel, and T_air. Lean solution only."}>
-                        T_flame ({uu(units,"T")}) — complete combustion {fromBackend?"":"(JS)"}
+                        TFlame_CC ({uu(units,"T")}) {fromBackend?"":"(JS)"}
                       </label>
                       <NumField value={tflame_disp} decimals={1} onCommit={onTflameCommit}
                         title="Type a target T_flame; the lean φ that produces it is back-solved automatically."
@@ -9818,15 +10109,15 @@ export default function App(){
                 );
               })()}
               <div style={{marginBottom:10}}>
-                <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, Cantera mixes this with T_fuel adiabatically (mass-weighted enthalpy balance with T-dependent NASA polynomials) to get the actual PSR inlet T.">Air Temperature ({uu(units,"T")})</label>
+                <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, Cantera mixes this with Fuel Temp adiabatically (mass-weighted enthalpy balance with T-dependent NASA polynomials) to get the actual PSR inlet T.">Air Temp ({uu(units,"T")})</label>
                 <NumField value={uv(units,"T",T0)} decimals={2} onCommit={v=>setT0(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.accent3}55`}}/>
                 <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.accent3,marginTop:4}}/>
                 {accurate&&hasOnline&&linkT3&&<LinkChip onBreak={()=>setLinkT3(false)} label="Linked to Cycle T3"/>}
               </div>
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel inlet temperature (before adiabatic mixing with air). Independent from Air T. Typical values: 290 K (cold fuel line) to 550 K (preheated).">Fuel Temperature ({uu(units,"T")})</label>
-                  <button onClick={()=>setTfuel(T0)} title="Copy current Air T into Fuel T (sets the two streams equal, so adiabatic mixing degenerates to the single-inlet case)." style={{padding:"1px 8px",fontSize:9,fontWeight:700,color:C.orange,background:"transparent",border:`1px solid ${C.orange}50`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>copy Air T</button>
+                  <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel inlet temperature (before adiabatic mixing with air). Independent from Air Temp. Typical values: 290 K (cold fuel line) to 550 K (preheated).">Fuel Temp ({uu(units,"T")})</label>
+                  <button onClick={()=>setTfuel(T0)} title="Copy current Air Temp into Fuel Temp (sets the two streams equal, so adiabatic mixing degenerates to the single-inlet case)." style={{padding:"1px 8px",fontSize:9,fontWeight:700,color:C.orange,background:"transparent",border:`1px solid ${C.orange}50`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>copy Air Temp</button>
                 </div>
                 <NumField value={uv(units,"T",T_fuel)} decimals={2} onCommit={v=>setTfuel(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.orange}55`}}/>
                 <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.orange,marginTop:4}}/>
@@ -9947,6 +10238,7 @@ export default function App(){
                 fuel, ox,
               }}/>
             </div>
+            {tab==="nomenclature"&&<NomenclaturePanel/>}
             {tab==="assumptions"&&<AssumptionsPanel/>}
             {tab==="account"&&auth.isAuthenticated&&<AccountPanel C={C}/>}
           </div>

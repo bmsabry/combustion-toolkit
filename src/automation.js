@@ -86,40 +86,40 @@ export const AUTO_VARS = [
   // Pick any ONE to vary in automation; the picker hides the other two
   // because varying multiple would specify the same physical quantity twice
   // and produce inconsistent rows.
-  { id: "phi", label: "Equivalence Ratio (φ)",
+  { id: "phi", label: "phi",
     panels: ["aft", "combustor", "flame"], kind: "number",
     default: 0.555, range: [0.30, 1.50], step: 0.05, unit_si: "—", unit_en: "—",
     linkage: "linkFAR", group: "operating_point",
-    desc: "Sidebar φ. Drives AFT, PSR-PFR, Flame Speed. If Cycle is selected and you vary φ, the φ_Bulk linkage is auto-broken. Mutually exclusive with FAR and T_flame." },
+    desc: "Equivalence ratio (φ). Sidebar φ. Drives AFT, PSR-PFR, Flame Speed. If Cycle is selected and you vary φ, the φ_Bulk linkage is auto-broken. Mutually exclusive with FAR and TFlame_CC." },
 
-  { id: "FAR", label: "Fuel/Air Ratio (mass)",
+  { id: "FAR", label: "FAR",
     panels: ["aft", "combustor", "flame"], kind: "number",
     default: 0.0339, range: [0.005, 0.10], step: 0.002, unit_si: "—", unit_en: "—",
     linkage: "linkFAR", group: "operating_point",
-    desc: "Mass-basis FAR. Runner converts to φ per row via φ = FAR / FAR_stoich (FAR_stoich depends on the fuel + ox composition). Mutually exclusive with φ and T_flame." },
+    desc: "Fuel/Air ratio (mass basis). Runner converts to φ per row via φ = FAR / FAR_stoich (FAR_stoich depends on the fuel + ox composition). Mutually exclusive with phi and TFlame_CC." },
 
-  { id: "T_flame", label: "T_flame (adiabatic, complete combustion)",
+  { id: "T_flame", label: "TFlame_CC",
     panels: ["aft", "combustor", "flame"], kind: "number",
     default: 1900, range: [1500, 2400], step: 50,
     unit_si: "K", unit_en: "°F",
     siToEn: K_to_F, enToSi: F_to_K,
     linkage: "linkFAR", group: "operating_point",
-    desc: "Target adiabatic flame temperature (complete combustion, no dissociation) at the 3-stream mixed inlet. Runner back-solves the lean φ that produces this T_flame given the current fuel, oxidizer, T_fuel, T_air. Mutually exclusive with φ and FAR." },
+    desc: "Target adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet. Runner back-solves the lean φ that produces this TFlame_CC given the current fuel, oxidizer, Fuel Temp, Air Temp. Mutually exclusive with phi and FAR." },
 
-  { id: "T_air", label: "Air Inlet Temperature",
+  { id: "T_air", label: "Air Temp",
     panels: ["aft", "combustor", "flame"], kind: "number",
     default: 810.93, range: [250, 900], step: 10,
     unit_si: "K", unit_en: "°F",
     siToEn: K_to_F, enToSi: F_to_K,
     linkage: "linkT3",
-    desc: "Combustor inlet air T. If Cycle is selected, the T3 linkage is auto-broken." },
+    desc: "Combustor air inlet temperature. If Cycle is selected, the T3 linkage is auto-broken." },
 
-  { id: "T_fuel", label: "Fuel Inlet Temperature",
+  { id: "T_fuel", label: "Fuel Temp",
     panels: ["aft", "combustor", "flame"], kind: "number",
     default: 294.26, range: [250, 700], step: 5,
     unit_si: "K", unit_en: "°F",
     siToEn: K_to_F, enToSi: F_to_K,
-    desc: "Sets fuel-side enthalpy in the 3-stream mix balance." },
+    desc: "Fuel inlet temperature (before adiabatic mixing with air). Sets fuel-side enthalpy in the 3-stream mix balance." },
 
   { id: "P", label: "Pressure",
     panels: ["aft", "combustor", "flame"], kind: "number",
@@ -489,8 +489,8 @@ export const AUTO_OUTPUTS = [
   { id: "MWI_derate_pct", label: "MWI derate",      panel: "cycle", unit: "%",        pick: r => r.cycle?.fuel_flexibility?.mwi_derate_pct },
 
   // ── Combustor Mapping ──
-  { id: "NOx15_mapping",      label: "NOx @ 15% O₂", panel: "mapping", unit: "ppmvd", pick: r => r.map?.correlations?.NOx15 },
-  { id: "CO15_mapping",       label: "CO @ 15% O₂",  panel: "mapping", unit: "ppmvd", pick: r => r.map?.correlations?.CO15 },
+  { id: "NOx15_mapping",      label: "NOx15", panel: "mapping", unit: "ppmvd", pick: r => r.map?.correlations?.NOx15 },
+  { id: "CO15_mapping",       label: "CO15",  panel: "mapping", unit: "ppmvd", pick: r => r.map?.correlations?.CO15 },
   { id: "PX36_SEL",           label: "PX36_SEL",     panel: "mapping", unit: "psi",   pick: r => r.map?.correlations?.PX36_SEL },
   { id: "PX36_SEL_HI",        label: "PX36_SEL_HI",  panel: "mapping", unit: "psi",   pick: r => r.map?.correlations?.PX36_SEL_HI },
   { id: "T_AFT_IP",           label: "T_AFT IP",     panel: "mapping", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.map?.circuits?.IP?.T_AFT_complete_K },
@@ -506,7 +506,7 @@ export const AUTO_OUTPUTS = [
   { id: "FAR_stoich",         label: "FAR stoich",   panel: "mapping", unit: "—",     pick: r => r.map?.FAR_stoich },
 
   // ── AFT (Flame Temp & Properties) ──
-  { id: "T_ad",               label: "T_ad (adiabatic)", panel: "aft", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_ad },
+  { id: "T_ad",               label: "Tad_eq", panel: "aft", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_ad },
   { id: "T_mixed",            label: "T_mixed (3-stream)", panel: "aft", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_mixed_inlet_K },
   { id: "LHV_mass",           label: "LHV (mass)",   panel: "aft",
     unit_si: "MJ/kg", unit_en: "BTU/lb", siToEn: MJkg_to_BTUlb,
@@ -535,7 +535,7 @@ export const AUTO_OUTPUTS = [
   // Cantera complete-combustion T_ad (no dissociation reference). In
   // free mode this comes from the JS calcTflameComplete closed-form
   // helper; in accurate mode from the backend's complete_combustion.run.
-  { id: "T_ad_complete",      label: "T_ad (complete combustion)", panel: "aft",
+  { id: "T_ad_complete",      label: "Tad_CC", panel: "aft",
     unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_ad_complete },
   // Stoichiometric AFR on a volumetric (molar) basis.
   { id: "AFR_vol",            label: "Stoich AFR (vol)",   panel: "aft", unit: "—",   pick: r => r.derived?.AFR_vol },
@@ -573,8 +573,8 @@ export const AUTO_OUTPUTS = [
   { id: "psr_CO_ppm",         label: "CO PSR",       panel: "combustor", unit: "ppmvd", pick: r => r.psr?.CO_ppm_psr },
   { id: "exit_NO_ppm",        label: "NOx exit",     panel: "combustor", unit: "ppmvd", pick: r => r.psr?.NO_ppm_exit },
   { id: "exit_CO_ppm",        label: "CO exit",      panel: "combustor", unit: "ppmvd", pick: r => r.psr?.CO_ppm_exit },
-  { id: "NOx_15_psr",         label: "NOx @ 15% O₂", panel: "combustor", unit: "ppmvd", pick: r => r.psr?.NO_ppm_15O2 },
-  { id: "CO_15_psr",          label: "CO @ 15% O₂",  panel: "combustor", unit: "ppmvd", pick: r => r.psr?.CO_ppm_15O2 },
+  { id: "NOx_15_psr",         label: "NOx15", panel: "combustor", unit: "ppmvd", pick: r => r.psr?.NO_ppm_15O2 },
+  { id: "CO_15_psr",          label: "CO15",  panel: "combustor", unit: "ppmvd", pick: r => r.psr?.CO_ppm_15O2 },
   { id: "O2_dry_pct",         label: "Exhaust O₂ (dry)", panel: "combustor", unit: "%", pick: r => r.psr?.O2_pct },
   { id: "conv_psr_pct",       label: "PSR conversion", panel: "combustor", unit: "%", pick: r => r.psr?.conv_psr },
   { id: "tau_pfr_ms",         label: "τ_PFR",        panel: "combustor", unit: "ms",  pick: r => r.psr?.tau_pfr_ms },
@@ -582,9 +582,9 @@ export const AUTO_OUTPUTS = [
   // Adiabatic flame temperatures — full Cantera HP equilibrium AND no-
   // dissociation complete-combustion. Reference values shown alongside
   // the kinetic T_psr / T_exit on the panel.
-  { id: "T_ad_equilibrium",   label: "T_ad (equilibrium, ref)", panel: "combustor",
+  { id: "T_ad_equilibrium",   label: "Tad_eq (ref)", panel: "combustor",
     unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.psr?.T_ad_equilibrium },
-  { id: "T_ad_complete_comb", label: "T_ad (complete, ref)",    panel: "combustor",
+  { id: "T_ad_complete_comb", label: "Tad_CC (ref)", panel: "combustor",
     unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.psr?.T_ad_complete },
 
   // ── Flame Speed & Blowoff ──
