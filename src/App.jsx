@@ -56,9 +56,52 @@ function uu(units,key){return UC[units][key].u;}
 // the three φ values and auto-fill the IP/OP/IM circuit inputs. User can edit
 // any cell; software re-reads continuously. Linear interpolation between rows.
 function _tblRow(T3, OP, IP, IM){ return {T3, OP, IP, IM}; }
-const DEFAULT_MAPPING_TABLES = {
+// ── Two named mapping-table presets ────────────────────────────────────
+// UNMAPPED  — raw factory φ-vs-T3 lookups (BRNDMD 7 holds φ_OP flat, IP=0,
+//             IM=0.51; BRNDMD 6 has IP=1.0 throughout). This is the
+//             starting state every fresh session loads into the panel.
+// MAPPED    — calibrated lookups derived from rig data (BRNDMD 7 walks
+//             φ_OP down 0.85→0.45 across T3, IP=0.25, IM steps 0.58→0.57;
+//             BRNDMD 6 has IP=1.2 for T3≤670 K then IP=1.0).
+// The two are toggled by the bimodal "Reset to Unmapped / Reset to Mapped"
+// button on the Combustor Mapping panel. T3 stored in °F as elsewhere.
+//
+// Common rows shared by every BRNDMD: 500..700 in 10 °F steps (21 rows),
+// then 750 / 800 / 850 (sparse coverage above the deck T3 ceiling).
+const _T3_DENSE  = (i) => 500 + i*10;          // 500, 510, ..., 700
+const _T3_SPARSE = [750, 800, 850];
+const _denseRows  = (OP, IP, IM) =>
+  Array.from({length: 21}, (_, i) => _tblRow(_T3_DENSE(i), OP, IP, IM));
+const _sparseRows = (OP, IP, IM) =>
+  _T3_SPARSE.map(T3 => _tblRow(T3, OP, IP, IM));
+
+const UNMAPPED_MAPPING_TABLES = {
   7: [
-    ...Array.from({length:17}, (_,i) => _tblRow(500+i*10, 0.85, 0.25, 0.58)),  // 500–660
+    // BRNDMD 7 unmapped: φ_OP held flat at 0.80 across the entire T3
+    // window; IP=0, IM=0.51 every row.
+    ..._denseRows (0.80, 0.0, 0.51),
+    ..._sparseRows(0.80, 0.0, 0.51),
+  ],
+  6: [
+    ..._denseRows (0.70, 1.0, 0.51),
+    ..._sparseRows(0.70, 1.0, 0.51),
+  ],
+  4: [
+    ..._denseRows (0.70, 2.0, 0.43),
+    ..._sparseRows(0.70, 2.0, 0.43),
+  ],
+  2: [
+    ..._denseRows (0.85, 5.3, 0.0),
+    ..._sparseRows(0.85, 5.3, 0.0),
+  ],
+};
+
+const MAPPED_MAPPING_TABLES = {
+  7: [
+    // BRNDMD 7 mapped: φ_OP=0.85 for T3 ≤ 660, then 0.75/0.65/0.55/0.45
+    // at 670/680/690/700+. IP=0.25 throughout. IM=0.58 for T3 ≤ 680,
+    // 0.575 at 690, 0.57 for T3 ≥ 700.
+    ...Array.from({length: 17}, (_, i) => _tblRow(500 + i*10, 0.85, 0.25, 0.58)),  // 500–660
     _tblRow(670, 0.75, 0.25, 0.58),
     _tblRow(680, 0.65, 0.25, 0.58),
     _tblRow(690, 0.55, 0.25, 0.575),
@@ -68,24 +111,29 @@ const DEFAULT_MAPPING_TABLES = {
     _tblRow(850, 0.45, 0.25, 0.57),
   ],
   6: [
-    ...Array.from({length:21}, (_,i) => _tblRow(500+i*10, 0.7, 1.2, 0.47)),    // 500–700
-    _tblRow(750, 0.7, 1.2, 0.47),
-    _tblRow(800, 0.7, 1.2, 0.47),
-    _tblRow(850, 0.7, 1.2, 0.47),
+    // BRNDMD 6 mapped: IP=1.2 for T3 ≤ 670, IP=1.0 for T3 ≥ 680.
+    ...Array.from({length: 18}, (_, i) => _tblRow(500 + i*10, 0.70, 1.2, 0.51)),   // 500–670
+    _tblRow(680, 0.70, 1.0, 0.51),
+    _tblRow(690, 0.70, 1.0, 0.51),
+    _tblRow(700, 0.70, 1.0, 0.51),
+    _tblRow(750, 0.70, 1.0, 0.51),
+    _tblRow(800, 0.70, 1.0, 0.51),
+    _tblRow(850, 0.70, 1.0, 0.51),
   ],
   4: [
-    ...Array.from({length:21}, (_,i) => _tblRow(500+i*10, 0.7, 2.0, 0.43)),    // 500–700
-    _tblRow(750, 0.7, 2.0, 0.43),
-    _tblRow(800, 0.7, 2.0, 0.43),
-    _tblRow(850, 0.7, 2.0, 0.43),
+    ..._denseRows (0.70, 2.0, 0.43),
+    ..._sparseRows(0.70, 2.0, 0.43),
   ],
   2: [
-    ...Array.from({length:21}, (_,i) => _tblRow(500+i*10, 0.85, 5.3, 0.0)),    // 500–700
-    _tblRow(750, 0.85, 5.3, 0.0),
-    _tblRow(800, 0.85, 5.3, 0.0),
-    _tblRow(850, 0.85, 5.3, 0.0),
+    ..._denseRows (0.85, 5.3, 0.0),
+    ..._sparseRows(0.85, 5.3, 0.0),
   ],
 };
+
+// First-load seed for fresh sessions = UNMAPPED. Existing call sites
+// importing DEFAULT_MAPPING_TABLES keep working unchanged. Users with
+// localStorage edits are unaffected (the seed only fires on first load).
+const DEFAULT_MAPPING_TABLES = UNMAPPED_MAPPING_TABLES;
 
 // Linear interpolation of {OP, IP, IM} at T3 through a sorted mapping table.
 // Clamps to first/last row if T3 is outside the table range.
@@ -1566,7 +1614,7 @@ function HelpModal({show,onClose}){if(!show)return null;
 
       {_sub("🎯 Combustor Mapping (LMS100 only)")}
       <p>4-circuit DLE correlation: per-circuit T_AFT (complete-combustion solve) plus a linear-anchored emissions / dynamics model centered on the LMS100 design point. <strong>Inputs</strong>: W36/W3 ratio, per-circuit air fractions (IP/OP/IM/OM), per-circuit φ (IP/OP/IM — OM is the residual). <strong>Outputs</strong>: NOx15, CO15, PX36_SEL, PX36_SEL_HI, plus stage-by-stage diagnostics (linear → φ_OP mult → P3 scaling).</p>
-      <p><strong>Mapping Tables</strong> — editable φ-vs-T3 lookups for BRNDMD ∈ {"{2, 4, 6, 7}"}. Edits persist via localStorage; the <strong>Reset</strong> button restores factory defaults. Used to seed circuit φ inputs as ambient changes.</p>
+      <p><strong>Mapping Tables</strong> — editable φ-vs-T3 lookups for BRNDMD ∈ {"{2, 4, 6, 7}"}. Edits persist via localStorage. The <strong>Reset</strong> button is a bimodal switch between two named presets — <strong>UNMAPPED</strong> (raw factory lookups, the default seed for fresh sessions) and <strong>MAPPED</strong> (rig-calibrated lookups). The button label flips after each click to show which preset will load on the next click. <strong>Export to Excel</strong> writes the four BRNDMD lookups in their current state to a standalone .xlsx. Used to seed circuit φ inputs as ambient changes.</p>
       <p><strong>Emissions Transfer Function</strong> — per-BRNDMD post-multipliers on NOx, CO, and PX36_SEL. Trim knob; defaults to 1.0. Persists.</p>
       <p><strong>Live Mapping</strong> — real-time HMI-style trace dashboard. <strong>▶ Start</strong> begins a 1 Hz recording for up to 10 minutes. Six charts (PX36_SEL, PX36_SEL_HI, NOx15, CO15, MWI, MW Net) with sensor-realistic noise + first-order lag (each metric has its own deadtime and time constant). Per-chart <strong>y-axis Min/Max</strong> inputs persist; auto-extend if data exceeds your bounds.</p>
       <p style={{paddingLeft:14,borderLeft:`2px solid ${C.txtMuted}50`,fontSize:11,color:C.txtMuted}}>The Live Mapping plays out a stochastic plant model under the hood: PX36 spikes &gt; 5.5 trigger a 3-cycle protection sequence (BD4→BD6→BD7); rare φ_IP/φ_OP excursions trigger a full engine trip with a 4-hour lockout banner and a Reset button. Toggling Emissions Mode ON during mapping triggers the same staging ladder, ending at BD6 or BD7 depending on load. These behaviors are intentional and not under the operator's direct control — they exist to make the panel feel like a real control room.</p>
@@ -4437,9 +4485,28 @@ function CombustorMappingPanel({
       return next;
     });
   };
+  // ── Bimodal Reset switch ────────────────────────────────────────────
+  // Two named lookup presets — UNMAPPED (raw factory) and MAPPED
+  // (rig-calibrated). The button label always reflects the NEXT action:
+  // initial label = "Reset to Mapped" (because UNMAPPED is the seed
+  // loaded on first launch); each click loads the named preset and
+  // flips the label to the other one. Persisted in localStorage so
+  // the toggle state survives reloads.
+  const [nextResetTarget, setNextResetTarget] = useState(() => {
+    try {
+      const v = localStorage.getItem("ctk_mapping_reset_target");
+      return (v === "unmapped" || v === "mapped") ? v : "mapped";
+    } catch { return "mapped"; }
+  });
   const resetTables = () => {
-    if(typeof window !== "undefined" && window.confirm("Reset ALL mapping tables to factory defaults? Your edits will be lost.")){
-      setMappingTables(JSON.parse(JSON.stringify(DEFAULT_MAPPING_TABLES)));
+    if (typeof window === "undefined") return;
+    const target = nextResetTarget;
+    const table = target === "unmapped" ? UNMAPPED_MAPPING_TABLES : MAPPED_MAPPING_TABLES;
+    if (window.confirm(`Reset ALL mapping tables to ${target.toUpperCase()} values? Your edits will be lost.`)){
+      setMappingTables(JSON.parse(JSON.stringify(table)));
+      const next = target === "unmapped" ? "mapped" : "unmapped";
+      setNextResetTarget(next);
+      try { localStorage.setItem("ctk_mapping_reset_target", next); } catch {}
     }
   };
 
@@ -5338,8 +5405,10 @@ function CombustorMappingPanel({
               style={{padding:"4px 10px",fontSize:10,fontWeight:600,color:C.bg,background:C.accent2,border:`1px solid ${C.accent2}`,borderRadius:4,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
               📥 EXPORT TO EXCEL
             </button>
-            <button onClick={resetTables} style={{padding:"4px 10px",fontSize:10,fontWeight:600,color:C.warm,background:"transparent",border:`1px solid ${C.warm}80`,borderRadius:4,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
-              ↺ RESET TO DEFAULTS
+            <button onClick={resetTables}
+              title={`Click to load the ${nextResetTarget.toUpperCase()} preset. The button label flips after each click — bimodal switch between the raw factory (UNMAPPED) and the rig-calibrated (MAPPED) lookups.`}
+              style={{padding:"4px 10px",fontSize:10,fontWeight:600,color:C.warm,background:"transparent",border:`1px solid ${C.warm}80`,borderRadius:4,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
+              ↺ RESET TO {nextResetTarget.toUpperCase()}
             </button>
           </div>
         </div>
