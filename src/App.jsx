@@ -4443,6 +4443,39 @@ function CombustorMappingPanel({
     }
   };
 
+  // ── Standalone Mapping-Tables-only Excel export ─────────────────────────
+  // Writes a single-sheet workbook with the four BRNDMD lookups in their
+  // current edited state, rather than dragging in the full multi-sheet
+  // CombustionReport. Uses the same column layout as the big workbook's
+  // "Mapping Tables" sheet so a side-by-side comparison still lines up.
+  // Honors the current units context — SI exports T3 in K, ENG keeps °F.
+  const exportMappingTables = () => {
+    if (!mappingTables) return;
+    const u = units === "SI" ? "SI" : "ENG";
+    const _t3Header = u === "SI" ? "T3 (K)" : "T3 (°F)";
+    const _t3Conv   = u === "SI"
+      ? (F => +(((+F - 32) * 5/9 + 273.15).toFixed(2)))
+      : (F => +(+F).toFixed(1));
+    const sM = [
+      ["═══ COMBUSTOR MAPPING TABLES — φ lookup by T3 × BRNDMD ═══"],
+      ["BRNDMD = burner mode (7=full DLE, 6=trans, 4=part-load, 2=startup)"],
+      ["Generated: " + new Date().toISOString().slice(0, 16)],
+      [],
+      ["BRNDMD", _t3Header, "φ_OuterPilot", "φ_InnerPilot", "φ_InnerMain"],
+    ];
+    for (const k of [7, 6, 4, 2]){
+      const rows = mappingTables[k] || [];
+      for (const r of rows) sM.push([k, _t3Conv(r.T3), +r.OP, +r.IP, +r.IM]);
+      sM.push([]);
+    }
+    const wb  = XLSX.utils.book_new();
+    const wsM = XLSX.utils.aoa_to_sheet(sM);
+    wsM["!cols"] = [{wch:10},{wch:12},{wch:16},{wch:16},{wch:16}];
+    XLSX.utils.book_append_sheet(wb, wsM, "Mapping Tables");
+    const suffix = u === "SI" ? "SI" : "English";
+    XLSX.writeFile(wb, `ProReadyEngineer_MappingTables_${suffix}.xlsx`);
+  };
+
   // ── Cycle-provided state ─────────────────────────────────────────────────
   const T3=cycleResult?.T3_K||300;
   const P3_bar=cycleResult?.P3_bar||1;
@@ -5299,9 +5332,16 @@ function CombustorMappingPanel({
 
         <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10,color:C.txtMuted,fontFamily:"monospace",gap:10}}>
           <span>Edits persist across page reloads (localStorage). Card 2 φ inputs auto-fill from the active lookup; linear interpolation between rows.</span>
-          <button onClick={resetTables} style={{padding:"4px 10px",fontSize:10,fontWeight:600,color:C.warm,background:"transparent",border:`1px solid ${C.warm}80`,borderRadius:4,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
-            ↺ RESET TO DEFAULTS
-          </button>
+          <div style={{display:"flex",gap:6,flexShrink:0}}>
+            <button onClick={exportMappingTables}
+              title="Export the four BRNDMD lookup tables to a standalone .xlsx — current edits included, T3 in the active unit system."
+              style={{padding:"4px 10px",fontSize:10,fontWeight:600,color:C.bg,background:C.accent2,border:`1px solid ${C.accent2}`,borderRadius:4,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
+              📥 EXPORT TO EXCEL
+            </button>
+            <button onClick={resetTables} style={{padding:"4px 10px",fontSize:10,fontWeight:600,color:C.warm,background:"transparent",border:`1px solid ${C.warm}80`,borderRadius:4,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
+              ↺ RESET TO DEFAULTS
+            </button>
+          </div>
         </div>
       </div>
 
