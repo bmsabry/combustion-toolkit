@@ -2444,7 +2444,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
     </>}
   </div>);}
 
-function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,combMode,setCombMode}){
+function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,combMode,setCombMode}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   const Tair=T0;
@@ -2474,6 +2474,91 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
   };
   const rO2=accurate&&bkO2.data?adaptEx(bkO2.data):localRO2;
   const rCO2=accurate&&bkCO2.data?adaptEx(bkCO2.data):localRCO2;
+
+  // ── Slip correction (CO + UHC → combustion efficiency η_c) ─────────
+  // Energy-loss formula:
+  //   η_c = 1 − (N_dry/fuel) · (X_CO·LHV_CO + X_UHC·LHV_CH4) / LHV_fuel,molar
+  // where X_i are mole fractions in dry exhaust on the ACTUAL O₂ basis
+  // (NOT 15% O₂ corrected) — caller supplies ppmvd directly.
+  // Burn-side products are kept (they match the measured O₂/CO₂); only
+  // φ / FAR / AFR / T_ad are remapped to the fed-side via η_c. T_ad,fed
+  // comes from a fresh adiabatic HP equilibrium at φ_fed (computed below).
+  const LHV_CO_kJmol  = 282.99;
+  const LHV_CH4_kJmol = 802.31;
+  const fp = useMemo(() => calcFuelProps(fuel, ox, Tfuel), [fuel, ox, Tfuel]);
+  const LHV_fuel_kJmol = (fp.LHV_mass || 0) * (fp.MW_fuel || 0);   // MJ/kg · g/mol = kJ/mol
+  // Per-fuel-mole carbon count in the inlet fuel — used to convert exhaust
+  // mole fractions to "moles per mole fuel" via carbon atom balance.
+  // Each fuel species: SP[sp].C carbons per molecule. Inert / non-carbon
+  // fuel components (H₂, N₂, etc.) contribute 0.
+  const nC_fuel = useMemo(() => {
+    let n = 0; const tot = Object.values(fuel).reduce((a,b)=>a+b,0) || 1;
+    for (const [sp, x] of Object.entries(fuel)){
+      const C = SP[sp]?.C || 0;
+      n += (x / tot) * C;
+    }
+    return n;
+  }, [fuel]);
+  // Compute η_c, φ_fed, FAR_fed, AFR_fed for one inversion result. Returns
+  // {eta_c, phi_fed, FAR_fed, AFR_fed, slipActive}. Pass an `r` of the same
+  // shape adaptEx returns: {phi, FAR_mass, AFR_mass, products: {sp: pct}}.
+  const computeSlipCorrection = (r) => {
+    if (!r) return {eta_c: 1, phi_fed: r?.phi, FAR_fed: r?.FAR_mass, AFR_fed: r?.AFR_mass, slipActive: false};
+    const co_ppm  = Math.max(0, +measCO  || 0);
+    const uhc_ppm = Math.max(0, +measUHC || 0);
+    if (co_ppm === 0 && uhc_ppm === 0){
+      return {eta_c: 1, phi_fed: r.phi, FAR_fed: r.FAR_mass, AFR_fed: r.AFR_mass, slipActive: false};
+    }
+    if (!nC_fuel || !LHV_fuel_kJmol){
+      // Pure-H₂ or zero-LHV fuel — slip-correction undefined; bypass.
+      return {eta_c: 1, phi_fed: r.phi, FAR_fed: r.FAR_mass, AFR_fed: r.AFR_mass, slipActive: false};
+    }
+    // products are stored as percent; convert back to mole fractions.
+    const products = r.products || {};
+    let X_C_total = 0;   // sum of carbon-bearing product mole fractions × n_C
+    for (const [sp, pct] of Object.entries(products)){
+      const C = SP[sp]?.C || 0;
+      if (C > 0) X_C_total += (pct / 100) * C;
+    }
+    if (X_C_total <= 0){
+      return {eta_c: 1, phi_fed: r.phi, FAR_fed: r.FAR_mass, AFR_fed: r.AFR_mass, slipActive: false};
+    }
+    // Atom balance: total moles of products / mole fuel = n_C_fuel / X_C_total
+    const N_total_per_fuel = nC_fuel / X_C_total;
+    const X_H2O_wet = (products.H2O || 0) / 100;
+    const N_dry_per_fuel = N_total_per_fuel * (1 - X_H2O_wet);
+    // Energy lost per mole of fuel fed (kJ/mol):
+    //   N_dry/fuel  ·  ppmvd · 1e-6  ·  LHV_species_molar
+    const E_loss = N_dry_per_fuel * 1e-6 * (co_ppm * LHV_CO_kJmol + uhc_ppm * LHV_CH4_kJmol);
+    const eta_c = Math.max(0.01, Math.min(1, 1 - E_loss / LHV_fuel_kJmol));
+    return {
+      eta_c,
+      phi_fed: r.phi / eta_c,
+      FAR_fed: r.FAR_mass / eta_c,
+      AFR_fed: r.AFR_mass * eta_c,
+      slipActive: true,
+    };
+  };
+  const slipO2  = useMemo(() => computeSlipCorrection(rO2),
+    [rO2, measCO, measUHC, nC_fuel, LHV_fuel_kJmol]);
+  const slipCO2 = useMemo(() => computeSlipCorrection(rCO2),
+    [rCO2, measCO, measUHC, nC_fuel, LHV_fuel_kJmol]);
+
+  // Fresh adiabatic HP equilibrium at φ_fed for the fed-side flame T.
+  // Free-mode: local calcAFT_EQ. Accurate-mode: a second /calc/aft call,
+  // gated on slip being active so we don't fire unnecessary HTTP calls
+  // when CO == UHC == 0 (the no-op path).
+  const T_mix_fed_O2  = useMemo(() => mixT(fuel, ox, slipO2.phi_fed  || 0.6, Tfuel, Tair), [fuel, ox, slipO2.phi_fed,  Tfuel, Tair]);
+  const T_mix_fed_CO2 = useMemo(() => mixT(fuel, ox, slipCO2.phi_fed || 0.6, Tfuel, Tair), [fuel, ox, slipCO2.phi_fed, Tfuel, Tair]);
+  const localFedO2  = useMemo(() => slipO2.slipActive  && Number.isFinite(slipO2.phi_fed)  ? calcAFT_EQ(fuel, ox, slipO2.phi_fed,  T_mix_fed_O2,  P) : null, [fuel, ox, slipO2.phi_fed,  T_mix_fed_O2,  P, slipO2.slipActive]);
+  const localFedCO2 = useMemo(() => slipCO2.slipActive && Number.isFinite(slipCO2.phi_fed) ? calcAFT_EQ(fuel, ox, slipCO2.phi_fed, T_mix_fed_CO2, P) : null, [fuel, ox, slipCO2.phi_fed, T_mix_fed_CO2, P, slipCO2.slipActive]);
+  const bkFedO2  = useBackendCalc("aft", {fuel: nonzero(fuel), oxidizer: nonzero(ox), phi: slipO2.phi_fed  || 0.5, T0: T_mix_fed_O2,  P: atmToBar(P), mode: "adiabatic", heat_loss_fraction: 0, T_fuel_K: Tfuel, T_air_K: Tair, WFR, water_mode: waterMode}, accurate && slipO2.slipActive  && Number.isFinite(slipO2.phi_fed));
+  const bkFedCO2 = useBackendCalc("aft", {fuel: nonzero(fuel), oxidizer: nonzero(ox), phi: slipCO2.phi_fed || 0.5, T0: T_mix_fed_CO2, P: atmToBar(P), mode: "adiabatic", heat_loss_fraction: 0, T_fuel_K: Tfuel, T_air_K: Tair, WFR, water_mode: waterMode}, accurate && slipCO2.slipActive && Number.isFinite(slipCO2.phi_fed));
+  // Resolve T_ad,fed: backend T_ad in Accurate mode if available, else local.
+  // Falls back to the burn-side T_ad when slip is not active (the "displayed
+  // flame T" stays equal to today's value).
+  const T_ad_fed_O2  = !slipO2.slipActive  ? rO2?.T_ad  : (accurate && bkFedO2.data?.T_ad)  ? bkFedO2.data.T_ad  : (localFedO2?.T_ad  ?? rO2?.T_ad);
+  const T_ad_fed_CO2 = !slipCO2.slipActive ? rCO2?.T_ad : (accurate && bkFedCO2.data?.T_ad) ? bkFedCO2.data.T_ad : (localFedCO2?.T_ad ?? rCO2?.T_ad);
   const o2Sweep=useMemo(()=>{const r=[];for(let o2=0.5;o2<=15;o2+=0.5){const Tm0=mixT(fuel,ox,0.6,Tfuel,Tair);const res0=calcExhaustFromO2(fuel,ox,o2,Tm0,P,combMode);const Tm1=mixT(fuel,ox,res0.phi,Tfuel,Tair);const res=calcExhaustFromO2(fuel,ox,o2,Tm1,P,combMode);r.push({O2:o2,T_ad:uv(units,"T",res.T_ad),phi:res.phi});}return r;},[fuel,ox,Tfuel,Tair,P,combMode,units]);
   const modeToggle=<div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:5,overflow:"hidden",marginBottom:10}}>
     {["complete","equilibrium"].map(m=><button key={m} onClick={()=>setCombMode(m)} style={{padding:"6px 12px",fontSize:10.5,fontWeight:combMode===m?700:400,color:combMode===m?C.bg:C.txtDim,background:combMode===m?C.accent:"transparent",border:"none",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",transition:"all .15s"}}>{m==="complete"?"Complete Combustion":"Chemical Equilibrium"}</button>)}
@@ -2483,6 +2568,50 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
     <InlineBusyBanner loading={accurate&&(bkO2.loading||bkCO2.loading)}/>
     <HelpBox title="ℹ️ Exhaust Analysis — How It Works"><p style={{margin:"0 0 6px"}}>Enter a <span style={hs.em}>measured exhaust O₂ or CO₂ concentration</span> (dry basis, %) from a stack analyzer or CEMS. The tool iteratively solves for the equivalence ratio (φ) that produces that exhaust composition.</p><p style={{margin:"0 0 6px"}}>Two inversions are shown side-by-side: <span style={hs.em}>Complete Combustion</span> (no dissociation — all C → CO₂, all H → H₂O) and <span style={hs.em}>Chemical Equilibrium</span> (Cantera full-Gibbs, includes CO, OH, NO at high T).</p><p style={{margin:0}}><span style={hs.warn}>Which to use:</span> Pick <strong style={{color:C.orange}}>Complete Combustion</strong> for <strong>stack measurements</strong> (gas has cooled, dissociation products recombined). Also pick it for <strong>combustor-exit measurements</strong> unless <em>combustor_air_frac = 1</em> (no dilution). The lower combustor_air_frac drops below 1, the better complete combustion represents reality. Use <strong style={{color:C.accent}}>Equilibrium</strong> only for in-flame readings at the primary zone with no dilution.</p></HelpBox>
     {accurate?null:modeToggle}
+    {/* ── Optional slip measurements (CO + UHC) ────────────────────────
+        When non-zero, the Chemical Equilibrium card below reports
+        combustion efficiency η_c and the FED-side φ / FAR / AFR / flame T
+        (corrected for the unburned mass that walked through). At zero
+        the panel behaves exactly as before — η_c = 1, no correction. */}
+    <div style={{padding:"10px 14px",background:`${C.violet}0A`,
+      border:`1px solid ${C.violet}30`,borderRadius:6,
+      display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+      <div style={{fontSize:10,fontWeight:700,color:C.violet,
+        textTransform:"uppercase",letterSpacing:"1.2px",
+        fontFamily:"'Barlow Condensed',sans-serif"}}>
+        Optional slip measurements
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:6}}>
+        <Tip text="Measured CO concentration in exhaust (dry, on the actual O₂ basis — NOT 15% O₂ corrected). Set to zero if not measured. Used in the energy-loss formula to compute combustion efficiency η_c.">
+          <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
+            Measured CO (ppmvd dry, actual) ⓘ:
+          </label>
+        </Tip>
+        <NumField value={measCO} decimals={1}
+          onCommit={v=>setMeasCO(Math.max(0,+v))}
+          style={{width:80,padding:"4px 6px",fontFamily:"monospace",
+            color:C.violet,fontSize:12,fontWeight:700,background:C.bg,
+            border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center"}}/>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:6}}>
+        <Tip text="Measured unburned hydrocarbons in exhaust, expressed as ppmvd CH₄ (dry, actual O₂ basis — NOT 15% O₂ corrected). Speciated FTIR readings should be totaled and reported on a CH₄ basis. Used in the energy-loss formula via LHV_CH₄ = 802.31 kJ/mol.">
+          <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
+            Measured UHC as CH₄ (ppmvd dry, actual) ⓘ:
+          </label>
+        </Tip>
+        <NumField value={measUHC} decimals={1}
+          onCommit={v=>setMeasUHC(Math.max(0,+v))}
+          style={{width:80,padding:"4px 6px",fontFamily:"monospace",
+            color:C.violet,fontSize:12,fontWeight:700,background:C.bg,
+            border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center"}}/>
+      </div>
+      <div style={{flex:"1 1 100%",fontSize:10,color:C.txtMuted,
+        fontFamily:"'Barlow',sans-serif",lineHeight:1.45,fontStyle:"italic"}}>
+        Set to zero if not measured. When &gt; 0: Chemical Equilibrium card reports η_c and the
+        FED-side φ / FAR / AFR (corrected for slip), plus a fresh equilibrium flame T at φ_fed.
+        Complete Combustion card is unaffected (slip not modeled by definition).
+      </div>
+    </div>
     {/* ============== FROM MEASURED O2 ============== */}
     <div style={S.card}>
       <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured O₂ (% dry) {status(bkO2)}</div>
@@ -2502,7 +2631,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
       </div>
       <div style={{display:"grid",gridTemplateColumns:accurate&&rO2.cc?"1fr 1fr":"1fr",gap:12}}>
         {accurate&&rO2.cc?<div style={{padding:12,background:`${C.orange}0A`,border:`1px solid ${C.orange}40`,borderRadius:6}}>
-          <div style={{fontSize:11,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Complete Combustion <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— stack / diluted-exit readings</span></div>
+          <div style={{fontSize:11,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Complete Combustion <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— stack / diluted-exit readings · slip not modeled (see Chemical Equilibrium for fed-side η_c)</span></div>
           <div style={{...S.row,gap:6}}>
             <M l="phi" v={rO2.cc.phi.toFixed(3)} u="—" c={C.orange} tip="Inverted assuming no dissociation."/>
             <M l="Flame Temperature" v={uv(units,"T",rO2.cc.T_ad).toFixed(0)} u={uu(units,"T")} c={C.orange} tip="T_ad under the complete-combustion assumption."/>
@@ -2517,15 +2646,19 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
           </div>}
         </div>:null}
         <div style={{padding:12,background:`${C.accent}0A`,border:`1px solid ${C.accent}40`,borderRadius:6}}>
-          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1</span></div>
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1{slipO2.slipActive?` · slip-corrected (η_c = ${(slipO2.eta_c*100).toFixed(2)}%)`:""}</span></div>
           <div style={{...S.row,gap:6}}>
-            <M l="phi" v={rO2.phi.toFixed(3)} u="—" c={C.accent} tip="Inverted using full Cantera HP equilibrium (includes CO, OH, NO dissociation)."/>
-            <M l="Flame Temperature" v={uv(units,"T",rO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="T_ad under the full-equilibrium assumption."/>
-            <M l="Fuel/Air (mass)" v={rO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip="Fuel/air mass ratio from equilibrium inversion."/>
-            <M l="Air/Fuel (mass)" v={(1/(rO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip="Air/fuel mass ratio."/>
+            <M l="phi" v={(slipO2.phi_fed||rO2.phi).toFixed(3)} u="—" c={C.accent} tip={slipO2.slipActive?"Fed-side equivalence ratio φ_fed = φ_burn / η_c. Reflects the actual fuel that was metered to the combustor (some of which slipped through unburned).":"Inverted using full Cantera HP equilibrium (includes CO, OH, NO dissociation)."}/>
+            <M l="Flame Temperature" v={uv(units,"T",T_ad_fed_O2||rO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip={slipO2.slipActive?"Adiabatic equilibrium flame T re-computed at φ_fed (the actual fed condition). Cantera HP equilibrium in Accurate mode, JS calcAFT_EQ in Free mode.":"T_ad under the full-equilibrium assumption."}/>
+            <M l="Fuel/Air (mass)" v={(slipO2.FAR_fed||rO2.FAR_mass).toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip={slipO2.slipActive?"Fed-side fuel/air mass ratio (= burn-side / η_c).":"Fuel/air mass ratio from equilibrium inversion."}/>
+            <M l="Air/Fuel (mass)" v={(slipO2.slipActive?slipO2.AFR_fed:1/(rO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip={slipO2.slipActive?"Fed-side air/fuel mass ratio (= burn-side × η_c).":"Air/fuel mass ratio."}/>
+            {slipO2.slipActive&&<M l="η_c" v={(slipO2.eta_c*100).toFixed(2)} u="%" c={C.violet} tip="Combustion efficiency from CO/UHC slip energy-loss formula. η_c = 1 − (N_dry/fuel) × (X_CO·LHV_CO + X_UHC·LHV_CH4) / LHV_fuel."/>}
           </div>
+          {slipO2.slipActive&&<div style={{marginTop:6,padding:"5px 8px",background:`${C.violet}10`,border:`1px solid ${C.violet}30`,borderRadius:4,fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.4}}>
+            η_c = {(slipO2.eta_c*100).toFixed(2)}% — values shown are <strong style={{color:C.violet}}>fed-side</strong>. Burn-side (matches measured O₂ exactly): φ = {rO2.phi.toFixed(3)}, T_ad = {uv(units,"T",rO2.T_ad).toFixed(0)} {uu(units,"T")}.
+          </div>}
           {rO2.products&&<div style={{marginTop:10}}>
-            <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis</div>
+            <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis <span style={{fontSize:8.5,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>(burn-side; matches measured O₂)</span></div>
             <HBar data={rO2.products} h={Math.max(100,Object.keys(rO2.products).length*20+8)} w={380}/>
             <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
             <HBar data={dryBasis(rO2.products)} h={Math.max(90,Math.max(0,Object.keys(rO2.products).length-1)*20+8)} w={380}/>
@@ -2553,7 +2686,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
       </div>
       <div style={{display:"grid",gridTemplateColumns:accurate&&rCO2.cc?"1fr 1fr":"1fr",gap:12}}>
         {accurate&&rCO2.cc?<div style={{padding:12,background:`${C.orange}0A`,border:`1px solid ${C.orange}40`,borderRadius:6}}>
-          <div style={{fontSize:11,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Complete Combustion <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— stack / diluted-exit readings</span></div>
+          <div style={{fontSize:11,fontWeight:700,color:C.orange,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Complete Combustion <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— stack / diluted-exit readings · slip not modeled (see Chemical Equilibrium for fed-side η_c)</span></div>
           <div style={{...S.row,gap:6}}>
             <M l="phi" v={rCO2.cc.phi.toFixed(3)} u="—" c={C.orange} tip="Inverted assuming no dissociation."/>
             <M l="Flame Temperature" v={uv(units,"T",rCO2.cc.T_ad).toFixed(0)} u={uu(units,"T")} c={C.orange} tip="T_ad under the complete-combustion assumption."/>
@@ -2568,15 +2701,19 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
           </div>}
         </div>:null}
         <div style={{padding:12,background:`${C.accent}0A`,border:`1px solid ${C.accent}40`,borderRadius:6}}>
-          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1</span></div>
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1{slipCO2.slipActive?` · slip-corrected (η_c = ${(slipCO2.eta_c*100).toFixed(2)}%)`:""}</span></div>
           <div style={{...S.row,gap:6}}>
-            <M l="phi" v={rCO2.phi.toFixed(3)} u="—" c={C.accent} tip="Inverted using full Cantera HP equilibrium."/>
-            <M l="Flame Temperature" v={uv(units,"T",rCO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip="T_ad under the full-equilibrium assumption."/>
-            <M l="Fuel/Air (mass)" v={rCO2.FAR_mass.toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip="Fuel/air mass ratio from equilibrium inversion."/>
-            <M l="Air/Fuel (mass)" v={(1/(rCO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip="Air/fuel mass ratio."/>
+            <M l="phi" v={(slipCO2.phi_fed||rCO2.phi).toFixed(3)} u="—" c={C.accent} tip={slipCO2.slipActive?"Fed-side equivalence ratio φ_fed = φ_burn / η_c. Reflects the actual fuel that was metered to the combustor.":"Inverted using full Cantera HP equilibrium."}/>
+            <M l="Flame Temperature" v={uv(units,"T",T_ad_fed_CO2||rCO2.T_ad).toFixed(0)} u={uu(units,"T")} c={C.accent} tip={slipCO2.slipActive?"Adiabatic equilibrium flame T re-computed at φ_fed (the actual fed condition).":"T_ad under the full-equilibrium assumption."}/>
+            <M l="Fuel/Air (mass)" v={(slipCO2.FAR_fed||rCO2.FAR_mass).toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip={slipCO2.slipActive?"Fed-side fuel/air mass ratio (= burn-side / η_c).":"Fuel/air mass ratio from equilibrium inversion."}/>
+            <M l="Air/Fuel (mass)" v={(slipCO2.slipActive?slipCO2.AFR_fed:1/(rCO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip={slipCO2.slipActive?"Fed-side air/fuel mass ratio (= burn-side × η_c).":"Air/fuel mass ratio."}/>
+            {slipCO2.slipActive&&<M l="η_c" v={(slipCO2.eta_c*100).toFixed(2)} u="%" c={C.violet} tip="Combustion efficiency from CO/UHC slip energy-loss formula."/>}
           </div>
+          {slipCO2.slipActive&&<div style={{marginTop:6,padding:"5px 8px",background:`${C.violet}10`,border:`1px solid ${C.violet}30`,borderRadius:4,fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.4}}>
+            η_c = {(slipCO2.eta_c*100).toFixed(2)}% — values shown are <strong style={{color:C.violet}}>fed-side</strong>. Burn-side (matches measured CO₂ exactly): φ = {rCO2.phi.toFixed(3)}, T_ad = {uv(units,"T",rCO2.T_ad).toFixed(0)} {uu(units,"T")}.
+          </div>}
           {rCO2.products&&<div style={{marginTop:10}}>
-            <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis</div>
+            <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis <span style={{fontSize:8.5,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>(burn-side; matches measured CO₂)</span></div>
             <HBar data={rCO2.products} h={Math.max(100,Object.keys(rCO2.products).length*20+8)} w={380}/>
             <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",margin:"8px 0 4px"}}>Dry Basis (H₂O removed)</div>
             <HBar data={dryBasis(rCO2.products)} h={Math.max(90,Math.max(0,Object.keys(rCO2.products).length-1)*20+8)} w={380}/>
@@ -9986,6 +10123,17 @@ export default function App(){
   //    circuit φ inputs, bkMap, and Ops Summary NOx/CO all in sync as the
   //    user tweaks sidebar parameters from any tab. ───────────────────────
   const[measO2,setMeasO2]=useState(14.0);const[measCO2,setMeasCO2]=useState(3.0);
+  // ── Exhaust slip measurements (CO + UHC) ─────────────────────────────
+  // Optional. When non-zero, the Chemical Equilibrium card on the Exhaust
+  // panel computes a combustion efficiency η_c via the energy-loss formula
+  //   η_c = 1 − N_dry/fuel · (X_CO·LHV_CO + X_UHC·LHV_CH4) / LHV_fuel,molar
+  // and reports fed-side φ / FAR / AFR (= burn-side / η_c) along with the
+  // fed-side flame T re-computed at φ_fed via Cantera HP equilibrium.
+  // Defaults are zero — the panel behaves identically to the no-slip case
+  // until the user enters values. UHC is reported as ppmvd "as CH₄" on the
+  // actual-O₂ basis (NOT 15% O₂ corrected); CO same.
+  const[measCO,setMeasCO]=useState(0);
+  const[measUHC,setMeasUHC]=useState(0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
   const[showPricing,setShowPricing]=useState(false);
@@ -10734,7 +10882,7 @@ export default function App(){
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}
               psrActive={psrActive} setPsrActive={setPsrActive}
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
-            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} combMode={combMode} setCombMode={setCombMode}/>}
+            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} combMode={combMode} setCombMode={setCombMode}/>}
             {/* AutomatePanel is always mounted (just hidden when not the
                 active tab) so an in-progress run, captured results, the
                 wizard state, and the Plot Data panel survive tab switches.
