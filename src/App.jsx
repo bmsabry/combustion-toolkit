@@ -9619,20 +9619,26 @@ function AutomatePanel(props){
               {/* Cols 3–6 — Min / Max / Step / pts (range mode) OR list input spanning all four */}
               {mode === "range" && !isEnum && (
                 <>
-                  <NumLabel l={`Min (${dispUnit})`}>
+                  {/* Numeric columns: right-align both label and value so
+                      they pair vertically (label sits above the digits,
+                      not dangling at the empty left edge of the column). */}
+                  <NumLabel l={`Min (${dispUnit})`} align="right">
                     <NumField value={dispMin} decimals={4}
                       onCommit={v => updateVarSpec(vid, {min: toSi(def, +v, units)})}
-                      style={{...S.inp, width:"100%"}}/>
+                      style={{...S.inp, width:"100%", textAlign:"right",
+                        fontVariantNumeric:"tabular-nums"}}/>
                   </NumLabel>
-                  <NumLabel l={`Max (${dispUnit})`}>
+                  <NumLabel l={`Max (${dispUnit})`} align="right">
                     <NumField value={dispMax} decimals={4}
                       onCommit={v => updateVarSpec(vid, {max: toSi(def, +v, units)})}
-                      style={{...S.inp, width:"100%"}}/>
+                      style={{...S.inp, width:"100%", textAlign:"right",
+                        fontVariantNumeric:"tabular-nums"}}/>
                   </NumLabel>
-                  <NumLabel l={`Step (${dispUnit})`}>
+                  <NumLabel l={`Step (${dispUnit})`} align="right">
                     <NumField value={dispStep} decimals={4}
                       onCommit={v => updateVarSpec(vid, {step: toSiDelta(def, +v, units)})}
-                      style={{...S.inp, width:"100%"}}/>
+                      style={{...S.inp, width:"100%", textAlign:"right",
+                        fontVariantNumeric:"tabular-nums"}}/>
                   </NumLabel>
                   <span style={{fontSize:10, color:C.txtMuted, fontFamily:"monospace",
                     textAlign:"right", paddingBottom:6}}>
@@ -9992,9 +9998,12 @@ function previewCellStyle(){return{
   textAlign:"right",
   fontVariantNumeric:"tabular-nums",
 };}
-function NumLabel({l, children}){
+// align="right" flips the small caption to right-align — used on the
+// DOE Min/Max/Step rows so the label sits directly above the numeric
+// value rather than dangling at the column's left edge.
+function NumLabel({l, children, align="left"}){
   return(<div style={{display:"flex",flexDirection:"column",gap:1}}>
-    <div style={{fontSize:8.5, color:C.txtMuted, textTransform:"uppercase", letterSpacing:".5px"}}>{l}</div>
+    <div style={{fontSize:8.5, color:C.txtMuted, textTransform:"uppercase", letterSpacing:".5px", textAlign:align}}>{l}</div>
     {children}
   </div>);
 }
