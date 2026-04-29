@@ -1411,7 +1411,21 @@ function brBandsFromSweep(sweepData){
   if(tint) out.push({ x0: segStart, x1: pts[pts.length-1].load, color: tint, br: curBR });
   return out;
 }
-const hs={box:{fontSize:10.5,lineHeight:1.55,color:C.txtDim,padding:"10px 12px",background:`${C.accent}08`,border:`1px solid ${C.accent}18`,borderRadius:6,marginBottom:10,fontFamily:"'Barlow',sans-serif"},em:{color:C.accent,fontWeight:600},warn:{color:C.accent2,fontWeight:600}};
+// ── Theme-reactive style objects ────────────────────────────────────────
+// hs.box / hs.em / hs.warn embed alpha tints of C.accent etc. via template
+// literals. If we built them at module load with `const hs = {...}`, the
+// substitutions would resolve to FROZEN strings ("#2DD4BF08", etc.) and
+// the styles would keep the boot-time theme forever — that's why dark
+// mode looked broken (cards still carried light-theme backgrounds after
+// toggling). Wrap in a Proxy backed by a builder that re-runs whenever
+// _activeC changes; cache by reference so we don't allocate on every read.
+let _hsCache=null,_hsCacheFor=null;
+function _buildHs(){return{
+  box:{fontSize:10.5,lineHeight:1.55,color:C.txtDim,padding:"10px 12px",background:`${C.accent}08`,border:`1px solid ${C.accent}18`,borderRadius:6,marginBottom:10,fontFamily:"'Barlow',sans-serif"},
+  em:{color:C.accent,fontWeight:600},
+  warn:{color:C.accent2,fontWeight:600},
+};}
+const hs=new Proxy({},{get(_,key){if(_hsCacheFor!==_activeC){_hsCache=_buildHs();_hsCacheFor=_activeC;}return _hsCache[key];}});
 
 // ── Help Components ──
 // LinkChip — sidebar status indicator for "this value is following the Cycle".
@@ -1458,7 +1472,20 @@ function CompEditor({title,comp,setComp,presets,speciesList,accent,helpText,init
       <div style={{marginTop:5,fontSize:10,fontFamily:"monospace",color:Math.abs(total-100)<0.1?C.good:C.accent2,textAlign:"right"}}>Σ={total.toFixed(1)}%{Math.abs(total-100)>0.1?" ⚠ Must sum to 100%":""}</div>
     </div>}</div>);}
 
-const S={sel:{width:"100%",padding:"6px 7px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:4,color:C.txt,fontSize:11.5,fontFamily:"monospace",outline:"none"},inp:{width:"100%",padding:"6px 7px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:4,color:C.txt,fontSize:11.5,fontFamily:"monospace",outline:"none",boxSizing:"border-box"},card:{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:8,padding:"14px 16px",marginBottom:12},cardT:{fontSize:9.5,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:10},row:{display:"flex",gap:8,flexWrap:"wrap"}};
+// Same theme-reactivity story as `hs` above — these styles bake in C.bg /
+// C.border / C.txt / C.txtDim / C.bg2 which would otherwise freeze at
+// module load. Wrapping in a Proxy makes S.card / S.sel / S.inp / S.cardT
+// re-resolve on every theme toggle so cards repaint correctly when the
+// user switches between dark and light.
+let _sCache=null,_sCacheFor=null;
+function _buildS(){return{
+  sel:{width:"100%",padding:"6px 7px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:4,color:C.txt,fontSize:11.5,fontFamily:"monospace",outline:"none"},
+  inp:{width:"100%",padding:"6px 7px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:4,color:C.txt,fontSize:11.5,fontFamily:"monospace",outline:"none",boxSizing:"border-box"},
+  card:{background:C.bg2,border:`1px solid ${C.border}`,borderRadius:8,padding:"14px 16px",marginBottom:12},
+  cardT:{fontSize:9.5,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:10},
+  row:{display:"flex",gap:8,flexWrap:"wrap"},
+};}
+const S=new Proxy({},{get(_,key){if(_sCacheFor!==_activeC){_sCache=_buildS();_sCacheFor=_activeC;}return _sCache[key];}});
 
 /* NumField — controlled numeric input that lets the user type freely.
    Internal text state while focused (no mid-typing truncation from parent
