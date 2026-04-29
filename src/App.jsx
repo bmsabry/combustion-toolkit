@@ -9738,8 +9738,8 @@ function AutomatePanel(props){
         <table style={{borderCollapse:"collapse", width:"auto"}}>
           <thead>
             <tr>
-              <th style={previewHeaderStyle}>#</th>
-              {activeVarSpecs.map(s => <th key={s.id} style={previewHeaderStyle}>
+              <th style={previewHeaderStyle()}>#</th>
+              {activeVarSpecs.map(s => <th key={s.id} style={previewHeaderStyle()}>
                 {s.label}{unitFor(s, units) ? ` (${unitFor(s, units)})` : ""}
               </th>)}
             </tr>
@@ -9747,14 +9747,18 @@ function AutomatePanel(props){
           <tbody>
             {matrix.slice(0, 8).map((r, i) => (
               <tr key={i} style={{borderTop:`1px solid ${C.border}40`}}>
-                <td style={{...previewCellStyle, textAlign:"right"}}>{i+1}</td>
-                {activeVarSpecs.map(s => <td key={s.id} style={{...previewCellStyle, textAlign:"right"}}>
+                <td style={previewCellStyle()}>{i+1}</td>
+                {activeVarSpecs.map(s => <td key={s.id} style={previewCellStyle()}>
                   {formatRowValue(toDisplay(s, r[s.id], units), unitFor(s, units), s.label)}
                 </td>)}
               </tr>
             ))}
             {matrix.length > 8 && (
-              <tr><td colSpan={activeVarSpecs.length + 1} style={{...previewCellStyle, color:C.txtMuted, fontStyle:"italic"}}>
+              // Footer line is prose, not a number — left-align it so
+              // it doesn't get visually-glued to the rightmost column.
+              <tr><td colSpan={activeVarSpecs.length + 1}
+                style={{...previewCellStyle(), textAlign:"left",
+                  color:C.txtMuted, fontStyle:"italic", paddingLeft:14}}>
                 … and {matrix.length - 8} more rows
               </td></tr>
             )}
@@ -9961,14 +9965,26 @@ function BaselineMismatchModal({ mismatches, units, onCancel, onProceed }){
   );
 }
 
-// Tiny visual helpers used by AutomatePanel
-const previewHeaderStyle = {
-  textAlign:"left", padding:"4px 6px", fontSize:10, color:C.txtDim,
+// Tiny visual helpers used by AutomatePanel.
+// Functions instead of consts so each render reads the LIVE palette
+// (the const-capture-at-module-load trap is the same one S and hs hit).
+// Headers are right-aligned to match the right-aligned numeric cells —
+// each column header now sits directly above the numbers it labels,
+// instead of hanging at the column's left edge while the data sits
+// at the right. tabular-nums makes thousand-separated numbers like
+// "2,800" align cleanly with bare zeros.
+function previewHeaderStyle(){return{
+  textAlign:"right", padding:"6px 12px", fontSize:10, color:C.txtDim,
   background:C.bg3, position:"sticky", top:0, fontWeight:700,
-};
-const previewCellStyle = {
-  padding:"3px 6px", color:C.txt, whiteSpace:"nowrap",
-};
+  borderBottom:`1px solid ${C.border}`,
+  fontVariantNumeric:"tabular-nums",
+  whiteSpace:"nowrap",
+};}
+function previewCellStyle(){return{
+  padding:"4px 12px", color:C.txt, whiteSpace:"nowrap",
+  textAlign:"right",
+  fontVariantNumeric:"tabular-nums",
+};}
 function NumLabel({l, children}){
   return(<div style={{display:"flex",flexDirection:"column",gap:1}}>
     <div style={{fontSize:8.5, color:C.txtMuted, textTransform:"uppercase", letterSpacing:".5px"}}>{l}</div>
