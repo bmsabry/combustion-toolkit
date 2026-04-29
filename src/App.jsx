@@ -9478,7 +9478,7 @@ function AutomatePanel(props){
                 letterSpacing:".7px", padding:"4px 8px", background:`${C.accent}10`, borderRadius:3}}>
                 {panel}
               </div>
-              <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))", gap:4, padding:4}}>
+              <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(265px,1fr))", gap:4, padding:4}}>
                 {vars.map(v => {
                   const isSel = selectedVarIds.includes(v.id);
                   // Baseline value the runner will use if THIS variable is
@@ -9514,7 +9514,14 @@ function AutomatePanel(props){
                   return(
                     <label key={v.id} title={v.desc ? `${v.desc}\n\nBaseline: ${baseTxt}${u ? ` ${u}` : ""}` : `Baseline: ${baseTxt}`}
                       style={{display:"grid",
-                        gridTemplateColumns:"auto 1fr 78px 56px",
+                        // minmax(0, 1fr) on the label column lets it shrink
+                        // below its content size — without it the label
+                        // refuses to truncate and instead wraps, kicking
+                        // every neighboring card on that grid row to a
+                        // taller height. Slightly tighter value/unit columns
+                        // (74/50 vs 78/56) give labels more headroom so most
+                        // fit without needing the ellipsis at all.
+                        gridTemplateColumns:"auto minmax(0,1fr) 74px 50px",
                         alignItems:"stretch", cursor:"pointer", borderRadius:3,
                         border:`1px solid ${isSel ? C.accent + "60" : C.border + "40"}`,
                         background: isSel ? `${C.accent}10` : "transparent",
@@ -9527,10 +9534,16 @@ function AutomatePanel(props){
                           onChange={() => toggleVar(v.id)}
                           style={{accentColor:C.accent, cursor:"pointer", margin:0}}/>
                       </span>
-                      {/* Cell 2: variable label */}
+                      {/* Cell 2: variable label — truncate with ellipsis
+                          so long labels (Water Injection Mode, Combustor
+                          Heat Loss Fraction) don't wrap and break row
+                          heights. Tooltip on the parent <label> already
+                          shows the full text on hover. */}
                       <span style={{color:C.txt, padding:"4px 6px",
                         borderLeft: cellBorder,
-                        display:"flex", alignItems:"center"}}>
+                        display:"flex", alignItems:"center",
+                        whiteSpace:"nowrap", overflow:"hidden",
+                        textOverflow:"ellipsis", minWidth:0}}>
                         {v.label}
                       </span>
                       {/* Cell 3: baseline value (right-aligned, faint
