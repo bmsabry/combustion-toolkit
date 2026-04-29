@@ -117,6 +117,18 @@ def run(
     X_dry = X_dry / s if s > 0 else X_dry
     dry = {s: float(x) for s, x in zip(gas.species_names, X_dry) if x > 1e-10}
 
+    # ── CRITICAL: snapshot every gas-derived scalar BEFORE the CC inversion
+    # block below runs. complete_combustion.run() calls make_gas_mixed() which
+    # re-uses the SAME pooled `mgm_main` Cantera Solution, mutating its TPX
+    # state on every brentq evaluation. Reading gas.T (or gas.X) AFTER the CC
+    # block returned whatever the last-iteration inlet state happened to be —
+    # showing 600-700 K "flame temperatures" in the UI. Capture these here
+    # while gas is still at the equilibrium state we just produced.
+    T_ad_eq = float(gas.T)
+    O2_pct_dry_eq  = _dry_frac(gas, "O2")  * 100.0
+    CO2_pct_dry_eq = _dry_frac(gas, "CO2") * 100.0
+    H2O_pct_wet_eq = h2o_x * 100.0
+
     # --- Parallel inversion under the complete-combustion assumption -------
     # Measured exhaust gas — if read at the gas turbine STACK or after
     # dilution — has cooled well below any dissociation regime, so CO2, H2O,
@@ -179,13 +191,16 @@ def run(
         "phi": phi,
         "FAR": FAR,
         "AFR": AFR,
-        "T_ad": float(gas.T),
+        # Use the snapshotted values captured pre-CC. Reading `gas.T`
+        # / `_dry_frac(gas, …)` here would pick up the stale post-CC
+        # state of the pooled `mgm_main` Solution (see comment above).
+        "T_ad": T_ad_eq,
         "T_mixed_inlet_K": float(T_mixed),
         "exhaust_composition_wet": wet,
         "exhaust_composition_dry": dry,
-        "O2_pct_dry": _dry_frac(gas, "O2") * 100.0,
-        "CO2_pct_dry": _dry_frac(gas, "CO2") * 100.0,
-        "H2O_pct_wet": h2o_x * 100.0,
+        "O2_pct_dry": O2_pct_dry_eq,
+        "CO2_pct_dry": CO2_pct_dry_eq,
+        "H2O_pct_wet": H2O_pct_wet_eq,
         "method": method,
         # Complete-combustion companion (the physically correct assumption
         # for stack or diluted-exit measurements).
