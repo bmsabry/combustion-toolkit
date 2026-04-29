@@ -313,6 +313,34 @@ export const AUTO_VARS = [
     default: 3.0, range: [0, 15], step: 0.5, unit_si: "%", unit_en: "%",
     desc: "Stack CO₂ reading on a dry basis. Inverted to φ (parallel solve to measO2)." },
 
+  // ── Exhaust slip measurements (drive η_c, φ_fed, T_ad,eff, penalty) ──
+  { id: "measCO", label: "Measured CO (ppmvd)",
+    panels: ["exhaust"], kind: "number",
+    default: 0, range: [0, 5000], step: 10, unit_si: "ppmvd", unit_en: "ppmvd",
+    desc: "CO slip in dry exhaust. Reduces η_c via energy-loss formula." },
+  { id: "measUHC", label: "Measured UHC as CH₄ (ppmvd)",
+    panels: ["exhaust"], kind: "number",
+    default: 0, range: [0, 5000], step: 10, unit_si: "ppmvd", unit_en: "ppmvd",
+    desc: "Unburned hydrocarbons (reported as CH₄-equivalent) in dry exhaust. Reduces η_c." },
+  { id: "measH2", label: "Measured H₂ (ppmvd)",
+    panels: ["exhaust"], kind: "number",
+    default: 0, range: [0, 5000], step: 10, unit_si: "ppmvd", unit_en: "ppmvd",
+    desc: "H₂ slip in dry exhaust. Reduces η_c." },
+
+  // ── Fuel & Money inputs (drive air mass flow, heat input, cost, penalty) ──
+  { id: "fuelFlowKgs", label: "Fuel Flow",
+    panels: ["exhaust"], kind: "number",
+    default: 5.0398,                                      // 40,000 lb/hr ≈ 5.04 kg/s
+    range: [0.01, 200], step: 0.1,
+    unit_si: "kg/s", unit_en: "lb/hr",
+    siToEn: kgs => kgs * 7936.64, enToSi: lbh => lbh / 7936.64,
+    desc: "Fuel mass flow rate. In GTS mode auto-linked to Cycle ṁ_fuel; user-breakable in Advanced." },
+  { id: "fuelCostUsdPerMmbtuLhv", label: "Fuel Cost (USD/MMBTU LHV)",
+    panels: ["exhaust"], kind: "number",
+    default: 4.00, range: [0, 100], step: 0.10,
+    unit_si: "USD/MMBTU", unit_en: "USD/MMBTU",
+    desc: "Fuel cost on LHV basis. Drives total cost / period and penalty (= total · (1 − η_c))." },
+
   // ── Fuel composition (special — needs balance species) ──
   // Listed for the FUEL_SP species the app knows about.
   { id: "fuel.CH4",   label: "Fuel CH₄",   panels: ["aft","cycle","mapping","combustor","flame"],
@@ -560,6 +588,51 @@ export const AUTO_OUTPUTS = [
     pick: r => { const f = r.exh_o2?.FAR_mass; return (f && f > 0) ? 1 / f : null; } },
   { id: "exh_AFR_from_CO2",   label: "AFR (mass) from CO₂", panel: "exhaust", unit: "—",
     pick: r => { const f = r.exh_co2?.FAR_mass; return (f && f > 0) ? 1 / f : null; } },
+
+  // ── Exhaust slip — combustion efficiency + fed-side correction ──
+  // η_c, φ_fed, FAR_fed, AFR_fed, T_ad,eff for each inversion path.
+  // Mirrors ExhaustPanel.computeSlipCorrection (NIST molar LHVs, energy-loss
+  // formula). At zero slip → η_c = 1, φ_fed = φ_burn, T_ad,eff = T_ad burn-side.
+  { id: "exh_eta_c_o2",       label: "η_c from O₂",         panel: "exhaust",
+    unit_si: "fraction", unit_en: "fraction", siToEn: x => x * 100,
+    pick: r => r.exh_slip?.eta_c_o2 },
+  { id: "exh_eta_c_co2",      label: "η_c from CO₂",        panel: "exhaust",
+    unit_si: "fraction", unit_en: "fraction", siToEn: x => x * 100,
+    pick: r => r.exh_slip?.eta_c_co2 },
+  { id: "exh_phi_fed_o2",     label: "φ_fed from O₂",       panel: "exhaust", unit: "—",
+    pick: r => r.exh_slip?.phi_fed_o2 },
+  { id: "exh_phi_fed_co2",    label: "φ_fed from CO₂",      panel: "exhaust", unit: "—",
+    pick: r => r.exh_slip?.phi_fed_co2 },
+  { id: "exh_FAR_fed_o2",     label: "FAR_fed from O₂",     panel: "exhaust", unit: "—",
+    pick: r => r.exh_slip?.FAR_fed_o2 },
+  { id: "exh_FAR_fed_co2",    label: "FAR_fed from CO₂",    panel: "exhaust", unit: "—",
+    pick: r => r.exh_slip?.FAR_fed_co2 },
+  { id: "exh_AFR_fed_o2",     label: "AFR_fed from O₂",     panel: "exhaust", unit: "—",
+    pick: r => r.exh_slip?.AFR_fed_o2 },
+  { id: "exh_AFR_fed_co2",    label: "AFR_fed from CO₂",    panel: "exhaust", unit: "—",
+    pick: r => r.exh_slip?.AFR_fed_co2 },
+  { id: "exh_T_ad_eff_o2",    label: "T_ad,eff from O₂",    panel: "exhaust",
+    unit_si: "K", unit_en: "°F", siToEn: K_to_F,
+    pick: r => r.exh_slip?.T_ad_eff_o2 },
+  { id: "exh_T_ad_eff_co2",   label: "T_ad,eff from CO₂",   panel: "exhaust",
+    unit_si: "K", unit_en: "°F", siToEn: K_to_F,
+    pick: r => r.exh_slip?.T_ad_eff_co2 },
+
+  // ── Fuel & Money outputs ──
+  // Air mass flow shown in lb/hr in ENG (matches the panel's industrial
+  // convention) — unlike Cycle's kg/s ↔ lb/s for compressor flow.
+  { id: "exh_air_flow_kg_s",  label: "Air Mass Flow",       panel: "exhaust",
+    unit_si: "kg/s", unit_en: "lb/hr", siToEn: kgs => kgs * 7936.64,
+    pick: r => r.exh_slip?.air_flow_kg_s },
+  { id: "exh_heat_input_MW",  label: "Heat Input (LHV)",    panel: "exhaust",
+    unit_si: "MW", unit_en: "MMBTU/hr", siToEn: mw => mw * 3.41214,
+    pick: r => r.exh_slip?.heat_input_MW },
+  { id: "exh_total_cost_per_hr", label: "Total Fuel Cost",  panel: "exhaust", unit: "USD/hr",
+    pick: r => r.exh_slip?.total_cost_per_hr },
+  { id: "exh_penalty_per_hr_o2",  label: "Penalty (O₂)",    panel: "exhaust", unit: "USD/hr",
+    pick: r => r.exh_slip?.penalty_per_hr_o2 },
+  { id: "exh_penalty_per_hr_co2", label: "Penalty (CO₂)",   panel: "exhaust", unit: "USD/hr",
+    pick: r => r.exh_slip?.penalty_per_hr_co2 },
 
   // ── PSR-PFR Combustor ──
   // The runner normalizes both Free (calcCombustorNetwork) and Accurate

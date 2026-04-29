@@ -5985,6 +5985,13 @@ async function runAutomationMatrix({
       // exhaust
       measO2:  override(row, "measO2",  baseline.measO2),
       measCO2: override(row, "measCO2", baseline.measCO2),
+      // exhaust — slip measurements + fuel/money (η_c block in ExhaustPanel)
+      measCO:  override(row, "measCO",  baseline.measCO  ?? 0),
+      measUHC: override(row, "measUHC", baseline.measUHC ?? 0),
+      measH2:  override(row, "measH2",  baseline.measH2  ?? 0),
+      fuelFlowKgs:             override(row, "fuelFlowKgs",             baseline.fuelFlowKgs             ?? 0),
+      fuelCostUsdPerMmbtuLhv:  override(row, "fuelCostUsdPerMmbtuLhv",  baseline.fuelCostUsdPerMmbtuLhv  ?? 4.00),
+      costPeriod:              baseline.costPeriod || "week",
       // composition
       fuel: rebalanceFuel(baseline.fuel, row, row.__fuelBalance),
       ox:   baseline.ox,
@@ -6240,7 +6247,17 @@ function _adaptPanelResponse(slot, r, inp){
     };
   }
   if (slot === "exh_o2" || slot === "exh_co2"){
-    return { phi: r.phi, T_ad: r.T_ad, FAR_mass: r.FAR };
+    // Convert backend wet composition (mole fractions) to PERCENT to match
+    // the free-mode shape consumed by computeExhaustSlipForRow's atom balance.
+    const products = {};
+    for (const [sp, x] of Object.entries(r.exhaust_composition_wet || {})){
+      if (x > 1e-10) products[sp] = x * 100;
+    }
+    return {
+      phi: r.phi, T_ad: r.T_ad, FAR_mass: r.FAR,
+      AFR_mass: (r.FAR && r.FAR > 0) ? 1 / r.FAR : null,
+      products,
+    };
   }
   if (slot === "psr"){
     return {
@@ -6326,6 +6343,7 @@ async function _runPostCycleBatch(panels, inp, cycleResult, accurate){
       const both = await runExhaustForAutomation(inp, accurate);
       out.exh_o2  = both.o2;
       out.exh_co2 = both.co2;
+      out.exh_slip = computeExhaustSlipForRow(both, inp);
     }
     if (panels.includes("combustor")){
       out.psr = await runPSRForAutomation(inp, accurate);
@@ -6415,6 +6433,12 @@ async function _runPostCycleBatch(panels, inp, cycleResult, accurate){
       console.warn(`[automation] batch job ${m.slot} failed:`, r && r.error);
     }
   }
+  // After both exhaust slots are populated (from cache or batch), compute
+  // the slip + Fuel & Money block. Same shape as the free-mode runner so
+  // AUTO_OUTPUTS pickers don't branch.
+  if (panels.includes("exhaust") && out.exh_o2 && out.exh_co2){
+    out.exh_slip = computeExhaustSlipForRow({o2: out.exh_o2, co2: out.exh_co2}, inp);
+  }
   return out;
 }
 
@@ -6434,6 +6458,7 @@ async function _runPostCycleSequential(panels, inp, cycleResult, accurate, parti
     const both = await runExhaustForAutomation(inp, accurate);
     out.exh_o2  = both.o2;
     out.exh_co2 = both.co2;
+    out.exh_slip = computeExhaustSlipForRow(both, inp);
   }
   if (panels.includes("combustor") && !("psr" in out)){
     out.psr = await runPSRForAutomation(inp, accurate);
@@ -6540,6 +6565,97 @@ async function runAFTForAutomation(inp, accurate){
   return { T_ad: r.T_ad, T_ad_complete, products: r.products, T_mixed_inlet_K: Tmix };
 }
 
+// ── Slip + Fuel & Money block, computed for ONE per-row exhaust result.
+// Mirrors ExhaustPanel.computeSlipCorrection (NIST molar LHVs, energy-loss
+// formula). Returns the SAME shape we read from in AUTO_OUTPUTS pickers.
+// `both` is { o2, co2 } from runExhaustForAutomation. Both halves carry
+// {phi, T_ad, FAR_mass, AFR_mass, products} in PERCENT (free + accurate
+// shapes are unified upstream).
+function computeExhaustSlipForRow(both, inp){
+  const fuel = inp.fuel || {};
+  const ox   = inp.ox   || {};
+  const fp   = calcFuelProps(fuel, ox, inp.T_fuel);
+  const LHV_CO_kJmol  = 282.99;
+  const LHV_CH4_kJmol = 802.31;
+  const LHV_H2_kJmol  = 241.83;
+  const nC_fuel = (() => {
+    let n = 0; const tot = Object.values(fuel).reduce((a,b)=>a+b,0) || 1;
+    for (const [sp, x] of Object.entries(fuel)) n += (x/tot) * ((SP[sp]?.C) || 0);
+    return n;
+  })();
+  const LHV_fuel_kJmol = (fp.LHV_mass || 0) * (fp.MW_fuel || 0);
+  const co  = Math.max(0, +inp.measCO  || 0);
+  const uhc = Math.max(0, +inp.measUHC || 0);
+  const h2  = Math.max(0, +inp.measH2  || 0);
+  const slipFor = (r) => {
+    if (!r) return {eta_c:1, phi_fed:NaN, FAR_fed:NaN, AFR_fed:NaN, slipActive:false};
+    if ((co===0 && uhc===0 && h2===0) || !nC_fuel || !LHV_fuel_kJmol)
+      return {eta_c:1, phi_fed:r.phi, FAR_fed:r.FAR_mass,
+              AFR_fed:(r.AFR_mass ?? ((r.FAR_mass>0)?1/r.FAR_mass:NaN)), slipActive:false};
+    const products = r.products || {};
+    let X_C = 0;
+    for (const [sp, pct] of Object.entries(products)) {
+      const C = (SP[sp]?.C) || 0;
+      if (C > 0) X_C += (pct/100) * C;
+    }
+    if (X_C <= 0) return {eta_c:1, phi_fed:r.phi, FAR_fed:r.FAR_mass,
+                          AFR_fed:(r.AFR_mass ?? ((r.FAR_mass>0)?1/r.FAR_mass:NaN)), slipActive:false};
+    const N_total = nC_fuel / X_C;
+    const X_H2O   = (products.H2O || 0) / 100;
+    const N_dry   = N_total * (1 - X_H2O);
+    const E_loss  = N_dry * 1e-6 * (co*LHV_CO_kJmol + uhc*LHV_CH4_kJmol + h2*LHV_H2_kJmol);
+    const eta_c   = Math.max(0.01, Math.min(1, 1 - E_loss / LHV_fuel_kJmol));
+    const AFR_b   = r.AFR_mass ?? ((r.FAR_mass>0) ? 1/r.FAR_mass : NaN);
+    return {
+      eta_c,
+      phi_fed: r.phi / eta_c,
+      FAR_fed: r.FAR_mass / eta_c,
+      AFR_fed: AFR_b * eta_c,
+      slipActive: true,
+    };
+  };
+  const sO2  = slipFor(both?.o2);
+  const sCO2 = slipFor(both?.co2);
+  // T_ad,eff at φ_eff = φ_burn · η_c, evaluated with the local JS Cantera-
+  // equivalent (calcAFT_EQ). At zero slip → φ_eff = φ_burn → T_eff = burn-side T.
+  const Tflame_eff = (r, eta_c) => {
+    if (!r || !Number.isFinite(r.phi)) return NaN;
+    const phi_eff = r.phi * (eta_c || 1);
+    if (eta_c >= 1) return r.T_ad;
+    const Tmix = mixT(fuel, ox, phi_eff, inp.T_fuel, inp.T_air);
+    try {
+      const eq = calcAFT_EQ(fuel, ox, phi_eff, Tmix, inp.P);
+      return eq?.T_ad ?? r.T_ad;
+    } catch (_) { return r.T_ad; }
+  };
+  const T_ad_eff_o2  = Tflame_eff(both?.o2,  sO2.eta_c);
+  const T_ad_eff_co2 = Tflame_eff(both?.co2, sCO2.eta_c);
+  // Fuel & Money — anchored on O₂ path (matches ExhaustPanel display).
+  const FAR_for_air = sO2.slipActive ? sO2.FAR_fed : (both?.o2?.FAR_mass || NaN);
+  const fuelFlowKgs = +inp.fuelFlowKgs || 0;
+  const fuelCost   = +inp.fuelCostUsdPerMmbtuLhv || 0;
+  const air_flow_kg_s = (Number.isFinite(fuelFlowKgs) && Number.isFinite(FAR_for_air) && FAR_for_air > 0)
+    ? fuelFlowKgs / FAR_for_air : NaN;
+  const heat_input_MW = (fuelFlowKgs > 0 && fp.LHV_mass > 0) ? fuelFlowKgs * fp.LHV_mass : NaN;
+  const heat_input_MMBTU_hr = Number.isFinite(heat_input_MW) ? heat_input_MW * 3.41214 : NaN;
+  const total_cost_per_hr = (Number.isFinite(heat_input_MMBTU_hr) && fuelCost > 0)
+    ? heat_input_MMBTU_hr * fuelCost : NaN;
+  const penalty_per_hr_o2  = Number.isFinite(total_cost_per_hr) ? total_cost_per_hr * (1 - sO2.eta_c)  : NaN;
+  const penalty_per_hr_co2 = Number.isFinite(total_cost_per_hr) ? total_cost_per_hr * (1 - sCO2.eta_c) : NaN;
+  return {
+    eta_c_o2: sO2.eta_c, eta_c_co2: sCO2.eta_c,
+    phi_fed_o2: sO2.phi_fed, phi_fed_co2: sCO2.phi_fed,
+    FAR_fed_o2: sO2.FAR_fed, FAR_fed_co2: sCO2.FAR_fed,
+    AFR_fed_o2: sO2.AFR_fed, AFR_fed_co2: sCO2.AFR_fed,
+    T_ad_eff_o2, T_ad_eff_co2,
+    air_flow_kg_s,
+    heat_input_MW,
+    total_cost_per_hr,
+    penalty_per_hr_o2,
+    penalty_per_hr_co2,
+  };
+}
+
 async function runExhaustForAutomation(inp, accurate){
   if (accurate){
     const r1 = await bkCachedFetch("exhaust", {
@@ -6558,9 +6674,17 @@ async function runExhaustForAutomation(inp, accurate){
       T_fuel_K: inp.T_fuel, T_air_K: inp.T_air,
       WFR: inp.WFR, water_mode: inp.water_mode,
     });
+    // Convert backend wet-composition (mole fractions, 0..1) to % so
+    // computeExhaustSlipForRow's atom balance — which mirrors the panel's
+    // pct/100 division — works without further branching.
+    const _toPct = (x) => {const o={};for(const[s,v]of Object.entries(x||{}))o[s]=(+v||0)*100;return o;};
     return {
-      o2:  { phi: r1.phi, T_ad: r1.T_ad, FAR_mass: r1.FAR },
-      co2: { phi: r2.phi, T_ad: r2.T_ad, FAR_mass: r2.FAR },
+      o2:  { phi: r1.phi, T_ad: r1.T_ad, FAR_mass: r1.FAR,
+             AFR_mass: (r1.FAR && r1.FAR>0) ? 1/r1.FAR : null,
+             products: _toPct(r1.exhaust_composition_wet) },
+      co2: { phi: r2.phi, T_ad: r2.T_ad, FAR_mass: r2.FAR,
+             AFR_mass: (r2.FAR && r2.FAR>0) ? 1/r2.FAR : null,
+             products: _toPct(r2.exhaust_composition_wet) },
     };
   }
   // Free mode: 2-pass JS inversion
@@ -11244,7 +11368,8 @@ export default function App(){
                 mapFracIP, mapFracOP, mapFracIM, mapFracOM,
                 tau_psr, L_pfr, V_pfr, heatLossFrac,
                 velocity, Lchar, Dfh, Lpremix, Vpremix,
-                measO2, measCO2,
+                measO2, measCO2, measCO, measUHC, measH2,
+                fuelFlowKgs, fuelCostUsdPerMmbtuLhv, costPeriod,
                 fuel, ox,
               }}/>
             </div>
