@@ -2550,15 +2550,27 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
   const slipCO2 = useMemo(() => computeSlipCorrection(rCO2),
     [rCO2, measCO, measUHC, nC_fuel, LHV_fuel_kJmol]);
 
-  // Displayed Flame Temperature is the BURN-SIDE equilibrium T_ad — i.e.,
-  // Cantera HP equilibrium at the burn-side FAR (= FAR_fed × η_c, the
-  // fraction of fuel that actually combusted). The slip fuel walked
-  // through the flame zone cold and didn't release heat, so it doesn't
-  // raise the flame T. The burn-side equilibrium inversion already runs
-  // at this exact FAR (it's how it matched the measured O₂/CO₂), so its
-  // T_ad is the right number — no extra Cantera call needed.
-  const T_ad_burn_O2  = rO2?.T_ad;
-  const T_ad_burn_CO2 = rCO2?.T_ad;
+  // Displayed Flame Temperature is the equilibrium T at the EFFECTIVE φ
+  // (= φ_burn × η_c, where φ_burn is the FAR-at-100%-efficiency from the
+  // original inversion). Net effect: as CO/UHC slip rises, η_c falls,
+  // φ_eff falls, equilibrium T_ad falls — captures the inefficiency
+  // penalty on flame temperature. Note the asymmetry vs displayed φ /
+  // FAR / AFR (which are DIVIDED by η_c; the metered ratio rises).
+  // At zero slip η_c = 1 so φ_eff = φ_burn and T reduces to the
+  // existing burn-side T_ad (rO2.T_ad). Free mode → JS calcAFT_EQ.
+  // Accurate mode → /calc/aft, gated on slipActive so no HTTP call
+  // fires at zero slip.
+  const phi_eff_O2  = (rO2  && Number.isFinite(rO2.phi))  ? rO2.phi  * (slipO2.eta_c  || 1) : 0.5;
+  const phi_eff_CO2 = (rCO2 && Number.isFinite(rCO2.phi)) ? rCO2.phi * (slipCO2.eta_c || 1) : 0.5;
+  const T_mix_eff_O2  = useMemo(() => mixT(fuel, ox, phi_eff_O2  || 0.6, Tfuel, Tair), [fuel, ox, phi_eff_O2,  Tfuel, Tair]);
+  const T_mix_eff_CO2 = useMemo(() => mixT(fuel, ox, phi_eff_CO2 || 0.6, Tfuel, Tair), [fuel, ox, phi_eff_CO2, Tfuel, Tair]);
+  const localFedO2  = useMemo(() => slipO2.slipActive  && Number.isFinite(phi_eff_O2)  ? calcAFT_EQ(fuel, ox, phi_eff_O2,  T_mix_eff_O2,  P) : null, [fuel, ox, phi_eff_O2,  T_mix_eff_O2,  P, slipO2.slipActive]);
+  const localFedCO2 = useMemo(() => slipCO2.slipActive && Number.isFinite(phi_eff_CO2) ? calcAFT_EQ(fuel, ox, phi_eff_CO2, T_mix_eff_CO2, P) : null, [fuel, ox, phi_eff_CO2, T_mix_eff_CO2, P, slipCO2.slipActive]);
+  const bkFedO2  = useBackendCalc("aft", {fuel: nonzero(fuel), oxidizer: nonzero(ox), phi: phi_eff_O2  || 0.5, T0: T_mix_eff_O2,  P: atmToBar(P), mode: "adiabatic", heat_loss_fraction: 0, T_fuel_K: Tfuel, T_air_K: Tair, WFR, water_mode: waterMode}, accurate && slipO2.slipActive  && Number.isFinite(phi_eff_O2));
+  const bkFedCO2 = useBackendCalc("aft", {fuel: nonzero(fuel), oxidizer: nonzero(ox), phi: phi_eff_CO2 || 0.5, T0: T_mix_eff_CO2, P: atmToBar(P), mode: "adiabatic", heat_loss_fraction: 0, T_fuel_K: Tfuel, T_air_K: Tair, WFR, water_mode: waterMode}, accurate && slipCO2.slipActive && Number.isFinite(phi_eff_CO2));
+  // T_ad to display: at zero slip → burn-side. With slip → Cantera/JS at φ_eff.
+  const T_ad_disp_O2  = !slipO2.slipActive  ? rO2?.T_ad  : (accurate && bkFedO2.data?.T_ad)  ? bkFedO2.data.T_ad  : (localFedO2?.T_ad  ?? rO2?.T_ad);
+  const T_ad_disp_CO2 = !slipCO2.slipActive ? rCO2?.T_ad : (accurate && bkFedCO2.data?.T_ad) ? bkFedCO2.data.T_ad : (localFedCO2?.T_ad ?? rCO2?.T_ad);
   const o2Sweep=useMemo(()=>{const r=[];for(let o2=0.5;o2<=15;o2+=0.5){const Tm0=mixT(fuel,ox,0.6,Tfuel,Tair);const res0=calcExhaustFromO2(fuel,ox,o2,Tm0,P,combMode);const Tm1=mixT(fuel,ox,res0.phi,Tfuel,Tair);const res=calcExhaustFromO2(fuel,ox,o2,Tm1,P,combMode);r.push({O2:o2,T_ad:uv(units,"T",res.T_ad),phi:res.phi});}return r;},[fuel,ox,Tfuel,Tair,P,combMode,units]);
   const modeToggle=<div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:5,overflow:"hidden",marginBottom:10}}>
     {["complete","equilibrium"].map(m=><button key={m} onClick={()=>setCombMode(m)} style={{padding:"6px 12px",fontSize:10.5,fontWeight:combMode===m?700:400,color:combMode===m?C.bg:C.txtDim,background:combMode===m?C.accent:"transparent",border:"none",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",transition:"all .15s"}}>{m==="complete"?"Complete Combustion":"Chemical Equilibrium"}</button>)}
@@ -2649,13 +2661,13 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1{slipO2.slipActive?` · slip-corrected (η_c = ${(slipO2.eta_c*100).toFixed(2)}%)`:""}</span></div>
           <div style={{...S.row,gap:6}}>
             <M l="phi" v={(slipO2.phi_fed||rO2.phi).toFixed(3)} u="—" c={C.accent} tip={slipO2.slipActive?"Fed-side equivalence ratio φ_fed = φ_burn / η_c. Reflects the actual fuel that was metered to the combustor (some of which slipped through unburned).":"Inverted using full Cantera HP equilibrium (includes CO, OH, NO dissociation)."}/>
-            <M l="Flame Temperature" v={uv(units,"T",T_ad_burn_O2).toFixed(0)} u={uu(units,"T")} c={C.accent} tip={slipO2.slipActive?"Equilibrium flame T at the BURN-SIDE FAR (= FAR_fed × η_c) — only the fuel that actually combusted releases heat. The slip mass walks through the flame zone cold and is not modeled here. This T matches the measured O₂ exactly.":"T_ad under the full-equilibrium assumption."}/>
+            <M l="Flame Temperature" v={uv(units,"T",T_ad_disp_O2).toFixed(0)} u={uu(units,"T")} c={C.accent} tip={slipO2.slipActive?"Equilibrium flame T at the EFFECTIVE φ (= φ_burn × η_c, the FAR at 100% efficiency multiplied by the efficiency). As CO/UHC slip rises, η_c falls, φ_eff falls, and equilibrium flame T falls with it — captures the inefficiency penalty on flame temperature even while the metered φ / FAR rise.":"T_ad under the full-equilibrium assumption."}/>
             <M l="Fuel/Air (mass)" v={(slipO2.FAR_fed||rO2.FAR_mass).toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip={slipO2.slipActive?"Fed-side fuel/air mass ratio (= burn-side / η_c).":"Fuel/air mass ratio from equilibrium inversion."}/>
             <M l="Air/Fuel (mass)" v={(slipO2.slipActive?slipO2.AFR_fed:1/(rO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip={slipO2.slipActive?"Fed-side air/fuel mass ratio (= burn-side × η_c).":"Air/fuel mass ratio."}/>
             {slipO2.slipActive&&<M l="η_c" v={(slipO2.eta_c*100).toFixed(2)} u="%" c={C.violet} tip="Combustion efficiency from CO/UHC slip energy-loss formula. η_c = 1 − (N_dry/fuel) × (X_CO·LHV_CO + X_UHC·LHV_CH4) / LHV_fuel."/>}
           </div>
           {slipO2.slipActive&&<div style={{marginTop:6,padding:"5px 8px",background:`${C.violet}10`,border:`1px solid ${C.violet}30`,borderRadius:4,fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.4}}>
-            η_c = {(slipO2.eta_c*100).toFixed(2)}% — φ / FAR / AFR shown are <strong style={{color:C.violet}}>fed-side</strong> (what the operator metered). Flame Temperature is the equilibrium T at the <strong style={{color:C.violet}}>burn-side</strong> FAR (= FAR_fed × η_c) — only the burning fuel releases heat. Burn-side φ = {rO2.phi.toFixed(3)}.
+            η_c = {(slipO2.eta_c*100).toFixed(2)}% — φ / FAR / AFR are <strong style={{color:C.violet}}>fed-side</strong> (= burn-side ÷ η_c, the metered ratio rises with slip). Flame T is Cantera HP-eq at the <strong style={{color:C.violet}}>effective</strong> φ (= φ_burn × η_c = {(rO2.phi*slipO2.eta_c).toFixed(3)}, falls with slip). Burn-side ref (no slip): φ = {rO2.phi.toFixed(3)}, T_ad = {uv(units,"T",rO2.T_ad).toFixed(0)} {uu(units,"T")}.
           </div>}
           {rO2.products&&<div style={{marginTop:10}}>
             <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis <span style={{fontSize:8.5,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>(burn-side; matches measured O₂)</span></div>
@@ -2704,13 +2716,13 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8}}>Chemical Equilibrium <span style={{fontSize:9,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>— in-flame, air_frac = 1{slipCO2.slipActive?` · slip-corrected (η_c = ${(slipCO2.eta_c*100).toFixed(2)}%)`:""}</span></div>
           <div style={{...S.row,gap:6}}>
             <M l="phi" v={(slipCO2.phi_fed||rCO2.phi).toFixed(3)} u="—" c={C.accent} tip={slipCO2.slipActive?"Fed-side equivalence ratio φ_fed = φ_burn / η_c. Reflects the actual fuel that was metered to the combustor.":"Inverted using full Cantera HP equilibrium."}/>
-            <M l="Flame Temperature" v={uv(units,"T",T_ad_burn_CO2).toFixed(0)} u={uu(units,"T")} c={C.accent} tip={slipCO2.slipActive?"Equilibrium flame T at the BURN-SIDE FAR (= FAR_fed × η_c) — only the fuel that actually combusted releases heat. The slip mass walks through the flame zone cold and is not modeled here. This T matches the measured CO₂ exactly.":"T_ad under the full-equilibrium assumption."}/>
+            <M l="Flame Temperature" v={uv(units,"T",T_ad_disp_CO2).toFixed(0)} u={uu(units,"T")} c={C.accent} tip={slipCO2.slipActive?"Equilibrium flame T at the EFFECTIVE φ (= φ_burn × η_c, the FAR at 100% efficiency multiplied by the efficiency). As CO/UHC slip rises, η_c falls, φ_eff falls, and equilibrium flame T falls with it.":"T_ad under the full-equilibrium assumption."}/>
             <M l="Fuel/Air (mass)" v={(slipCO2.FAR_fed||rCO2.FAR_mass).toFixed(4)} u={uu(units,"afr_mass")} c={C.accent} tip={slipCO2.slipActive?"Fed-side fuel/air mass ratio (= burn-side / η_c).":"Fuel/air mass ratio from equilibrium inversion."}/>
             <M l="Air/Fuel (mass)" v={(slipCO2.slipActive?slipCO2.AFR_fed:1/(rCO2.FAR_mass+1e-20)).toFixed(2)} u={uu(units,"afr_mass")} c={C.accent} tip={slipCO2.slipActive?"Fed-side air/fuel mass ratio (= burn-side × η_c).":"Air/fuel mass ratio."}/>
             {slipCO2.slipActive&&<M l="η_c" v={(slipCO2.eta_c*100).toFixed(2)} u="%" c={C.violet} tip="Combustion efficiency from CO/UHC slip energy-loss formula."/>}
           </div>
           {slipCO2.slipActive&&<div style={{marginTop:6,padding:"5px 8px",background:`${C.violet}10`,border:`1px solid ${C.violet}30`,borderRadius:4,fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.4}}>
-            η_c = {(slipCO2.eta_c*100).toFixed(2)}% — φ / FAR / AFR shown are <strong style={{color:C.violet}}>fed-side</strong> (what the operator metered). Flame Temperature is the equilibrium T at the <strong style={{color:C.violet}}>burn-side</strong> FAR (= FAR_fed × η_c) — only the burning fuel releases heat. Burn-side φ = {rCO2.phi.toFixed(3)}.
+            η_c = {(slipCO2.eta_c*100).toFixed(2)}% — φ / FAR / AFR are <strong style={{color:C.violet}}>fed-side</strong> (= burn-side ÷ η_c, rises with slip). Flame T is Cantera HP-eq at the <strong style={{color:C.violet}}>effective</strong> φ (= φ_burn × η_c = {(rCO2.phi*slipCO2.eta_c).toFixed(3)}, falls with slip). Burn-side ref (no slip): φ = {rCO2.phi.toFixed(3)}, T_ad = {uv(units,"T",rCO2.T_ad).toFixed(0)} {uu(units,"T")}.
           </div>}
           {rCO2.products&&<div style={{marginTop:10}}>
             <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Products — Wet Basis <span style={{fontSize:8.5,fontWeight:500,color:C.txtMuted,textTransform:"none"}}>(burn-side; matches measured CO₂)</span></div>
