@@ -25,3 +25,6 @@ dist-ssr
 
 # local comparison scripts (not shipped)
 compare/
+
+# local SQLite scratch DBs (frontend root) — backend ships its own under api/
+*.db
