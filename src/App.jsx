@@ -623,7 +623,9 @@ const _T_mix_eff_CO2=Number.isFinite(_phi_eff_CO2)?mixT(fuel,ox,_phi_eff_CO2,T_f
 const _T_ad_eff_O2=(_slipO2.slipActive&&Number.isFinite(_phi_eff_O2))?(calcAFT_EQ(fuel,ox,_phi_eff_O2,_T_mix_eff_O2,P)?.T_ad??rO2?.T_ad):rO2?.T_ad;
 const _T_ad_eff_CO2=(_slipCO2.slipActive&&Number.isFinite(_phi_eff_CO2))?(calcAFT_EQ(fuel,ox,_phi_eff_CO2,_T_mix_eff_CO2,P)?.T_ad??rCO2?.T_ad):rCO2?.T_ad;
 // ── Fuel & Money (anchored on O₂ path, matching the panel) ──
-const _FAR_for_air=_slipO2.slipActive?_slipO2.FAR_fed:(rO2?.FAR_mass||NaN);
+// Air flow uses FAR_burn ALWAYS (compressor air flow is set by aero;
+// slip is downstream chemistry — does not move ṁ_air).
+const _FAR_for_air=rO2?.FAR_mass||NaN;
 const _eta_money=_slipO2.slipActive?_slipO2.eta_c:1;
 const _airFlowKgs=(Number.isFinite(fuelFlowKgs)&&Number.isFinite(_FAR_for_air)&&_FAR_for_air>0)?fuelFlowKgs/_FAR_for_air:NaN;
 const _heatInputMW=(Number.isFinite(fuelFlowKgs)&&fp.LHV_mass>0)?fuelFlowKgs*fp.LHV_mass:NaN;
@@ -661,7 +663,7 @@ const _slipFuelRows=[
   ["Fuel Flow (m_fuel)",_flowFmt(fuelFlowKgs),_flowUnit],
   ["Fuel Cost",+(+fuelCostUsdPerMmbtuLhv).toFixed(3),"USD/MMBTU (LHV)"],
   ["Period",costPeriod,"—"],
-  ["Air Mass Flow (m_air = m_fuel / FAR_fed)",_flowFmt(_airFlowKgs),_flowUnit],
+  ["Air Mass Flow (m_air = m_fuel / FAR_burn — slip-independent)",_flowFmt(_airFlowKgs),_flowUnit],
   ["Heat Input (LHV)",_heatFmt(_heatInputMW),_heatUnit],
   ["Total Fuel Cost (per "+costPeriod+")",Number.isFinite(_totalCostPerPeriod)?+(_totalCostPerPeriod).toFixed(0):"n/a","USD"],
   ["Penalty (= Total · (1 − η_c), money lost to slip per "+costPeriod+")",Number.isFinite(_penaltyCostPerPeriod)?+(_penaltyCostPerPeriod).toFixed(0):"n/a","USD"],
@@ -967,7 +969,7 @@ const sA=[
 
   ["18. Fuel & Money","Anchor","O₂-derived path","O₂ is the standard stack measurement; CO₂ inversion can differ slightly."],
   ["","Fuel Flow input","Default 40,000 lb/hr (≈ 5.04 kg/s)","User-editable. In GTS mode auto-linked to Cycle ṁ_fuel (LOCKED). Advanced mode: linked but user-breakable."],
-  ["","Air mass flow","ṁ_air = ṁ_fuel / FAR_fed","FAR_fed includes η_c correction when slip > 0; otherwise = burn-side FAR."],
+  ["","Air mass flow","ṁ_air = ṁ_fuel / FAR_burn","FAR_burn = O₂-inversion FAR (slip-independent). Convention: at a fixed operating point the compressor delivers a fixed ṁ_air — slip is downstream chemistry and must not feed back into the air estimate. Slip values affect η_c and the dollar penalty only."],
   ["","Heat input (LHV)","ṁ_fuel · LHV_mass","MW (SI) / MMBTU/hr (ENG). LHV is mass-basis from fuel composition."],
   ["","Fuel cost","User input USD/MMBTU (LHV). Default $4.00","No regional adjustment. LHV basis matches Heat Input units."],
   ["","Period","week (168 h) / month (730 h) / year (8,760 h)","Selectable. Total $ / period = MMBTU/hr · $/MMBTU · h/period."],
@@ -2680,9 +2682,15 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
   // and η_c. O₂ is the more common stack measurement so we anchor on it;
   // the CO₂ path can differ slightly in φ inversion but is rarely the
   // primary operational signal.
-  const FAR_for_air = slipO2.slipActive ? slipO2.FAR_fed : (rO2?.FAR_mass || NaN);
-  const eta_c_money = slipO2.slipActive ? slipO2.eta_c   : 1;
-  // Air mass flow (kg/s): m_air = m_fuel / FAR_mass
+  // Air-flow anchor: the burn-side FAR from the O₂ inversion ALONE.
+  // At a fixed operating point the compressor delivers a fixed ṁ_air —
+  // CO / UHC slip are downstream chemistry phenomena (kinetic quench,
+  // mixing) and must NOT feed back into the air estimate. The slip
+  // correction is reserved for the η_c, fed-side FAR / AFR display, and
+  // the dollar penalty.
+  const FAR_for_air = rO2?.FAR_mass || NaN;
+  const eta_c_money = slipO2.slipActive ? slipO2.eta_c : 1;
+  // Air mass flow (kg/s): m_air = m_fuel / FAR_burn (does not move with slip)
   const airFlowKgs = (Number.isFinite(fuelFlowKgs) && Number.isFinite(FAR_for_air) && FAR_for_air > 0)
     ? fuelFlowKgs / FAR_for_air : NaN;
   // Heat-input rate (MW) — m_fuel × LHV_mass. fp.LHV_mass is in MJ/kg, so
@@ -6633,7 +6641,9 @@ function computeExhaustSlipForRow(both, inp){
   const T_ad_eff_o2  = Tflame_eff(both?.o2,  sO2.eta_c);
   const T_ad_eff_co2 = Tflame_eff(both?.co2, sCO2.eta_c);
   // Fuel & Money — anchored on O₂ path (matches ExhaustPanel display).
-  const FAR_for_air = sO2.slipActive ? sO2.FAR_fed : (both?.o2?.FAR_mass || NaN);
+  // Air flow uses FAR_burn ALWAYS (compressor air flow is set by aero;
+  // slip is downstream chemistry — does not move ṁ_air).
+  const FAR_for_air = both?.o2?.FAR_mass || NaN;
   const fuelFlowKgs = +inp.fuelFlowKgs || 0;
   const fuelCost   = +inp.fuelCostUsdPerMmbtuLhv || 0;
   const air_flow_kg_s = (Number.isFinite(fuelFlowKgs) && Number.isFinite(FAR_for_air) && FAR_for_air > 0)
