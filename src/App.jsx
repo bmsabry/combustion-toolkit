@@ -1573,7 +1573,7 @@ function PricingModal({show,onClose,onRequestSignin}){if(!show)return null;
   const [err,setErr]=useState(null);
   const currentTier=subscription?.tier||"free";
   const tiers=[
-    {id:"free",name:"Free",price:"$0",period:"",features:["Online use at combustion-toolkit.proreadyengineer.com","Simplified model — accurate for φ ≤ 1.0 only","All 5 calculation panels + Excel export","NOT suitable for RQL or SAC combustion"],accent:C.txtDim},
+    {id:"free",name:"Free",price:"$0",period:"",features:["Online use at combustion-toolkit.proreadyengineer.com","Simplified model — accurate for φ ≤ 1.0 only","Flame temperature accuracy within 20 °F vs Cantera","All 5 calculation panels + Excel export","NOT suitable for RQL or SAC combustion"],accent:C.txtDim},
     {id:"download",name:"Accurate — Download",price:"$100",period:"/year",features:["Downloadable desktop app","macOS, Windows, and Linux","Bundles Cantera — runs fully offline","Exact results across all φ","Excel export","1-year license, renewable"],accent:C.accent,cta:"Get Download"},
     {id:"full",name:"Download + Online",price:"$150",period:"/year",features:["Everything in Download tier","PLUS access to the Cantera-powered online version","Runs at combustion-toolkit.proreadyengineer.com","Same exact accuracy as local","Use anywhere, no install required"],accent:C.accent2,cta:"Get Both",best:true}
   ];
@@ -10279,7 +10279,7 @@ const APP_MODES = [
     requiresSub: false,
     accent: "warm",
     bannerStrong: "⚠ FREE VERSION",
-    bannerBody: "Simplified model, accurate for φ ≤ 1.0 only. Not suitable for RQL, SAC, or other rich/staged combustion systems. Upgrade for exact Cantera-backed results across all regimes.",
+    bannerBody: "Simplified model, accurate for φ ≤ 1.0 only. Flame temperature accuracy is within 20 °F vs Cantera. Not suitable for RQL, SAC, or other rich/staged combustion systems. Upgrade for exact Cantera-backed results across all regimes.",
   },
   {
     id: "ctk", label: "Combustion Toolkit", icon: "🔥",
