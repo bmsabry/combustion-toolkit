@@ -6943,8 +6943,53 @@ function writeAutomationExcel(results, varSpecs, selectedOutputs, runMeta){
 
   const aoa = [header1, header2, header3, ...dataRows];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = allCols.map(c => ({ wch: Math.max(10, c.name.length + 2) }));
-  ws["!freeze"] = { xSplit: 1 + inCols.length + fuelCols.length + oxCols.length, ySplit: 3 };
+
+  // ── Auto-fit column widths ──
+  // Width = max(panel-header, name-header, unit-header, every data cell)
+  // + small padding. Cap at 36 chars so an occasional long error message
+  // can't blow out a column to absurd width. Floor at 8 chars so very
+  // narrow columns (Run #, blank units) still have a comfortable click
+  // area in Excel.
+  ws["!cols"] = allCols.map((c, ci) => {
+    let maxLen = (c.panel || "").length;
+    if (c.name && c.name.length > maxLen) maxLen = c.name.length;
+    const unitStr = c.unit ? `(${c.unit})` : "";
+    if (unitStr.length > maxLen) maxLen = unitStr.length;
+    for (let r = 3; r < aoa.length; r++){
+      const v = aoa[r][ci];
+      if (v == null) continue;
+      const s = String(v).length;
+      if (s > maxLen) maxLen = s;
+    }
+    return { wch: Math.min(36, Math.max(8, maxLen + 2)) };
+  });
+
+  // ── Freeze panes ──
+  // Top 3 rows (panel / name / unit) AND every column up to and
+  // including the last varied column (matched by the "(varied)" tag in
+  // the panel header — covers both "INPUT (varied)" and "FUEL (varied)"
+  // so a varied fuel species pulls the freeze line out to its column).
+  // Run # column is always inside the freeze so the row index travels
+  // with the user during horizontal scroll.
+  let lastVariedIdx = 0;   // Run # at column 0 stays in the freeze
+  for (let i = 0; i < allCols.length; i++){
+    if (allCols[i].panel && allCols[i].panel.includes("(varied)")){
+      if (i > lastVariedIdx) lastVariedIdx = i;
+    }
+  }
+  const _xSplit = lastVariedIdx + 1;
+  const _ySplit = 3;
+  // Both forms set: !freeze is the SheetJS legacy property, !views is
+  // the canonical OOXML-mapped property that xlsx-js-style serializes
+  // into the workbook so Excel actually shows the frozen panes.
+  ws["!freeze"] = { xSplit: _xSplit, ySplit: _ySplit };
+  ws["!views"] = [{
+    state: "frozen",
+    xSplit: _xSplit,
+    ySplit: _ySplit,
+    topLeftCell: XLSX.utils.encode_cell({ c: _xSplit, r: _ySplit }),
+    activePane: "bottomRight",
+  }];
 
   // ── Per-cell styling pass ──
   // - First 3 rows: bold + center alignment + light fill so headers stand out.
