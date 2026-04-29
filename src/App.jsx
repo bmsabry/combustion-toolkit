@@ -11122,8 +11122,7 @@ export default function App(){
 
             {/* ── 1. Operating Conditions ───────────────────────────── */}
             <div style={{background:C.bg2,border:`1px solid ${C.accent}25`,borderRadius:8,padding:12,marginBottom:10}}>
-              <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6}}>Operating Conditions</div>
-              <div style={{fontSize:9.5,color:C.txtMuted,lineHeight:1.5,marginBottom:8,fontStyle:"italic"}}>These conditions apply to all tabs. φ=1 is stoichiometric; φ&lt;1 lean; φ&gt;1 rich.</div>
+              <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:8}}>Operating Conditions</div>
               {/* Field order per Application Mode spec:
                     Air Temp → Pressure → TFlame_CC → phi → FAR → Fuel Temp */}
               {/* ── Air Temp ─────────────────────────────────────────── */}
@@ -11235,9 +11234,7 @@ export default function App(){
               {accurate&&hasOnline&&linkOx&&<div style={{marginTop:-2,marginBottom:8}}><LinkChip onBreak={_linkBreakable?()=>setLinkOx(false):null} label="Linked to Cycle humid air"/></div>}
             </div>
 
-            {/* ── 3. Fuel composition (with Quick Start hint) ──────── */}
-            <div style={{...hs.box,marginBottom:10,background:`${C.accent2}08`,borderColor:`${C.accent2}18`}}>
-              <strong style={{color:C.accent2,fontSize:11}}>📌 Quick Start:</strong> <span style={{fontSize:10}}>Select a fuel preset below (e.g., "Pipeline NG"), set your equivalence ratio and conditions, then explore each tab. All panels share these settings.</span></div>
+            {/* ── 3. Fuel composition ──────────────────────────────── */}
             <CompEditor title="Fuel (mol%)" comp={fuel} setComp={setFuel} presets={FUEL_PRESETS} speciesList={FUEL_SP} accent={C.accent2} initialPreset="Pipeline NG (US)"
               helpText="Enter fuel composition in mole percent. Select a preset for common fuels or enter custom values. Total must sum to 100%. CO₂ and N₂ in fuel are treated as diluents."/>
 
