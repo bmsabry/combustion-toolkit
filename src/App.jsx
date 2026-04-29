@@ -2450,7 +2450,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
     </>}
   </div>);}
 
-function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,measH2,setMeasH2,fuelFlowKgs,setFuelFlowKgs,fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv,costPeriod,setCostPeriod,combMode,setCombMode}){
+function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,measH2,setMeasH2,fuelFlowKgs,setFuelFlowKgs,fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv,costPeriod,setCostPeriod,linkFuelFlow,setLinkFuelFlow,linkBreakable,combMode,setCombMode}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   const Tair=T0;
@@ -2703,21 +2703,34 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
       </div>
       {/* Inputs row */}
       <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-        <div style={{display:"flex",alignItems:"center",gap:6}}>
-          <Tip text="Total mass flow of fuel metered to the combustor. Default = 40,000 lb/hr (typical heavy-duty GT baseload, e.g. an LMS100 at full load). Stored internally in kg/s; the field shows lb/hr in English units, kg/hr in SI.">
-            <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
-              Fuel Flow ({units==="ENG"?"lb/hr":"kg/hr"}) ⓘ:
-            </label>
-          </Tip>
-          <NumField value={units==="ENG"?(fuelFlowKgs*7936.64):(fuelFlowKgs*3600)}
-            decimals={0}
-            onCommit={v=>{
-              const val = Math.max(0, +v || 0);
-              setFuelFlowKgs(units==="ENG" ? val/7936.64 : val/3600);
-            }}
-            style={{width:96,padding:"4px 6px",fontFamily:"monospace",
-              color:C.accent2,fontSize:12,fontWeight:700,background:C.bg,
-              border:`1px solid ${C.accent2}50`,borderRadius:4,textAlign:"center"}}/>
+        <div style={{display:"flex",flexDirection:"column",gap:3}}>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <Tip text="Total mass flow of fuel metered to the combustor. Default = 40,000 lb/hr (typical heavy-duty GT baseload, e.g. an LMS100 at full load). Stored internally in kg/s; the field shows lb/hr in English units, kg/hr in SI. In Gas Turbine Simulator and Advanced modes this field is linked to the Cycle's ṁ_fuel by default — break the link to override manually.">
+              <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
+                Fuel Flow ({units==="ENG"?"lb/hr":"kg/hr"}) ⓘ:
+              </label>
+            </Tip>
+            <NumField value={units==="ENG"?(fuelFlowKgs*7936.64):(fuelFlowKgs*3600)}
+              decimals={0}
+              onCommit={v=>{
+                const val = Math.max(0, +v || 0);
+                setFuelFlowKgs(units==="ENG" ? val/7936.64 : val/3600);
+              }}
+              disabled={linkFuelFlow}
+              title={linkFuelFlow?"Linked to Cycle ṁ_fuel — break the link below to type a manual value":undefined}
+              style={{width:96,padding:"4px 6px",fontFamily:"monospace",
+                color:linkFuelFlow?C.txtMuted:C.accent2,
+                fontSize:12,fontWeight:700,
+                background:linkFuelFlow?C.bg2:C.bg,
+                border:`1px solid ${linkFuelFlow?C.border:`${C.accent2}50`}`,
+                borderRadius:4,textAlign:"center",
+                cursor:linkFuelFlow?"not-allowed":"text"}}/>
+          </div>
+          {/* Cycle ṁ_fuel linkage chip — shown when the effective link
+              is active (forced ON in Gas Turbine Simulator; user-controlled
+              ON in Advanced). Hidden in Free / Combustion Toolkit (no cycle
+              running). BREAK button is suppressed (LOCKED) outside Advanced. */}
+          {linkFuelFlow && <LinkChip onBreak={linkBreakable?()=>setLinkFuelFlow(false):null} label="Linked to Cycle ṁ_fuel"/>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:6}}>
           <Tip text="Fuel cost in US dollars per million BTU on a LHV basis — the standard contract / regulatory unit for natural gas. Default $4.00/MMBTU LHV (typical 2024-2026 industrial-tier U.S. NG benchmark). Adjust to your actual fuel contract.">
@@ -10164,6 +10177,9 @@ export default function App(){
   const[linkP3Raw,setLinkP3]=useState(true);
   const[linkFARRaw,setLinkFAR]=useState(true);
   const[linkOxRaw,setLinkOx]=useState(true);
+  // Fifth linkage: Fuel Flow ← cycle ṁ_fuel. Same mode-derivation as the
+  // others (forced ON in GTS, user-controlled in Advanced, hidden in Free/CTK).
+  const[linkFuelFlowRaw,setLinkFuelFlow]=useState(true);
   const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
   // Premixer stability inputs. D_fh = flameholder diameter (Zukoski τ_BO).
   // L_premix / V_premix = premixer geometry (autoignition safety: τ_res < τ_ign).
@@ -10335,6 +10351,7 @@ export default function App(){
   const linkP3  = (mode === "advanced") ? linkP3Raw  : (mode === "gts");
   const linkFAR = (mode === "advanced") ? linkFARRaw : (mode === "gts");
   const linkOx  = (mode === "advanced") ? linkOxRaw  : (mode === "gts");
+  const linkFuelFlow = (mode === "advanced") ? linkFuelFlowRaw : (mode === "gts");
   // The sidebar BREAK button is only meaningful in Advanced. We pass
   // null for onBreak in non-Advanced modes so LinkChip suppresses
   // the button (showing the chip as a read-only status indicator).
@@ -10618,8 +10635,14 @@ export default function App(){
     // Sidebar φ ← cycle φ_Bulk (flame-zone φ, = φ₄/combustor_air_frac). Fall
     // back to phi4 or legacy phi for older backends that haven't deployed yet.
     if(linkFAR)setPhiClamped(cycleResult.phi_Bulk??cycleResult.phi4??cycleResult.phi);
+    // Exhaust panel Fuel Flow ← cycle ṁ_fuel (kg/s). Guarded against NaN
+    // and 0 so a degenerate cycle (e.g. unit-test seed) doesn't wipe the
+    // user's existing fuelFlowKgs.
+    if(linkFuelFlow && Number.isFinite(cycleResult.mdot_fuel_kg_s) && cycleResult.mdot_fuel_kg_s > 0){
+      setFuelFlowKgs(cycleResult.mdot_fuel_kg_s);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[cycleResult,linkT3,linkP3,linkFAR]);
+  },[cycleResult,linkT3,linkP3,linkFAR,linkFuelFlow]);
 
   // Oxidizer linkage — propagate the cycle's humid-air composition (at ambient
   // T/RH) into the sidebar Oxidizer state. Required so T_ad on Flame Temp uses
@@ -11048,7 +11071,7 @@ export default function App(){
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}
               psrActive={psrActive} setPsrActive={setPsrActive}
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
-            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} fuelFlowKgs={fuelFlowKgs} setFuelFlowKgs={setFuelFlowKgs} fuelCostUsdPerMmbtuLhv={fuelCostUsdPerMmbtuLhv} setFuelCostUsdPerMmbtuLhv={setFuelCostUsdPerMmbtuLhv} costPeriod={costPeriod} setCostPeriod={setCostPeriod} combMode={combMode} setCombMode={setCombMode}/>}
+            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} fuelFlowKgs={fuelFlowKgs} setFuelFlowKgs={setFuelFlowKgs} fuelCostUsdPerMmbtuLhv={fuelCostUsdPerMmbtuLhv} setFuelCostUsdPerMmbtuLhv={setFuelCostUsdPerMmbtuLhv} costPeriod={costPeriod} setCostPeriod={setCostPeriod} linkFuelFlow={linkFuelFlow} setLinkFuelFlow={setLinkFuelFlow} linkBreakable={_linkBreakable} combMode={combMode} setCombMode={setCombMode}/>}
             {/* AutomatePanel is always mounted (just hidden when not the
                 active tab) so an in-progress run, captured results, the
                 wizard state, and the Plot Data panel survive tab switches.
