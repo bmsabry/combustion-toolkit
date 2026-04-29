@@ -2450,7 +2450,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
     </>}
   </div>);}
 
-function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,combMode,setCombMode}){
+function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,measH2,setMeasH2,combMode,setCombMode}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   const Tair=T0;
@@ -2481,16 +2481,21 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
   const rO2=accurate&&bkO2.data?adaptEx(bkO2.data):localRO2;
   const rCO2=accurate&&bkCO2.data?adaptEx(bkCO2.data):localRCO2;
 
-  // ── Slip correction (CO + UHC → combustion efficiency η_c) ─────────
-  // Energy-loss formula:
-  //   η_c = 1 − (N_dry/fuel) · (X_CO·LHV_CO + X_UHC·LHV_CH4) / LHV_fuel,molar
+  // ── Slip correction (CO + UHC + H₂ → combustion efficiency η_c) ────
+  // Energy-loss formula (ASME PTC 4 / Lefebvre & Ballal Ch. 9):
+  //   η_c = 1 − (N_dry/fuel) · (X_CO·LHV_CO + X_UHC·LHV_CH4 + X_H2·LHV_H2)
+  //          / LHV_fuel,molar
   // where X_i are mole fractions in dry exhaust on the ACTUAL O₂ basis
   // (NOT 15% O₂ corrected) — caller supplies ppmvd directly.
   // Burn-side products are kept (they match the measured O₂/CO₂); only
-  // φ / FAR / AFR / T_ad are remapped to the fed-side via η_c. T_ad,fed
-  // comes from a fresh adiabatic HP equilibrium at φ_fed (computed below).
+  // φ / FAR / AFR / T_ad are remapped via η_c.
+  // LHV constants (NIST, kJ/mol, water as vapor):
+  //   CO + ½O₂ → CO₂              : 282.99
+  //   CH₄ + 2O₂ → CO₂ + 2H₂O(g)   : 802.31
+  //   H₂ + ½O₂ → H₂O(g)            : 241.83
   const LHV_CO_kJmol  = 282.99;
   const LHV_CH4_kJmol = 802.31;
+  const LHV_H2_kJmol  = 241.83;
   const fp = useMemo(() => calcFuelProps(fuel, ox, Tfuel), [fuel, ox, Tfuel]);
   const LHV_fuel_kJmol = (fp.LHV_mass || 0) * (fp.MW_fuel || 0);   // MJ/kg · g/mol = kJ/mol
   // Per-fuel-mole carbon count in the inlet fuel — used to convert exhaust
@@ -2512,7 +2517,8 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
     if (!r) return {eta_c: 1, phi_fed: r?.phi, FAR_fed: r?.FAR_mass, AFR_fed: r?.AFR_mass, slipActive: false};
     const co_ppm  = Math.max(0, +measCO  || 0);
     const uhc_ppm = Math.max(0, +measUHC || 0);
-    if (co_ppm === 0 && uhc_ppm === 0){
+    const h2_ppm  = Math.max(0, +measH2  || 0);
+    if (co_ppm === 0 && uhc_ppm === 0 && h2_ppm === 0){
       return {eta_c: 1, phi_fed: r.phi, FAR_fed: r.FAR_mass, AFR_fed: r.AFR_mass, slipActive: false};
     }
     if (!nC_fuel || !LHV_fuel_kJmol){
@@ -2535,7 +2541,12 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
     const N_dry_per_fuel = N_total_per_fuel * (1 - X_H2O_wet);
     // Energy lost per mole of fuel fed (kJ/mol):
     //   N_dry/fuel  ·  ppmvd · 1e-6  ·  LHV_species_molar
-    const E_loss = N_dry_per_fuel * 1e-6 * (co_ppm * LHV_CO_kJmol + uhc_ppm * LHV_CH4_kJmol);
+    // Three terms — CO, UHC (as CH₄), H₂.
+    const E_loss = N_dry_per_fuel * 1e-6 * (
+      co_ppm  * LHV_CO_kJmol  +
+      uhc_ppm * LHV_CH4_kJmol +
+      h2_ppm  * LHV_H2_kJmol
+    );
     const eta_c = Math.max(0.01, Math.min(1, 1 - E_loss / LHV_fuel_kJmol));
     return {
       eta_c,
@@ -2546,7 +2557,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
     };
   };
   const slipO2  = useMemo(() => computeSlipCorrection(rO2),
-    [rO2, measCO, measUHC, nC_fuel, LHV_fuel_kJmol]);
+    [rO2, measCO, measUHC, measH2, nC_fuel, LHV_fuel_kJmol]);
   const slipCO2 = useMemo(() => computeSlipCorrection(rCO2),
     [rCO2, measCO, measUHC, nC_fuel, LHV_fuel_kJmol]);
 
@@ -2617,11 +2628,24 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
             color:C.violet,fontSize:12,fontWeight:700,background:C.bg,
             border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center"}}/>
       </div>
+      <div style={{display:"flex",alignItems:"center",gap:6}}>
+        <Tip text="Measured H₂ in exhaust (dry, actual O₂ basis — NOT 15% O₂ corrected). Relevant for syngas, H₂-blended fuels, or partial oxidation upsets. Used in the energy-loss formula via LHV_H₂ = 241.83 kJ/mol. Set to zero for natural-gas combustion (H₂ slip is typically negligible there).">
+          <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
+            Measured H₂ (ppmvd dry, actual) ⓘ:
+          </label>
+        </Tip>
+        <NumField value={measH2} decimals={1}
+          onCommit={v=>setMeasH2(Math.max(0,+v))}
+          style={{width:80,padding:"4px 6px",fontFamily:"monospace",
+            color:C.violet,fontSize:12,fontWeight:700,background:C.bg,
+            border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center"}}/>
+      </div>
       <div style={{flex:"1 1 100%",fontSize:10,color:C.txtMuted,
         fontFamily:"'Barlow',sans-serif",lineHeight:1.45,fontStyle:"italic"}}>
-        Set to zero if not measured. When &gt; 0: Chemical Equilibrium card reports η_c and the
-        FED-side φ / FAR / AFR (corrected for slip), plus a fresh equilibrium flame T at φ_fed.
+        Set to zero if not measured. When any &gt; 0: Chemical Equilibrium card reports η_c and the
+        FED-side φ / FAR / AFR (corrected for slip), plus an equilibrium flame T at φ_eff = φ_burn × η_c.
         Complete Combustion card is unaffected (slip not modeled by definition).
+        η_c = 1 − (N_dry/fuel) · (X_CO·LHV_CO + X_UHC·LHV_CH₄ + X_H₂·LHV_H₂) / LHV_fuel  [ASME PTC 4 / Lefebvre Ch. 9].
       </div>
     </div>
     {/* ============== FROM MEASURED O2 ============== */}
@@ -10146,6 +10170,7 @@ export default function App(){
   // actual-O₂ basis (NOT 15% O₂ corrected); CO same.
   const[measCO,setMeasCO]=useState(0);
   const[measUHC,setMeasUHC]=useState(0);
+  const[measH2,setMeasH2]=useState(0);
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
   const[showPricing,setShowPricing]=useState(false);
@@ -10894,7 +10919,7 @@ export default function App(){
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}
               psrActive={psrActive} setPsrActive={setPsrActive}
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
-            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} combMode={combMode} setCombMode={setCombMode}/>}
+            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} combMode={combMode} setCombMode={setCombMode}/>}
             {/* AutomatePanel is always mounted (just hidden when not the
                 active tab) so an in-progress run, captured results, the
                 wizard state, and the Plot Data panel survive tab switches.
