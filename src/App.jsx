@@ -4250,6 +4250,45 @@ function CombustorMappingPanel({
         return [ldL + u * (ldH - ldL), hdL + u * (hdH - hdL)];
       };
 
+      // ── Acoustic spike on LOW φ_OP (BR=7) — runs FIRST so the target
+      //    update on this same tick reads a fresh `active` flag, no
+      //    1-tick lag. Lean-tip flameholding margin collapses around
+      //    φ_OP ≈ 0.27 ± and the dome rings up. When φ_OP enters
+      //    [0.25, 0.31] we pick a random fire point inside the band and
+      //    a random spike amplitude in [6, 8] psi — different exact
+      //    trigger each time. Latch persists while φ_OP stays in band
+      //    AND below the rolled threshold; clears the moment φ_OP exits
+      //    (which it will when the existing >5.5 psi protection cycle
+      //    forces BRNDMD → 4 and the BR=4 mapping pulls φ_OP back to
+      //    ~0.7).
+      if (!tr.tripped && cycLatest) {
+        const _br_spike = brndmdOverride ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
+        if (_br_spike === 7) {
+          const pOp = Number(phiOP) || 0;
+          if (pOp >= 0.25 && pOp <= 0.31) {
+            if (tr.phiOpSpike.thresh == null) {
+              tr.phiOpSpike.thresh = 0.25 + Math.random() * (0.31 - 0.25);
+              tr.phiOpSpike.target = 6 + Math.random() * 2;
+            }
+            tr.phiOpSpike.active = pOp <= tr.phiOpSpike.thresh;
+          } else {
+            tr.phiOpSpike.thresh = null;
+            tr.phiOpSpike.target = null;
+            tr.phiOpSpike.active = false;
+          }
+        } else {
+          tr.phiOpSpike.thresh = null;
+          tr.phiOpSpike.target = null;
+          tr.phiOpSpike.active = false;
+        }
+      } else {
+        // Engine tripped or no cycle yet — clear the latch so a recovery
+        // doesn't strand the spike state.
+        tr.phiOpSpike.thresh = null;
+        tr.phiOpSpike.target = null;
+        tr.phiOpSpike.active = false;
+      }
+
       // ─── Update target means ──────────────────────────────────────────
       // When tripped, ALL targets go to 0 with their device-delay times.
       // Otherwise read the latest correlation/cycle values.
@@ -4347,39 +4386,22 @@ function CombustorMappingPanel({
           tr.phiOp.inBand = false; tr.phiOp.thresh = null;
         }
 
-        // ── Acoustic spike on LOW φ_OP (BR=7) ──
-        // Lean-tip flameholding margin collapses around φ_OP ≈ 0.27 ±
-        // and the dome rings up. Modeled as: when φ_OP enters [0.25, 0.31]
-        // we pick a random fire point inside the band and a random spike
-        // amplitude in [6, 8] psi — different exact trigger each time.
-        // Latch persists while φ_OP stays in band AND below the rolled
-        // threshold; clears the moment φ_OP exits (which it will when
-        // the existing >5.5 psi protection cycle forces BRNDMD → 4 and
-        // the BR=4 mapping pulls φ_OP back to ~0.7).
-        if (_br === 7) {
-          const pOp = Number(phiOP) || 0;
-          if (pOp >= 0.25 && pOp <= 0.31) {
-            if (tr.phiOpSpike.thresh == null) {
-              tr.phiOpSpike.thresh = 0.25 + Math.random() * (0.31 - 0.25);
-              tr.phiOpSpike.target = 6 + Math.random() * 2;
-            }
-            tr.phiOpSpike.active = pOp <= tr.phiOpSpike.thresh;
-          } else {
-            tr.phiOpSpike.thresh = null;
-            tr.phiOpSpike.target = null;
-            tr.phiOpSpike.active = false;
-          }
-        } else {
-          // BRNDMD changed (e.g. protection forced BR=4) — drop the latch
-          // so PX36 lags back down toward the live correlation value.
-          tr.phiOpSpike.thresh = null;
-          tr.phiOpSpike.target = null;
-          tr.phiOpSpike.active = false;
-        }
       }
 
       // ─── Compute displayed (lagging) means ──────────────────────────
-      const dPX36   = _displayedMean(now, m.PX36_SEL);
+      // PX36_SEL fast-path: when the φ_OP spike latch is active, bypass
+      // the deadtime + smoothstep ramp entirely and snap dPX36 to the
+      // rolled spike target. Acoustic ring-up is a fraction-of-a-second
+      // event in the real world; the lagging-mean's 1 s transT models
+      // the SENSOR response, not the gas-dynamics. We still call
+      // _updateTarget below with the spike target so the lagging mean
+      // tracks for the FALL phase — when the latch clears, the metric's
+      // internal mean is at-or-near the spike value and ramps back down
+      // to the correlation value over ~1 s. Net: instant rise, gradual
+      // decay, which matches dome-ring-up / ring-down physics.
+      const dPX36 = tr.phiOpSpike.active
+        ? tr.phiOpSpike.target
+        : _displayedMean(now, m.PX36_SEL);
       const dPX36HI = _displayedMean(now, m.PX36_SEL_HI);
       const dNOx    = _displayedMean(now, m.NOx15);
       const dCO     = _displayedMean(now, m.CO15);
