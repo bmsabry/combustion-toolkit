@@ -11153,8 +11153,17 @@ export default function App(){
             )}
             <button onClick={()=>setShowPricing(true)} title="Pricing — Accurate Cantera versions" style={{padding:"6px 12px",fontSize:11,fontWeight:700,color:C.bg,background:C.accent2,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>PRICING</button>
             <button onClick={()=>setShowHelp(true)} title="User Guide & Help" style={{padding:"6px 10px",fontSize:13,fontWeight:700,color:C.accent,background:`${C.accent}15`,border:`1px solid ${C.accent}30`,borderRadius:6,cursor:"pointer",fontFamily:"monospace"}}>?</button>
-            <div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>
-              {["SI","ENG"].map(u=>(<button key={u} onClick={()=>setUnits(u)} style={{padding:"6px 14px",fontSize:11,fontWeight:units===u?700:400,fontFamily:"'Barlow Condensed',sans-serif",color:units===u?C.bg:C.txtDim,background:units===u?C.accent:"transparent",border:"none",cursor:"pointer",letterSpacing:".5px",transition:"all .15s"}}>{u==="SI"?"SI (Metric)":"English (Imperial)"}</button>))}</div>
+            {/* Units selector — a single labeled dropdown ("UNITS · English ▾")
+                replaces the old two-button segmented control. English is
+                the default (set in the App-level useState above). */}
+            <label title="Switch between English (Imperial) and SI (Metric) units across every panel" style={{display:"flex",alignItems:"stretch",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden",background:C.bg2,cursor:"pointer"}}>
+              <span style={{padding:"6px 10px",fontSize:11,fontWeight:700,color:C.txtDim,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",display:"flex",alignItems:"center"}}>UNITS</span>
+              <select value={units} onChange={e=>setUnits(e.target.value)}
+                style={{padding:"6px 10px",fontSize:11,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",color:C.bg,background:C.accent,border:"none",borderLeft:`1px solid ${C.border}`,cursor:"pointer",letterSpacing:".5px",outline:"none"}}>
+                <option value="ENG">English (Imperial)</option>
+                <option value="SI">SI (Metric)</option>
+              </select>
+            </label>
             <BusyGuardedExportButton onExport={()=>exportToExcel(fuel,ox,phi,T0,P,units,panelState)}/>
           </div></div>
 
