@@ -4747,7 +4747,7 @@ function CombustorMappingPanel({
                   Live Mapping {mappingActive ? <span style={{fontSize:10,color:C.good,marginLeft:8,fontWeight:500,fontFamily:"monospace",letterSpacing:0}}>● RECORDING · {mm}:{ss}</span> : null}
                 </div>
                 <div style={{fontSize:10.5,color:C.txtMuted,lineHeight:1.45,fontFamily:"'Barlow',sans-serif",maxWidth:820}}>
-                  Real-time instrument simulation at 1 Hz. Each trace centres on the cycle/correlation mean; noise model is sensor-realistic per metric. When you change a parameter, the displayed mean lags behind by the device dead time (PX36: 0 s · NOx<sub>15</sub>/CO<sub>15</sub>: 83 s · MWI_WIM: 2 s · MWI_GC: 415 s) then ramps to the new value via smoothstep over 1 s / 7 s / 5 s / 5 s respectively.
+                  Real-time instrument simulation at 1 Hz with sensor-realistic noise. Response times reflect each instrument: acoustics (PX36) ≈ 1 s, power (MW) ≈ 7 s, Wobbe meter (WIM) ≈ 7 s, emissions (NOx / CO) ≈ 90 s, gas chromatograph (GC) ≈ 7 min. Exact dead-times and time constants are in the <strong>Assumptions</strong> tab.
                 </div>
               </div>
               <div style={{display:"flex",gap:8,flexShrink:0}}>
