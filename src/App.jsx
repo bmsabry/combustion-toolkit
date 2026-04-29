@@ -3977,10 +3977,24 @@ function CombustorMappingPanel({
   const corrRef = useRef(null);
   const cycleRef = useRef(null);
   const emissionsModeRef = useRef(emissionsMode);
+  // Phi refs — mirror the φ state into refs so the 2 Hz Live Mapping
+  // interval can read fresh values without having phiIP/phiOP/phiIM in
+  // its useEffect deps. Without this, every +/− click on the φ editor
+  // forces React to tear down + recreate the setInterval synchronously
+  // during the commit phase, and rapid clicks stack up to a perceptible
+  // UI freeze (3–5 clicks → couple-second stall). With it, clicks just
+  // update the ref; the running interval picks up the new value on its
+  // next 500 ms tick.
+  const phiIPRef = useRef(phiIP);
+  const phiOPRef = useRef(phiOP);
+  const phiIMRef = useRef(phiIM);
   useEffect(() => {
     corrRef.current = R?.correlations || null;
     cycleRef.current = cycleResult || null;
     emissionsModeRef.current = emissionsMode;
+    phiIPRef.current = phiIP;
+    phiOPRef.current = phiOP;
+    phiIMRef.current = phiIM;
   });
   // ── ENGINE PROTECTION LOGIC ─────────────────────────────────────────
   // Realistic plant control behavior. When live PX36_SEL crosses 5.5 psi,
@@ -4264,7 +4278,7 @@ function CombustorMappingPanel({
       if (!tr.tripped && cycLatest) {
         const _br_spike = brndmdOverride ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
         if (_br_spike === 7) {
-          const pOp = Number(phiOP) || 0;
+          const pOp = Number(phiOPRef.current) || 0;
           if (pOp >= 0.25 && pOp <= 0.31) {
             if (tr.phiOpSpike.thresh == null) {
               tr.phiOpSpike.thresh = 0.25 + Math.random() * (0.31 - 0.25);
@@ -4312,7 +4326,7 @@ function CombustorMappingPanel({
         _updateTarget(now, m.CO15,     corrLatest.CO15);
         // PX36_SEL_HI gets the BRNDMD-6 phi_IP multiplier (only at BR=6).
         const _br = brndmdOverride ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
-        const _hiMult = (_br === 6) ? _phi_ip_hi_mult(Number(phiIP) || 0) : 1.0;
+        const _hiMult = (_br === 6) ? _phi_ip_hi_mult(Number(phiIPRef.current) || 0) : 1.0;
         _updateTarget(now, m.PX36_SEL_HI, corrLatest.PX36_SEL_HI * _hiMult);
         const mwiCycle = cycLatest?.fuel_flexibility?.mwi || 0;
         if (mwiCycle > 0) {
@@ -4333,7 +4347,7 @@ function CombustorMappingPanel({
         // ── phi_IP trip — only at BRNDMD 7 ──
         if (_br === 7) {
           const [lo, hi] = _interpBand(loadPct, [75, 0.35, 0.40], [100, 0.29, 0.35]);
-          const pIp = Number(phiIP) || 0;
+          const pIp = Number(phiIPRef.current) || 0;
           if (pIp >= lo) {
             if (!tr.phiIp.inBand) {
               // First entry into the band: roll a fresh random threshold
@@ -4347,7 +4361,7 @@ function CombustorMappingPanel({
               setTripBanner({
                 atSec: now, px36HiVal: 100,
                 brndmd: _br, loadPct,
-                phiIp: pIp, phiOp: Number(phiOP)||0, phiIm: Number(phiIM)||0,
+                phiIp: pIp, phiOp: Number(phiOPRef.current)||0, phiIm: Number(phiIMRef.current)||0,
               });
               _resetProtection();  // cancel any in-progress protection cycle
               _cancelEmissionsStaging();  // cancel any in-progress emissions ramp
@@ -4362,7 +4376,7 @@ function CombustorMappingPanel({
         // ── phi_OP trip — at BRNDMD 6 or 7 ──
         if (!tr.tripped && (_br === 6 || _br === 7)) {
           const [lo, hi] = _interpBand(loadPct, [70, 1.00, 1.20], [100, 0.95, 1.10]);
-          const pOp = Number(phiOP) || 0;
+          const pOp = Number(phiOPRef.current) || 0;
           if (pOp >= lo) {
             if (!tr.phiOp.inBand) {
               tr.phiOp.inBand = true;
@@ -4374,7 +4388,7 @@ function CombustorMappingPanel({
               setTripBanner({
                 atSec: now, px36HiVal: 100,
                 brndmd: _br, loadPct,
-                phiIp: Number(phiIP)||0, phiOp: pOp, phiIm: Number(phiIM)||0,
+                phiIp: Number(phiIPRef.current)||0, phiOp: pOp, phiIm: Number(phiIMRef.current)||0,
               });
               _resetProtection();
               _cancelEmissionsStaging();
@@ -4486,7 +4500,10 @@ function CombustorMappingPanel({
       setTickCount(c => c + 1);
     }, 500);
     return () => clearInterval(id);
-  }, [mappingActive, phiIP, phiOP]);
+    // Only re-create the interval when mappingActive itself flips —
+    // phiIP/phiOP/phiIM are now read live via their refs (above) so
+    // continuous +/- clicks don't tear down the running interval.
+  }, [mappingActive]);
 
   const startMapping = () => {
     const now = Date.now() / 1000;
