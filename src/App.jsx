@@ -9981,21 +9981,20 @@ function BaselineMismatchModal({ mismatches, units, onCancel, onProceed }){
 // Tiny visual helpers used by AutomatePanel.
 // Functions instead of consts so each render reads the LIVE palette
 // (the const-capture-at-module-load trap is the same one S and hs hit).
-// Headers are right-aligned to match the right-aligned numeric cells —
-// each column header now sits directly above the numbers it labels,
-// instead of hanging at the column's left edge while the data sits
-// at the right. tabular-nums makes thousand-separated numbers like
-// "2,800" align cleanly with bare zeros.
+// Headers and cells both center inside their column so the small,
+// uniform values ("2,800", "300", "0") sit visually balanced under
+// their captions. tabular-nums keeps thousand-separated numbers like
+// "2,800" column-aligning with bare zeros despite center-alignment.
 function previewHeaderStyle(){return{
-  textAlign:"right", padding:"6px 12px", fontSize:10, color:C.txtDim,
+  textAlign:"center", padding:"6px 14px", fontSize:10, color:C.txtDim,
   background:C.bg3, position:"sticky", top:0, fontWeight:700,
   borderBottom:`1px solid ${C.border}`,
   fontVariantNumeric:"tabular-nums",
   whiteSpace:"nowrap",
 };}
 function previewCellStyle(){return{
-  padding:"4px 12px", color:C.txt, whiteSpace:"nowrap",
-  textAlign:"right",
+  padding:"4px 14px", color:C.txt, whiteSpace:"nowrap",
+  textAlign:"center",
   fontVariantNumeric:"tabular-nums",
 };}
 // align="right" flips the small caption to right-align — used on the
