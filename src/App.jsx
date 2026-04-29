@@ -3955,6 +3955,15 @@ function CombustorMappingPanel({
   const tripStateRef = useRef({
     phiIp: { thresh: null, inBand: false },  // BR=7 only
     phiOp: { thresh: null, inBand: false },  // BR=6 or 7
+    // Acoustic-instability spike on LOW φ_OP (BR=7 only). When φ_OP enters
+    // the unstable band [0.25, 0.31], we roll a random fire threshold
+    // inside the band and a random spike amplitude in [6, 8] psi. While
+    // φ_OP sits at-or-below the threshold AND in the band, the PX36_SEL
+    // target is held at the spike amplitude — the existing protection
+    // cycle then trips at >5.5 psi, overrides BRNDMD to 4, the BR=4
+    // mapping pulls φ_OP back to 0.7, the band condition clears, and
+    // the spike target stops being re-asserted (PX36 lags back down).
+    phiOpSpike: { thresh: null, target: null, active: false },
     tripped: false,                           // engine shut down
     tripAt: 0,                                // wall-clock seconds
     tripCause: null,                          // 'phi_ip' | 'phi_op'
@@ -4253,7 +4262,13 @@ function CombustorMappingPanel({
         _updateTarget(now, m.MWI_GC,  0);
         _updateTarget(now, m.MW, 0);
       } else if (corrLatest) {
-        _updateTarget(now, m.PX36_SEL, corrLatest.PX36_SEL);
+        // When the φ_OP spike is latched, override the PX36_SEL target
+        // with the rolled spike amplitude (6–8 psi) instead of the live
+        // correlation value. The lagging-mean smoothstep walks the
+        // displayed value toward the spike target within ~1 s — fast
+        // enough to read as a real acoustic event on the trace.
+        _updateTarget(now, m.PX36_SEL,
+          tr.phiOpSpike.active ? tr.phiOpSpike.target : corrLatest.PX36_SEL);
         _updateTarget(now, m.NOx15,    corrLatest.NOx15);
         _updateTarget(now, m.CO15,     corrLatest.CO15);
         // PX36_SEL_HI gets the BRNDMD-6 phi_IP multiplier (only at BR=6).
@@ -4330,6 +4345,36 @@ function CombustorMappingPanel({
           }
         } else {
           tr.phiOp.inBand = false; tr.phiOp.thresh = null;
+        }
+
+        // ── Acoustic spike on LOW φ_OP (BR=7) ──
+        // Lean-tip flameholding margin collapses around φ_OP ≈ 0.27 ±
+        // and the dome rings up. Modeled as: when φ_OP enters [0.25, 0.31]
+        // we pick a random fire point inside the band and a random spike
+        // amplitude in [6, 8] psi — different exact trigger each time.
+        // Latch persists while φ_OP stays in band AND below the rolled
+        // threshold; clears the moment φ_OP exits (which it will when
+        // the existing >5.5 psi protection cycle forces BRNDMD → 4 and
+        // the BR=4 mapping pulls φ_OP back to ~0.7).
+        if (_br === 7) {
+          const pOp = Number(phiOP) || 0;
+          if (pOp >= 0.25 && pOp <= 0.31) {
+            if (tr.phiOpSpike.thresh == null) {
+              tr.phiOpSpike.thresh = 0.25 + Math.random() * (0.31 - 0.25);
+              tr.phiOpSpike.target = 6 + Math.random() * 2;
+            }
+            tr.phiOpSpike.active = pOp <= tr.phiOpSpike.thresh;
+          } else {
+            tr.phiOpSpike.thresh = null;
+            tr.phiOpSpike.target = null;
+            tr.phiOpSpike.active = false;
+          }
+        } else {
+          // BRNDMD changed (e.g. protection forced BR=4) — drop the latch
+          // so PX36 lags back down toward the live correlation value.
+          tr.phiOpSpike.thresh = null;
+          tr.phiOpSpike.target = null;
+          tr.phiOpSpike.active = false;
         }
       }
 
@@ -4440,6 +4485,7 @@ function CombustorMappingPanel({
     tripStateRef.current = {
       phiIp: { thresh: null, inBand: false },
       phiOp: { thresh: null, inBand: false },
+      phiOpSpike: { thresh: null, target: null, active: false },
       tripped: false, tripAt: 0, tripCause: null,
     };
     setTripBanner(null);
@@ -4458,6 +4504,7 @@ function CombustorMappingPanel({
     tripStateRef.current = {
       phiIp: { thresh: null, inBand: false },
       phiOp: { thresh: null, inBand: false },
+      phiOpSpike: { thresh: null, target: null, active: false },
       tripped: false, tripAt: 0, tripCause: null,
     };
     setTripBanner(null);
@@ -4471,6 +4518,7 @@ function CombustorMappingPanel({
     tripStateRef.current.tripCause = null;
     tripStateRef.current.phiIp = { thresh: null, inBand: false };
     tripStateRef.current.phiOp = { thresh: null, inBand: false };
+    tripStateRef.current.phiOpSpike = { thresh: null, target: null, active: false };
     setTripBanner(null);
   };
 
