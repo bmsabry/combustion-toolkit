@@ -9586,68 +9586,78 @@ function AutomatePanel(props){
           // Points-count: compute from display units (math is identical, just
           // shown for the user's UX).
           const pointCount = Math.max(1, Math.floor(((dispMax - dispMin) / Math.max(dispStep, 1e-12)) + 1.0001));
+          // 7-column grid: name | mode | min | max | step | pts | balance.
+          // Every row paints the same columns at the same x-positions so
+          // values line up across rows even when only some have a Balance.
+          // List mode collapses Min/Max/Step/pts into one spanning cell;
+          // Balance stays in its own column (or an empty placeholder for
+          // non-fuel rows) so the column geometry never shifts.
           return(
             <div key={vid} style={{padding:"8px 10px", background:C.bg3, borderRadius:5,
               border:`1px solid ${C.border}`, display:"grid",
-              gridTemplateColumns:"180px 80px 1fr", gap:8, alignItems:"center"}}>
-              <div>
+              gridTemplateColumns:"180px 100px 110px 110px 100px 75px 130px",
+              gap:10, alignItems:"end"}}>
+              {/* Col 1 — Variable name */}
+              <div style={{alignSelf:"center"}}>
                 <div style={{fontSize:11.5, color:C.txt, fontWeight:600}}>{def.label}</div>
                 <div style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>{dispUnit || def.kind}</div>
               </div>
+              {/* Col 2 — Range / List mode */}
               <select value={mode} onChange={e => updateVarSpec(vid, {mode:e.target.value})}
                 disabled={isEnum}
-                style={{...S.sel, fontSize:10, padding:"4px 6px"}}>
+                style={{...S.sel, fontSize:10, padding:"4px 6px", alignSelf:"center"}}>
                 <option value="range">Range</option>
                 <option value="list">List</option>
               </select>
-              <div style={{display:"flex", gap:6, alignItems:"center", flexWrap:"wrap"}}>
-                {mode === "range" && !isEnum && (
-                  <>
-                    <NumLabel l={`Min (${dispUnit})`}>
-                      <NumField value={dispMin} decimals={4}
-                        onCommit={v => updateVarSpec(vid, {min: toSi(def, +v, units)})}
-                        style={{...S.inp, width:80}}/>
-                    </NumLabel>
-                    <NumLabel l={`Max (${dispUnit})`}>
-                      <NumField value={dispMax} decimals={4}
-                        onCommit={v => updateVarSpec(vid, {max: toSi(def, +v, units)})}
-                        style={{...S.inp, width:80}}/>
-                    </NumLabel>
-                    <NumLabel l={`Step (${dispUnit})`}>
-                      <NumField value={dispStep} decimals={4}
-                        onCommit={v => updateVarSpec(vid, {step: toSiDelta(def, +v, units)})}
-                        style={{...S.inp, width:70}}/>
-                    </NumLabel>
-                    <span style={{fontSize:10, color:C.txtMuted, fontFamily:"monospace"}}>
-                      → {pointCount} pts
-                    </span>
-                  </>
-                )}
-                {mode === "list" && (
-                  <>
-                    <ListInput
-                      isEnum={isEnum}
-                      def={def}
-                      units={units}
-                      list={cfg.list}
-                      placeholder={isEnum ? def.choices?.map(c=>c.value).join(", ") : "e.g. 1.0, 2.0, 3.0"}
-                      onCommit={(parsedSiList) => updateVarSpec(vid, {list: parsedSiList})}
-                      style={{...S.inp, flex:1, minWidth:200}}
-                    />
-                    {!isEnum && <span style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>{dispUnit}</span>}
-                  </>
-                )}
-                {isFuel && (
-                  <NumLabel l="Balance">
-                    <select value={cfg.balanceSpecies || (def.species === "CH4" ? "N2" : "CH4")}
-                      onChange={e => updateVarSpec(vid, {balanceSpecies:e.target.value})}
-                      style={{...S.sel, fontSize:10, padding:"3px 5px", width:90}}>
-                      {FUEL_SP.filter(sp => sp !== def.species).map(sp =>
-                        <option key={sp} value={sp}>{sp}</option>)}
-                    </select>
+              {/* Cols 3–6 — Min / Max / Step / pts (range mode) OR list input spanning all four */}
+              {mode === "range" && !isEnum && (
+                <>
+                  <NumLabel l={`Min (${dispUnit})`}>
+                    <NumField value={dispMin} decimals={4}
+                      onCommit={v => updateVarSpec(vid, {min: toSi(def, +v, units)})}
+                      style={{...S.inp, width:"100%"}}/>
                   </NumLabel>
-                )}
-              </div>
+                  <NumLabel l={`Max (${dispUnit})`}>
+                    <NumField value={dispMax} decimals={4}
+                      onCommit={v => updateVarSpec(vid, {max: toSi(def, +v, units)})}
+                      style={{...S.inp, width:"100%"}}/>
+                  </NumLabel>
+                  <NumLabel l={`Step (${dispUnit})`}>
+                    <NumField value={dispStep} decimals={4}
+                      onCommit={v => updateVarSpec(vid, {step: toSiDelta(def, +v, units)})}
+                      style={{...S.inp, width:"100%"}}/>
+                  </NumLabel>
+                  <span style={{fontSize:10, color:C.txtMuted, fontFamily:"monospace",
+                    textAlign:"right", paddingBottom:6}}>
+                    → {pointCount} pts
+                  </span>
+                </>
+              )}
+              {mode === "list" && (
+                <div style={{gridColumn:"3 / 7", display:"flex", gap:8, alignItems:"center"}}>
+                  <ListInput
+                    isEnum={isEnum}
+                    def={def}
+                    units={units}
+                    list={cfg.list}
+                    placeholder={isEnum ? def.choices?.map(c=>c.value).join(", ") : "e.g. 1.0, 2.0, 3.0"}
+                    onCommit={(parsedSiList) => updateVarSpec(vid, {list: parsedSiList})}
+                    style={{...S.inp, flex:1, minWidth:0}}
+                  />
+                  {!isEnum && <span style={{fontSize:9.5, color:C.txtMuted, fontFamily:"monospace"}}>{dispUnit}</span>}
+                </div>
+              )}
+              {/* Col 7 — Balance species (fuel rows only; placeholder for others to keep grid aligned) */}
+              {isFuel ? (
+                <NumLabel l="Balance">
+                  <select value={cfg.balanceSpecies || (def.species === "CH4" ? "N2" : "CH4")}
+                    onChange={e => updateVarSpec(vid, {balanceSpecies:e.target.value})}
+                    style={{...S.sel, fontSize:10, padding:"3px 5px", width:"100%"}}>
+                    {FUEL_SP.filter(sp => sp !== def.species).map(sp =>
+                      <option key={sp} value={sp}>{sp}</option>)}
+                  </select>
+                </NumLabel>
+              ) : <div/>}
             </div>
           );
         })}
