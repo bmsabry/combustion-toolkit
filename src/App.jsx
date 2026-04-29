@@ -1603,8 +1603,14 @@ function BusyGuardedExportButton({onExport}){
 //   - git failure at build (vite.config.js falls back to timestamp)
 //   - two-tab concurrent writes (last-write-wins; minor entry loss)
 //   - errors are NEVER cached (only the .then path stores)
+//
+// Cache-version sentinel — bump this when a backend response shape OR the
+// numeric correctness of any cached endpoint changes, even when the
+// frontend build SHA wouldn't otherwise change. This forces every client
+// to drop stale entries on next load. Last bump: exhaust T_ad fix v2.
+const __BK_CACHE_VERSION = "v2-exhaust-fix";
 const __BK_BUILD = (typeof __BUILD_SHA__ !== "undefined") ? __BUILD_SHA__ : "dev";
-const __BK_LS_KEY = `ctk_bk_cache_${__BK_BUILD}`;
+const __BK_LS_KEY = `ctk_bk_cache_${__BK_BUILD}_${__BK_CACHE_VERSION}`;
 const __BK_TTL_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
 const __BK_MAX = 100;
 const __BK_INFLIGHT = new Map();        // key -> Promise<data>
