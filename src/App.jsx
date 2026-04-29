@@ -3988,6 +3988,15 @@ function CombustorMappingPanel({
   const phiIPRef = useRef(phiIP);
   const phiOPRef = useRef(phiOP);
   const phiIMRef = useRef(phiIM);
+  // brndmdOverride MUST be mirrored too. When the φ_OP-spike protection
+  // cycle calls setBrndmdOverride(4) the App-level auto-fill writes the
+  // BR=4 mapping values into phi state immediately (phi_IP=2.0 etc).
+  // If the interval's closure is still on stale brndmdOverride=null then
+  // _br = calcBRNDMD(MW_net) = 7 — and the BR=7-gated phi_IP high-side
+  // trip detection sees phi_IP=2.0 (well above the [0.29, 0.35] band)
+  // and trips the engine on the very next tick. The override and the
+  // φ values must move atomically from the interval's point of view.
+  const brndmdOverrideRef = useRef(brndmdOverride);
   useEffect(() => {
     corrRef.current = R?.correlations || null;
     cycleRef.current = cycleResult || null;
@@ -3995,6 +4004,7 @@ function CombustorMappingPanel({
     phiIPRef.current = phiIP;
     phiOPRef.current = phiOP;
     phiIMRef.current = phiIM;
+    brndmdOverrideRef.current = brndmdOverride;
   });
   // ── ENGINE PROTECTION LOGIC ─────────────────────────────────────────
   // Realistic plant control behavior. When live PX36_SEL crosses 5.5 psi,
@@ -4276,7 +4286,7 @@ function CombustorMappingPanel({
       //    forces BRNDMD → 4 and the BR=4 mapping pulls φ_OP back to
       //    ~0.7).
       if (!tr.tripped && cycLatest) {
-        const _br_spike = brndmdOverride ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
+        const _br_spike = brndmdOverrideRef.current ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
         if (_br_spike === 7) {
           const pOp = Number(phiOPRef.current) || 0;
           if (pOp >= 0.25 && pOp <= 0.31) {
@@ -4325,7 +4335,7 @@ function CombustorMappingPanel({
         _updateTarget(now, m.NOx15,    corrLatest.NOx15);
         _updateTarget(now, m.CO15,     corrLatest.CO15);
         // PX36_SEL_HI gets the BRNDMD-6 phi_IP multiplier (only at BR=6).
-        const _br = brndmdOverride ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
+        const _br = brndmdOverrideRef.current ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
         const _hiMult = (_br === 6) ? _phi_ip_hi_mult(Number(phiIPRef.current) || 0) : 1.0;
         _updateTarget(now, m.PX36_SEL_HI, corrLatest.PX36_SEL_HI * _hiMult);
         const mwiCycle = cycLatest?.fuel_flexibility?.mwi || 0;
@@ -4343,7 +4353,7 @@ function CombustorMappingPanel({
       // Trip logic only runs when NOT already tripped.
       if (!tr.tripped && cycLatest) {
         const loadPct = cycLatest.load_pct || 100;
-        const _br = brndmdOverride ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
+        const _br = brndmdOverrideRef.current ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
         // ── phi_IP trip — only at BRNDMD 7 ──
         if (_br === 7) {
           const [lo, hi] = _interpBand(loadPct, [75, 0.35, 0.40], [100, 0.29, 0.35]);
