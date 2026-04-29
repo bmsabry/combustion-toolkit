@@ -950,6 +950,7 @@ const sA=[
   ["","C3-effective","0.8·(C2H6+C2H4+C2H2) + (C3+...+C8)","C2-class at 0.8; C3 and heavier at 1.0."],
   ["","Tflame derivative (NOx)","Piecewise: 0.12 ≥2850, 0.04 between, 0 below 2750","Integrated continuously from T_ref = 3035 °F."],
   ["","Emissions Transfer Function","Per-BRNDMD post-multipliers on NOx, CO, PX36","User-trim knob; default 1.0. PX36_SEL_HI not multiplied."],
+  ["","Air flow split","W36 = W3 · (W36/W3); flame = W36 · com.Air Frac; effusion = W36 · (1 − com.Air Frac)","W36 enters the dome and is split across the 4 circuits. OM is the float circuit (fuel and φ back-solved)."],
 
   ["16. Live Mapping (HMI sim)","Tick rate","1 Hz","10-minute rolling buffer (600 samples)."],
   ["","Instrument response","Transport delay + smoothstep","display(t) = lookup(t − deadT) blended over transT. Per-metric deadT/transT: PX36 0/1, NOx/CO 83/7, MWI_WIM 2/5, MWI_GC 415/5, MW 0/7."],
@@ -3540,6 +3541,7 @@ function AssumptionsPanel(){
       <Assumption label="C3-effective" value="0.8·(C2H6+C2H4+C2H2) + (C3H8+C4H10+...+C8H18)" note="C2-class species at 0.8 coefficient; C3 and every heavier hydrocarbon at 1.0."/>
       <Assumption label="Tflame derivative (NOx only)" value="Piecewise: 0.12 ppm/°F ≥2850, 0.04 between 2750–2850, 0 below 2750" note="Integrated continuously from T_ref = 3035 °F so the contribution has no jumps at breakpoints."/>
       <Assumption label="Emissions Transfer Function" value="Per-BRNDMD post-multipliers on NOx, CO, PX36" note="User-trim knob, default 1.0 for all. PX36_SEL_HI does NOT take this multiplier (its tuning is in Step 2). Stored per BRNDMD ∈ {2,4,6,7}."/>
+      <Assumption label="Air flow split" value="W36 = W3 · (W36/W3); flame air = W36 · com.Air Frac; effusion / cooling = W36 · (1 − com.Air Frac)" note="W36 enters the dome and is split across the four fuel circuits. The remainder is effusion / cooling air. Outer Main is the float circuit: m_fuel_OM = total − IP − OP − IM, and φ_OM is back-solved."/>
     </AssumptionsGroup>
 
     <AssumptionsGroup title="16. Live Mapping (HMI sim — visual only, no engineering data)" subtitle="Real-time trace dashboard. Numbers are derived from the mapping correlation above plus a stochastic instrument-response model. Behavior is intentional and not under operator control.">
@@ -5296,62 +5298,6 @@ function CombustorMappingPanel({
         </div>
       </div>
 
-      {/* ═════════════════════════════════════════════════════════════════
-          REFERENCE & METHODOLOGY — explanatory text, reference conditions,
-          live correlation deltas, ratio scaling. Moved here from the old
-          Card 2 inline block so the dashboard above stays clean.
-         ═════════════════════════════════════════════════════════════════ */}
-      <div style={{padding:"14px 16px",background:`${C.bg2}80`,border:`1px solid ${C.border}`,borderRadius:8,marginTop:4}}>
-        <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:8,paddingBottom:5,borderBottom:`1px solid ${C.accent}25`}}>
-          Reference Conditions & Correlation Methodology
-        </div>
-
-        <p style={{fontSize:11,color:C.txtDim,lineHeight:1.55,fontFamily:"'Barlow',sans-serif",margin:"0 0 10px"}}>
-          The emissions and dynamics shown in <strong style={{color:C.txt}}>Card 1</strong> come from an
-          <strong style={{color:C.accent}}> anchored linear correlation</strong> calibrated at the
-          LMS100 design point. The correction chain is: <strong>(1)</strong> linear corrections for
-          DT_Main, Phi_OP, C3, N2, Tflame, T3 deltas from the reference; <strong>(2)</strong> a Phi_OP
-          multiplier that drops from 1.0 to 0.8 linearly between φ_OP = 0.55 and 0.45 — applied
-          <strong> only</strong> to PX36_SEL_HI; <strong>(3)</strong> a P3 power-law scaling
-          <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace",margin:"0 2px"}}>(P3/638)^exp</code>
-          with exponents <strong>0.467 / −1.0 / 0.44 / 0.44</strong> for NOx<sub>15</sub> / CO<sub>15</sub> /
-          PX36_SEL / PX36_SEL_HI respectively. The Tflame contribution to NOx<sub>15</sub> is
-          piecewise-integrated (slope 0.12 ppm/°F above 2850 °F, 0.04 between 2750–2850 °F, frozen below).
-        </p>
-
-        <p style={{fontSize:11,color:C.txtDim,lineHeight:1.55,fontFamily:"'Barlow',sans-serif",margin:"0 0 10px"}}>
-          <strong>T_AFT</strong> = complete-combustion adiabatic flame temperature (no dissociation). Mass-flow-weighted across
-          the four circuits gives the <strong>Tflame</strong> input to the correlation. <strong>DT_Main</strong> = T_AFT(OM) −
-          T_AFT(IM) in °F drives the dome-mixing term.
-        </p>
-
-        {derived?<>
-          <div style={{padding:"8px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`,marginBottom:8}}>
-            <div style={{fontSize:9.5,color:C.txtDim,textTransform:"uppercase",letterSpacing:".5px",marginBottom:6}}>Live correlation inputs · reference → live · Δ</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4, 1fr)",gap:6,fontSize:10.5,fontFamily:"monospace"}}>
-              <div><span style={{color:C.txtDim}}>DT_Main:</span> <strong style={{color:C.warm}}>{derived.DT_Main_F.toFixed(1)} °F</strong> <span style={{color:C.txtMuted}}>(ref 450)</span></div>
-              <div><span style={{color:C.txtDim}}>Tflame (mass-wt avg):</span> <strong style={{color:C.warm}}>{derived.Tflame_F.toFixed(0)} °F</strong> <span style={{color:C.txtMuted}}>(ref 3035)</span></div>
-              <div><span style={{color:C.txtDim}}>T3:</span> <strong style={{color:C.accent}}>{derived.T3_F.toFixed(0)} °F</strong> <span style={{color:C.txtMuted}}>(ref 700)</span></div>
-              <div><span style={{color:C.txtDim}}>P3:</span> <strong style={{color:C.accent}}>{derived.P3_psia.toFixed(1)} psia</strong> <span style={{color:C.txtMuted}}>(ref 638)</span></div>
-              <div><span style={{color:C.txtDim}}>C3_eff:</span> <strong style={{color:C.accent2}}>{derived.C3_effective_pct.toFixed(2)} %</strong> <span style={{color:C.txtMuted}}>(ref 7.5)</span></div>
-              <div><span style={{color:C.txtDim}}>N2 (fuel):</span> <strong style={{color:C.accent2}}>{derived.N2_pct.toFixed(2)} %</strong> <span style={{color:C.txtMuted}}>(ref 0.5)</span></div>
-              <div><span style={{color:C.txtDim}}>Phi_OP:</span> <strong style={{color:C.orange}}>{phiOP.toFixed(3)}</strong> <span style={{color:C.txtMuted}}>(ref 0.65)</span></div>
-              <div><span style={{color:C.txtDim}}>Phi_OP mult (HI):</span> <strong style={{color:derived.phi_OP_mult<1?C.warm:C.accent}}>{derived.phi_OP_mult.toFixed(3)}</strong> <span style={{color:C.txtMuted}}>(1 if ≥0.55)</span></div>
-            </div>
-            <div style={{marginTop:6,padding:"4px 8px",background:C.bg,borderRadius:4,fontSize:10,color:C.txtDim,fontFamily:"monospace",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-              <span>Pressure ratio (P3/638): <strong style={{color:C.accent}}>{derived.pressure_ratio.toFixed(4)}</strong> — scales all 4 outputs as (ratio)^exp</span>
-              {corr100?<span style={{color:C.txtMuted}}>@ 100% load: NOx<sub>15</sub>={corr100.NOx15.toFixed(1)} · CO<sub>15</sub>={corr100.CO15.toFixed(1)} · PX36_SEL={fmtPx(corr100.PX36_SEL)} {pxUnit} · PX36_SEL_HI={fmtPx(corr100.PX36_SEL_HI)} {pxUnit}</span>:null}
-            </div>
-          </div>
-        </>:null}
-
-        <p style={{fontSize:10.5,color:C.txtMuted,lineHeight:1.5,fontFamily:"'Barlow',sans-serif",margin:0,fontStyle:"italic"}}>
-          Air flow: <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 = W3 × (W36/W3)</code> enters the dome.
-          Flame air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × com.Air Frac</code> (split across the 4 circuits).
-          Effusion / cooling air = <code style={{background:`${C.accent}15`,padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>W36 × (1 − com.Air Frac)</code>.
-          Outer Main is the <strong style={{color:C.accent2}}>float</strong> circuit: fuel = total − IP − OP − IM, φ back-solved.
-        </p>
-      </div>
       </>}
   </div>);
 }
