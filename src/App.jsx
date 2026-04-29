@@ -513,10 +513,10 @@ function exportToExcel(fuel,ox,phi,T0,P,_unitsIgnored,ps){
   }
 }
 
-function _buildExportWorkbook(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult,mappingTables,
+function _buildExportWorkbook(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,measCO=0,measUHC=0,measH2=0,fuelFlowKgs=0,fuelCostUsdPerMmbtuLhv=4.00,costPeriod="week",combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult,mappingTables,
   emissionsMode=true,mapW36w3=0.75,mapFracIP=2.3,mapFracOP=2.2,mapFracIM=39.9,mapFracOM=55.6,
   mapPhiIP=0.25,mapPhiOP=0.65,mapPhiIM=0.50,mapResult=null,emTfMults=null,
-  linkT3=true,linkP3=true,linkFAR=true,loadStepPct=5,bleedStepPct=15
+  linkT3=true,linkP3=true,linkFAR=true,linkFuelFlow=true,loadStepPct=5,bleedStepPct=15
 }=ps||{};
   // Adiabatic fuel/air mix T that's used everywhere downstream
   const T_mix_phi=mixT(fuel,ox,phi,T_fuel??T0,T_air??T0);
@@ -594,7 +594,80 @@ const _exCO2_p0=calcExhaustFromCO2(fuel,ox,measCO2,mixT(fuel,ox,0.6,T_fuel??T0,T
 const rCO2=calcExhaustFromCO2(fuel,ox,measCO2,mixT(fuel,ox,_exCO2_p0.phi,T_fuel??T0,T_air??T0),P,combMode);
 const T_mix_O2=mixT(fuel,ox,rO2.phi,T_fuel??T0,T_air??T0);
 const T_mix_CO2=mixT(fuel,ox,rCO2.phi,T_fuel??T0,T_air??T0);
-const s5=[["═══ EXHAUST ANALYSIS — INPUTS ═══"],[],["Parameter","Value","Unit"],["Measured O₂ (dry)",+measO2.toFixed(2),"%"],["Measured CO₂ (dry)",+measCO2.toFixed(2),"%"],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["T_mixed @ φ(O₂ case)",+uv(u,"T",T_mix_O2).toFixed(2),uu(u,"T")],["T_mixed @ φ(CO₂ case)",+uv(u,"T",T_mix_CO2).toFixed(2),uu(u,"T")],["Water/Fuel Mass Ratio (WFR)",+(+WFR).toFixed(3),"kg_water/kg_fuel"],["Water Injection Mode",WFR>0?(waterMode==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],[],["═══ FROM MEASURED O₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ FROM MEASURED CO₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rCO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rCO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rCO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rCO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rCO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rCO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ Adiabatic Temperature vs Exhaust O₂ ═══"],["Exhaust O₂ (%)","Flame Temperature ("+uu(u,"T")+")","Equivalence Ratio (φ)","Fuel/Air Ratio (mass)"],...Array.from({length:30},(_,i)=>{const o2=0.5+i*0.5;const r0=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,0.6,T_fuel??T0,T_air??T0),P,combMode);const r=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,r0.phi,T_fuel??T0,T_air??T0),P,combMode);return[+o2.toFixed(1),+uv(u,"T",r.T_ad).toFixed(1),+r.phi.toFixed(4),+r.FAR_mass.toFixed(6)]})];const ws5=XLSX.utils.aoa_to_sheet(s5);ws5["!cols"]=[{wch:38},{wch:20},{wch:16},{wch:16}];XLSX.utils.book_append_sheet(wb,ws5,"Exhaust Analysis");
+// ── Slip correction (mirrors ExhaustPanel.computeSlipCorrection) ────────
+// Same energy-loss formula:
+//   η_c = 1 − (N_dry/fuel) · (X_CO·LHV_CO + X_UHC·LHV_CH₄ + X_H₂·LHV_H₂) / LHV_fuel,molar
+// LHV constants (NIST, kJ/mol, water-vapor product). Slip-corrected:
+//   φ_fed = φ_burn / η_c    (metered air-fuel ratio rises)
+//   T_eff = equilibrium at φ_eff = φ_burn · η_c (drops with slip)
+const _LHV_CO_kJmol=282.99,_LHV_CH4_kJmol=802.31,_LHV_H2_kJmol=241.83;
+const _nC_fuel=(()=>{let n=0;const t=Object.values(fuel).reduce((a,b)=>a+b,0)||1;for(const[sp,x]of Object.entries(fuel))n+=(x/t)*((SP[sp]?.C)||0);return n;})();
+const _LHV_fuel_kJmol=(fp.LHV_mass||0)*(fp.MW_fuel||0);
+const _slipFor=(r)=>{
+  if(!r)return{eta_c:1,phi_fed:NaN,FAR_fed:NaN,AFR_fed:NaN,slipActive:false};
+  const co=Math.max(0,+measCO||0),uhc=Math.max(0,+measUHC||0),h2=Math.max(0,+measH2||0);
+  if((co===0&&uhc===0&&h2===0)||!_nC_fuel||!_LHV_fuel_kJmol)return{eta_c:1,phi_fed:r.phi,FAR_fed:r.FAR_mass,AFR_fed:r.AFR_mass,slipActive:false};
+  const products=r.products||{};let X_C=0;
+  for(const[sp,pct]of Object.entries(products)){const C=(SP[sp]?.C)||0;if(C>0)X_C+=(pct/100)*C;}
+  if(X_C<=0)return{eta_c:1,phi_fed:r.phi,FAR_fed:r.FAR_mass,AFR_fed:r.AFR_mass,slipActive:false};
+  const N_total=_nC_fuel/X_C,X_H2O=(products.H2O||0)/100,N_dry=N_total*(1-X_H2O);
+  const E_loss=N_dry*1e-6*(co*_LHV_CO_kJmol+uhc*_LHV_CH4_kJmol+h2*_LHV_H2_kJmol);
+  const eta_c=Math.max(0.01,Math.min(1,1-E_loss/_LHV_fuel_kJmol));
+  return{eta_c,phi_fed:r.phi/eta_c,FAR_fed:r.FAR_mass/eta_c,AFR_fed:r.AFR_mass*eta_c,slipActive:true};
+};
+const _slipO2=_slipFor(rO2),_slipCO2=_slipFor(rCO2);
+const _phi_eff_O2=(rO2&&Number.isFinite(rO2.phi))?rO2.phi*(_slipO2.eta_c||1):NaN;
+const _phi_eff_CO2=(rCO2&&Number.isFinite(rCO2.phi))?rCO2.phi*(_slipCO2.eta_c||1):NaN;
+const _T_mix_eff_O2=Number.isFinite(_phi_eff_O2)?mixT(fuel,ox,_phi_eff_O2,T_fuel??T0,T_air??T0):NaN;
+const _T_mix_eff_CO2=Number.isFinite(_phi_eff_CO2)?mixT(fuel,ox,_phi_eff_CO2,T_fuel??T0,T_air??T0):NaN;
+const _T_ad_eff_O2=(_slipO2.slipActive&&Number.isFinite(_phi_eff_O2))?(calcAFT_EQ(fuel,ox,_phi_eff_O2,_T_mix_eff_O2,P)?.T_ad??rO2?.T_ad):rO2?.T_ad;
+const _T_ad_eff_CO2=(_slipCO2.slipActive&&Number.isFinite(_phi_eff_CO2))?(calcAFT_EQ(fuel,ox,_phi_eff_CO2,_T_mix_eff_CO2,P)?.T_ad??rCO2?.T_ad):rCO2?.T_ad;
+// ── Fuel & Money (anchored on O₂ path, matching the panel) ──
+const _FAR_for_air=_slipO2.slipActive?_slipO2.FAR_fed:(rO2?.FAR_mass||NaN);
+const _eta_money=_slipO2.slipActive?_slipO2.eta_c:1;
+const _airFlowKgs=(Number.isFinite(fuelFlowKgs)&&Number.isFinite(_FAR_for_air)&&_FAR_for_air>0)?fuelFlowKgs/_FAR_for_air:NaN;
+const _heatInputMW=(Number.isFinite(fuelFlowKgs)&&fp.LHV_mass>0)?fuelFlowKgs*fp.LHV_mass:NaN;
+const _heatInputMMBtuHr=Number.isFinite(_heatInputMW)?_heatInputMW*3.41214:NaN;
+const _hoursPerPeriod=costPeriod==="year"?8760:costPeriod==="month"?730:168;
+const _totalCostPerHr=(Number.isFinite(_heatInputMMBtuHr)&&fuelCostUsdPerMmbtuLhv>0)?_heatInputMMBtuHr*fuelCostUsdPerMmbtuLhv:NaN;
+const _totalCostPerPeriod=Number.isFinite(_totalCostPerHr)?_totalCostPerHr*_hoursPerPeriod:NaN;
+const _penaltyCostPerPeriod=Number.isFinite(_totalCostPerPeriod)?_totalCostPerPeriod*(1-_eta_money):NaN;
+const _flowFmt=(kgs)=>Number.isFinite(kgs)?(u==="SI"?+kgs.toFixed(4):+(kgs*7936.64).toFixed(2)):"n/a";
+const _flowUnit=(u==="SI")?"kg/s":"lb/hr";
+const _heatFmt=(mw)=>Number.isFinite(mw)?(u==="SI"?+mw.toFixed(3):+(mw*3.41214).toFixed(3)):"n/a";
+const _heatUnit=(u==="SI")?"MW":"MMBTU/hr";
+const _slipFuelRows=[
+  [],["═══ SLIP MEASUREMENTS (entered) ═══"],
+  ["Parameter","Value","Unit"],
+  ["Measured CO (dry)",+(+measCO).toFixed(2),"ppmvd"],
+  ["Measured UHC as CH₄ (dry)",+(+measUHC).toFixed(2),"ppmvd"],
+  ["Measured H₂ (dry)",+(+measH2).toFixed(2),"ppmvd"],[],
+  ["═══ SLIP-CORRECTED CHEMICAL EQUILIBRIUM (FROM O₂) ═══"],
+  ["Parameter","Value","Unit"],
+  ["η_c (combustion efficiency, energy-loss formula)",+((_slipO2.eta_c||0)*100).toFixed(3),"%"],
+  ["φ_fed (= φ_burn / η_c, metered)",Number.isFinite(_slipO2.phi_fed)?+_slipO2.phi_fed.toFixed(5):"n/a","—"],
+  ["FAR_fed (mass)",Number.isFinite(_slipO2.FAR_fed)?+_slipO2.FAR_fed.toFixed(6):"n/a",uu(u,"afr_mass")],
+  ["AFR_fed (mass)",Number.isFinite(_slipO2.AFR_fed)?+_slipO2.AFR_fed.toFixed(3):"n/a",uu(u,"afr_mass")],
+  ["T_ad,eff (= equilibrium at φ_burn · η_c)",Number.isFinite(_T_ad_eff_O2)?+uv(u,"T",_T_ad_eff_O2).toFixed(1):"n/a",uu(u,"T")],[],
+  ["═══ SLIP-CORRECTED CHEMICAL EQUILIBRIUM (FROM CO₂) ═══"],
+  ["Parameter","Value","Unit"],
+  ["η_c (combustion efficiency, energy-loss formula)",+((_slipCO2.eta_c||0)*100).toFixed(3),"%"],
+  ["φ_fed (= φ_burn / η_c, metered)",Number.isFinite(_slipCO2.phi_fed)?+_slipCO2.phi_fed.toFixed(5):"n/a","—"],
+  ["FAR_fed (mass)",Number.isFinite(_slipCO2.FAR_fed)?+_slipCO2.FAR_fed.toFixed(6):"n/a",uu(u,"afr_mass")],
+  ["AFR_fed (mass)",Number.isFinite(_slipCO2.AFR_fed)?+_slipCO2.AFR_fed.toFixed(3):"n/a",uu(u,"afr_mass")],
+  ["T_ad,eff (= equilibrium at φ_burn · η_c)",Number.isFinite(_T_ad_eff_CO2)?+uv(u,"T",_T_ad_eff_CO2).toFixed(1):"n/a",uu(u,"T")],[],
+  ["═══ FUEL & MONEY (anchored on O₂ path) ═══"],
+  ["Parameter","Value","Unit"],
+  ["Fuel Flow (m_fuel)",_flowFmt(fuelFlowKgs),_flowUnit],
+  ["Fuel Cost",+(+fuelCostUsdPerMmbtuLhv).toFixed(3),"USD/MMBTU (LHV)"],
+  ["Period",costPeriod,"—"],
+  ["Air Mass Flow (m_air = m_fuel / FAR_fed)",_flowFmt(_airFlowKgs),_flowUnit],
+  ["Heat Input (LHV)",_heatFmt(_heatInputMW),_heatUnit],
+  ["Total Fuel Cost (per "+costPeriod+")",Number.isFinite(_totalCostPerPeriod)?+(_totalCostPerPeriod).toFixed(0):"n/a","USD"],
+  ["Penalty (= Total · (1 − η_c), money lost to slip per "+costPeriod+")",Number.isFinite(_penaltyCostPerPeriod)?+(_penaltyCostPerPeriod).toFixed(0):"n/a","USD"],
+  ["Linkage to Cycle ṁ_fuel",linkFuelFlow?"ON (Cycle drives Fuel Flow)":"OFF","—"],
+];
+const s5=[["═══ EXHAUST ANALYSIS — INPUTS ═══"],[],["Parameter","Value","Unit"],["Measured O₂ (dry)",+measO2.toFixed(2),"%"],["Measured CO₂ (dry)",+measCO2.toFixed(2),"%"],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["T_mixed @ φ(O₂ case)",+uv(u,"T",T_mix_O2).toFixed(2),uu(u,"T")],["T_mixed @ φ(CO₂ case)",+uv(u,"T",T_mix_CO2).toFixed(2),uu(u,"T")],["Water/Fuel Mass Ratio (WFR)",+(+WFR).toFixed(3),"kg_water/kg_fuel"],["Water Injection Mode",WFR>0?(waterMode==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],[],["═══ FROM MEASURED O₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ FROM MEASURED CO₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rCO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rCO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rCO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rCO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rCO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rCO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ Adiabatic Temperature vs Exhaust O₂ ═══"],["Exhaust O₂ (%)","Flame Temperature ("+uu(u,"T")+")","Equivalence Ratio (φ)","Fuel/Air Ratio (mass)"],...Array.from({length:30},(_,i)=>{const o2=0.5+i*0.5;const r0=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,0.6,T_fuel??T0,T_air??T0),P,combMode);const r=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,r0.phi,T_fuel??T0,T_air??T0),P,combMode);return[+o2.toFixed(1),+uv(u,"T",r.T_ad).toFixed(1),+r.phi.toFixed(4),+r.FAR_mass.toFixed(6)]})];s5.push(..._slipFuelRows);const ws5=XLSX.utils.aoa_to_sheet(s5);ws5["!cols"]=[{wch:38},{wch:20},{wch:16},{wch:16}];XLSX.utils.book_append_sheet(wb,ws5,"Exhaust Analysis");
 const s4=[["═══ THERMO DATABASE ═══"],["NASA 7-coefficient polynomials"],[]];for(const sp of["CH4","C2H6","C3H8","H2","CO","O2","N2","H2O","CO2","OH","NO","Ar"]){if(!SP[sp])continue;s4.push([SP[sp].nm+" ("+fmt(sp)+")","Molecular Weight: "+SP[sp].MW,"ΔHf: "+(SP[sp].Hf/1000).toFixed(2)+" kJ/mol"]);s4.push(["Temperature (K)","Heat Capacity Cp (J/mol·K)","Enthalpy H (kJ/mol)","Entropy S (J/mol·K)","Gibbs Energy G (kJ/mol)"]);for(let T=200;T<=3000;T+=100){const H=h_mol(sp,T)/1000;const Sv=sR(sp,T)*R_u;s4.push([T,+cp_mol(sp,T).toFixed(4),+H.toFixed(4),+Sv.toFixed(4),+((H*1000-T*Sv)/1000).toFixed(4)]);}s4.push([]);}const ws4=XLSX.utils.aoa_to_sheet(s4);ws4["!cols"]=[{wch:28},{wch:18},{wch:18},{wch:18},{wch:18}];XLSX.utils.book_append_sheet(wb,ws4,"Thermo Database");
 // ══════════════════ CYCLE (Gas Turbine) — Option A + B ══════════════════
 // Only written if we have a cycle result in hand. The cycle backend is
@@ -882,6 +955,23 @@ const sA=[
   ["","PX36 protection trigger","px36 (display) > 5.5 psi","BD4 50 s → BD6 30 s → BD7. Up to 3 cycles before LOCK at BD4."],
   ["","Stochastic trips","phi_IP / phi_OP exceeding load-interp band","Random threshold rolled per band entry. Trip → all targets ramp to 0; 4-hour lockout banner."],
   ["","Emissions Mode staging","BD4 → 50 s → BD6 → 30 s → BD7","Triggered when Emissions Mode toggles ON. Endpoint adapts to current MW (skip / stop at BD6 / full)."],
+
+  ["17. Exhaust Slip & η_c","Inputs","Measured CO, UHC (as CH₄), H₂ in dry exhaust (ppmvd)","User-entered. Zero values bypass the slip block (η_c = 1)."],
+  ["","η_c formula","1 − (N_dry/fuel) · Σ(X_i · LHV_i,molar) / LHV_fuel,molar","Energy-loss form. Mirrors ASME PTC 4 / Lefebvre & Ballal Ch. 9."],
+  ["","LHV constants (kJ/mol, NIST)","CO = 282.99 / CH₄ = 802.31 / H₂ = 241.83","Water as vapor product. Same constants as ExhaustPanel."],
+  ["","N_dry/fuel","n_C_fuel / Σ(X_C · n_C,sp) · (1 − X_H₂O,wet)","Atom-balance from inversion product composition."],
+  ["","φ_fed (metered)","φ_burn / η_c","Fuel-air ratio actually fed; rises with slip."],
+  ["","FAR_fed / AFR_fed","FAR_burn / η_c  /  AFR_burn · η_c","Same η_c rescaling, mass basis."],
+  ["","T_ad,eff (displayed)","Cantera HP-equilibrium at φ_eff = φ_burn · η_c","Drops with slip — captures the inefficiency penalty on flame T."],
+  ["","Inputs that bypass slip","Pure-H₂ fuel, X_C ≤ 0, LHV_fuel ≤ 0","Slip block returns η_c = 1; reports burn-side values unchanged."],
+
+  ["18. Fuel & Money","Anchor","O₂-derived path","O₂ is the standard stack measurement; CO₂ inversion can differ slightly."],
+  ["","Fuel Flow input","Default 40,000 lb/hr (≈ 5.04 kg/s)","User-editable. In GTS mode auto-linked to Cycle ṁ_fuel (LOCKED). Advanced mode: linked but user-breakable."],
+  ["","Air mass flow","ṁ_air = ṁ_fuel / FAR_fed","FAR_fed includes η_c correction when slip > 0; otherwise = burn-side FAR."],
+  ["","Heat input (LHV)","ṁ_fuel · LHV_mass","MW (SI) / MMBTU/hr (ENG). LHV is mass-basis from fuel composition."],
+  ["","Fuel cost","User input USD/MMBTU (LHV). Default $4.00","No regional adjustment. LHV basis matches Heat Input units."],
+  ["","Period","week (168 h) / month (730 h) / year (8,760 h)","Selectable. Total $ / period = MMBTU/hr · $/MMBTU · h/period."],
+  ["","Penalty","Total · (1 − η_c)","Money lost to slip per period. η_c = 1 (no slip) → penalty = 0."],
 ];
 const wsA=XLSX.utils.aoa_to_sheet(sA);
 wsA["!cols"]=[{wch:34},{wch:36},{wch:40},{wch:52}];
@@ -2988,6 +3078,28 @@ const NOMENCLATURE_LONGNAMES = {
   phi_Bulk:          "Equivalence ratio in the flame zone before dilution.",
   FAR4:              "Mass-basis fuel/air ratio at station 4.",
   FAR_Bulk:          "Mass-basis fuel/air ratio in the flame zone (= FAR4 / combustor_air_frac).",
+  // Exhaust slip measurements + combustion-efficiency outputs (Phase 3 AUTO_VARS / AUTO_OUTPUTS):
+  measCO:            "Stack CO concentration measured on a dry basis at the actual exhaust O₂ (NOT 15% O₂ corrected). Drives the η_c energy-loss formula.",
+  measUHC:           "Stack unburned-hydrocarbons measured as ppmvd CH₄-equivalent on a dry basis (actual O₂). Drives the η_c energy-loss formula.",
+  measH2:            "Stack H₂ measured on a dry basis (actual O₂). Relevant for syngas, H₂ blends, partial-oxidation upsets. Drives the η_c energy-loss formula.",
+  fuelFlowKgs:       "Fuel mass flow into the combustor. In Gas Turbine Simulator and Advanced modes this is auto-linked to the cycle's ṁ_fuel; user can break the link to type a manual value.",
+  fuelCostUsdPerMmbtuLhv: "Fuel price in USD per million BTU on a LHV basis — the standard contract / regulatory unit for natural gas. Default $4.00/MMBTU, adjust to actual contract.",
+  // Slip-corrected outputs (per O₂ and CO₂ inversion paths):
+  exh_eta_c_o2:      "Combustion efficiency η_c, computed via energy-loss formula (ASME PTC 4 / Lefebvre Ch. 9), using the O₂-derived equilibrium products as the dry-flow reference. η_c = 1 − N_dry/fuel · (X_CO·LHV_CO + X_UHC·LHV_CH4 + X_H2·LHV_H2) / LHV_fuel.",
+  exh_eta_c_co2:     "Same formula as exh_eta_c_o2 but anchored on the CO₂-derived equilibrium products.",
+  exh_phi_fed_o2:    "Fed-side equivalence ratio (= φ_burn / η_c, the operator-metered φ) from the O₂ inversion path. Larger than φ_burn whenever there's slip.",
+  exh_phi_fed_co2:   "Same as exh_phi_fed_o2 but from the CO₂ inversion path.",
+  exh_FAR_fed_o2:    "Fed-side fuel/air mass ratio (= FAR_burn / η_c) from the O₂ inversion path.",
+  exh_FAR_fed_co2:   "Same from the CO₂ inversion path.",
+  exh_AFR_fed_o2:    "Fed-side air/fuel mass ratio (= AFR_burn × η_c) from the O₂ inversion path.",
+  exh_AFR_fed_co2:   "Same from the CO₂ inversion path.",
+  exh_T_ad_eff_o2:   "Equilibrium flame T at the EFFECTIVE φ (= φ_burn × η_c, the FAR-at-100%-efficiency multiplied by η_c). Lower than φ_burn HP equilibrium T because only the η_c fraction released its chemical energy. Falls as slip rises.",
+  exh_T_ad_eff_co2:  "Same as exh_T_ad_eff_o2 but from the CO₂ inversion path.",
+  air_flow_kg_s:     "Combustion air mass flow rate (post-bleed when cycle is linked) inferred from m_fuel / FAR_fed using the η_c-corrected fed-side FAR from the Chemical Equilibrium card.",
+  heat_input_MW:     "Fuel-side heat input rate on a LHV basis: m_fuel · LHV_mass. Independent of combustion efficiency.",
+  total_fuel_cost_per_hr: "Total fuel-cost rate at the operating point: heat_input_MMBTU/hr × $/MMBTU LHV. Multiply by 168 / 730 / 8760 for week / month / year totals.",
+  penalty_per_hr_o2: "Money-rate equivalent of the chemical energy walking out of the stack as unburned CO + UHC + H₂. Penalty/hr = total_cost_per_hr × (1 − η_c). Anchored on the O₂-derived η_c.",
+  penalty_per_hr_co2:"Same as penalty_per_hr_o2 but anchored on the CO₂-derived η_c.",
 };
 
 // Concepts that have no AUTO_VARS / AUTO_OUTPUTS entry — combustion
@@ -3012,6 +3124,42 @@ const NOMENCLATURE_EXTRA = [
     desc: "When ON, the sidebar Pressure tracks the latest cycle P3. Auto-broken if the user varies Pressure in Automation." },
   { symbol: "linkFAR", fullName: "Cycle linkage: phi ← phi_Bulk", unit: "—", group: "Cycle linkages",
     desc: "When ON, the sidebar phi tracks the latest cycle phi_Bulk. Auto-broken if the user varies phi, FAR, or TFlame_CC in Automation." },
+  { symbol: "linkOx",  fullName: "Cycle linkage: Oxidizer ← humid air @ ambient", unit: "—", group: "Cycle linkages",
+    desc: "When ON, the sidebar Oxidizer composition tracks the cycle's computed humid-air mol % at ambient T/RH." },
+  { symbol: "linkFuelFlow", fullName: "Cycle linkage: Fuel Flow ← cycle ṁ_fuel", unit: "—", group: "Cycle linkages",
+    desc: "When ON (default in GTS / Advanced modes), the Exhaust panel's Fuel Flow input on the Fuel & Money card tracks the cycle's mdot_fuel_kg_s. In GTS mode the link is non-breakable; in Advanced mode the BREAK button drops to manual entry. Hidden in Free / Combustion Toolkit (no cycle running)." },
+
+  // ── Combustion efficiency & slip ────────────────────────────────────
+  { symbol: "η_c", fullName: "Combustion efficiency", unit: "%", group: "Combustion efficiency & slip",
+    desc: "Fraction of fuel chemical energy that combusted at this operating point. Computed from measured CO + UHC + H₂ slip via the energy-loss formula η_c = 1 − N_dry/fuel · (X_CO·LHV_CO + X_UHC·LHV_CH4 + X_H2·LHV_H2) / LHV_fuel,molar. Reference: ASME PTC 4 §5.14 / Lefebvre & Ballal Ch. 9.4-9.6." },
+  { symbol: "energy-loss formula", fullName: "η_c from emission energy loss", unit: "—", group: "Combustion efficiency & slip",
+    desc: "Per ASME PTC 4 / Lefebvre Ch. 9: each unburned species in the dry exhaust carries a known molar LHV and represents heat that didn't reach the gas. Dividing the sum of these losses by the fuel's LHV gives 1 − η_c. Constants used: LHV_CO = 282.99 kJ/mol, LHV_CH4 = 802.31 kJ/mol, LHV_H2 = 241.83 kJ/mol (NIST, water-vapor reference)." },
+  { symbol: "φ_burn", fullName: "Burn-side equivalence ratio (matches measured O₂/CO₂)", unit: "—", group: "Combustion efficiency & slip",
+    desc: "The φ from the original Cantera HP-equilibrium inversion — i.e. the φ that produces the exact measured exhaust O₂ (or CO₂) under the assumption that all fuel burned. This is the φ at 100% efficiency. Used as the anchor for both the fed-side and eff-side corrections." },
+  { symbol: "φ_fed", fullName: "Fed-side equivalence ratio (operator-metered)", unit: "—", group: "Combustion efficiency & slip",
+    desc: "What the operator actually metered into the combustor. φ_fed = φ_burn / η_c. Larger than φ_burn whenever slip is present, because some metered fuel walked through unburned. This is the φ shown on the displayed Chemical Equilibrium card." },
+  { symbol: "φ_eff", fullName: "Effective equivalence ratio (drives flame T)", unit: "—", group: "Combustion efficiency & slip",
+    desc: "φ_eff = φ_burn × η_c. The equivalent leaner ratio at which the burning fraction released its energy after accounting for both the slip mass loss and the inefficiency penalty. Cantera HP equilibrium at φ_eff gives the displayed Flame Temperature, which falls as slip rises." },
+  { symbol: "FAR_burn / FAR_fed / FAR_eff", fullName: "Three FAR variants — burn, fed, effective", unit: "—", group: "Combustion efficiency & slip",
+    desc: "Same φ trio expressed in mass-basis FAR. FAR_burn = the inversion result; FAR_fed = FAR_burn / η_c (rises with slip); FAR_eff = FAR_burn × η_c (falls with slip)." },
+  { symbol: "T_ad,burn / T_ad,eff", fullName: "Two flame T conventions in slip-corrected display", unit: "K / °F", group: "Combustion efficiency & slip",
+    desc: "T_ad,burn = HP-equilibrium T at φ_burn (the inversion result, matches measured O₂/CO₂ exactly). T_ad,eff = HP-equilibrium T at φ_eff (= φ_burn × η_c) — falls as slip rises, captures the inefficiency penalty on flame temperature. The displayed Flame Temperature on the Chemical Equilibrium card is T_ad,eff." },
+
+  // ── Operating-point cost & money ────────────────────────────────────
+  { symbol: "Fuel Flow", fullName: "Fuel mass flow rate at this operating point", unit: "lb/hr or kg/hr (input) · kg/s (storage)", group: "Cost & money",
+    desc: "Default 40,000 lb/hr (LMS100-class baseload). Stored internally as kg/s. Linked to cycle ṁ_fuel in GTS / Advanced modes; manually editable after BREAK." },
+  { symbol: "Fuel Cost", fullName: "Fuel price ($/MMBTU LHV)", unit: "$/MMBTU LHV", group: "Cost & money",
+    desc: "Default $4.00/MMBTU LHV — typical 2024-2026 industrial U.S. natural-gas benchmark (sources: EIA Industrial NG monthly, Henry Hub spot + transport adder). Adjust to the operator's actual contract." },
+  { symbol: "Period", fullName: "Cost-rollup time period", unit: "—", group: "Cost & money",
+    desc: "Toggle between Wk (168 h), Mo (730 h), or Yr (8760 h). Drives the time-multiplier on the Total Fuel Cost and Penalty rows." },
+  { symbol: "Air Mass Flow", fullName: "Combustion air mass flow rate", unit: "lb/s or kg/s", group: "Cost & money",
+    desc: "ṁ_air = ṁ_fuel / FAR_fed using the η_c-corrected fed-side FAR from the O₂-derived Chemical Equilibrium card. Reflects the mass of air the metered fuel encountered in the combustor." },
+  { symbol: "Heat Input (LHV)", fullName: "Fuel-side heat input rate", unit: "MMBTU/hr or MW", group: "Cost & money",
+    desc: "Q̇_in = ṁ_fuel · LHV_mass. The chemical energy entering the combustor per unit time, independent of combustion efficiency." },
+  { symbol: "Total Fuel Cost / period", fullName: "Total fuel bill at this operating point", unit: "USD", group: "Cost & money",
+    desc: "Total fuel spend over the chosen period: Heat_input_MMBTU/hr × $/MMBTU × hours/period. Independent of combustion efficiency — this is the full amount the operator pays for fuel." },
+  { symbol: "Penalty / period", fullName: "Money walking out the stack as unburned slip", unit: "USD", group: "Cost & money",
+    desc: "Penalty = Total Fuel Cost × (1 − η_c). The dollars equivalent of the chemical energy lost to CO + UHC + H₂ slip. The actionable number for justifying combustor tuning interventions. Verified against published industry benchmarks: GE, Solar Turbines, EPRI, Energy Institute UK." },
   { symbol: "PSR",     fullName: "Perfectly Stirred Reactor", unit: "—", group: "Combustor model",
     desc: "Idealized well-mixed primary zone with finite residence time τ_PSR. All inputs instantly mix to the PSR's volume-averaged state." },
   { symbol: "PFR",     fullName: "Plug Flow Reactor", unit: "—", group: "Combustor model",
@@ -3042,7 +3190,8 @@ function _nomenGroupForVar(v){
   if (v.id.startsWith("map")) return "Combustor mapping (DLE 4-circuit)";
   if (["tau_psr","L_pfr","V_pfr","heatLossFrac"].includes(v.id)) return "Combustor PSR-PFR";
   if (["velocity","Lchar","Dfh","Lpremix","Vpremix"].includes(v.id)) return "Flame speed & blowoff";
-  if (["measO2","measCO2"].includes(v.id)) return "Exhaust analysis";
+  if (["measO2","measCO2","measCO","measUHC","measH2"].includes(v.id)) return "Exhaust analysis — measurements";
+  if (["fuelFlowKgs","fuelCostUsdPerMmbtuLhv"].includes(v.id)) return "Exhaust analysis — fuel & money";
   if (v.kind === "fuel_species") return "Fuel composition";
   if (v.kind === "ox_species")   return "Oxidizer composition";
   return "Other inputs";
@@ -10614,6 +10763,8 @@ export default function App(){
   // panelState is built AFTER cycleResult to avoid temporal-dead-zone reference.
   // Consumed by exportToExcel button further below; safe to declare here.
   const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,T_water,accurate:accurate&&!!auth.hasOnlineAccess,
+    // ── Exhaust slip measurements + fuel/money (used by ExhaustPanel η_c block) ──
+    measCO,measUHC,measH2,fuelFlowKgs,fuelCostUsdPerMmbtuLhv,costPeriod,
     cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult,
     bleedMode,bleedOpenPct,bleedValveSizePct,bleedAirFrac,mappingTables,
     // ── Combustor-Mapping inputs (4-circuit DLE — LMS100 only) ──
@@ -10622,7 +10773,7 @@ export default function App(){
     mapResult:bkMap?.data||null,
     emTfMults,
     // ── Linkage toggles (Cycle → sidebar) ──
-    linkT3,linkP3,linkFAR,
+    linkT3,linkP3,linkFAR,linkFuelFlow,
     // ── UI sidebar controls ──
     loadStepPct,bleedStepPct};
 
