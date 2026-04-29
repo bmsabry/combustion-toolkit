@@ -1000,7 +1000,7 @@ const sA=[
   ["","Emissions Transfer Function","Per-BRNDMD post-multipliers on NOx, CO, PX36","User-trim knob; default 1.0. PX36_SEL_HI not multiplied."],
   ["","Air flow split","W36 = W3 · (W36/W3); flame = W36 · com.Air Frac; effusion = W36 · (1 − com.Air Frac)","W36 enters the dome and is split across the 4 circuits. OM is the float circuit (fuel and φ back-solved)."],
 
-  ["16. Live Mapping (HMI sim)","Tick rate","1 Hz","10-minute rolling buffer (600 samples)."],
+  ["16. Live Mapping (HMI sim)","Tick rate","2 Hz","Two samples per second across every metric. 10-minute rolling buffer (1200 samples). 2 Hz gives PX36_SEL / PX36_SEL_HI the transient resolution to read acoustic spikes; slow metrics (NOx, CO, MWI_GC, MW) are dead-time / lag-dominated so the higher rate just adds interpolation points to their existing curves."],
   ["","Instrument response","Transport delay + smoothstep","display(t) = lookup(t − deadT) blended over transT. Per-metric deadT/transT: PX36 0/1, NOx/CO 83/7, MWI_WIM 2/5, MWI_GC 415/5, MW 0/7."],
   ["","Noise","Per-metric, mean-band dependent","PX36: random step 1–9% every 1–2 s. NOx/CO: 20-s sine. MWI: 2.5% white + 2-min sine."],
   ["","PX36 protection trigger","px36 (display) > 5.5 psi","BD4 50 s → BD6 30 s → BD7. Up to 3 cycles before LOCK at BD4."],
@@ -1616,7 +1616,7 @@ function HelpModal({show,onClose}){if(!show)return null;
       <p>4-circuit DLE correlation: per-circuit T_AFT (complete-combustion solve) plus a linear-anchored emissions / dynamics model centered on the LMS100 design point. <strong>Inputs</strong>: W36/W3 ratio, per-circuit air fractions (IP/OP/IM/OM), per-circuit φ (IP/OP/IM — OM is the residual). <strong>Outputs</strong>: NOx15, CO15, PX36_SEL, PX36_SEL_HI, plus stage-by-stage diagnostics (linear → φ_OP mult → P3 scaling).</p>
       <p><strong>Mapping Tables</strong> — editable φ-vs-T3 lookups for BRNDMD ∈ {"{2, 4, 6, 7}"}. Edits persist via localStorage. The <strong>Reset</strong> button is a bimodal switch between two named presets — <strong>UNMAPPED</strong> (raw factory lookups, the default seed for fresh sessions) and <strong>MAPPED</strong> (rig-calibrated lookups). The button label flips after each click to show which preset will load on the next click. <strong>Export to Excel</strong> writes the four BRNDMD lookups in their current state to a standalone .xlsx. Used to seed circuit φ inputs as ambient changes.</p>
       <p><strong>Emissions Transfer Function</strong> — per-BRNDMD post-multipliers on NOx, CO, and PX36_SEL. Trim knob; defaults to 1.0. Persists.</p>
-      <p><strong>Live Mapping</strong> — real-time HMI-style trace dashboard. <strong>▶ Start</strong> begins a 1 Hz recording for up to 10 minutes. Six charts (PX36_SEL, PX36_SEL_HI, NOx15, CO15, MWI, MW Net) with sensor-realistic noise + first-order lag (each metric has its own deadtime and time constant). Per-chart <strong>y-axis Min/Max</strong> inputs persist; auto-extend if data exceeds your bounds.</p>
+      <p><strong>Live Mapping</strong> — real-time HMI-style trace dashboard. <strong>▶ Start</strong> begins a 2 Hz recording for up to 10 minutes. Six charts (PX36_SEL, PX36_SEL_HI, NOx15, CO15, MWI, MW Net) with sensor-realistic noise + first-order lag (each metric has its own deadtime and time constant). Per-chart <strong>y-axis Min/Max</strong> inputs persist; auto-extend if data exceeds your bounds.</p>
       <p style={{paddingLeft:14,borderLeft:`2px solid ${C.txtMuted}50`,fontSize:11,color:C.txtMuted}}>The Live Mapping plays out a stochastic plant model under the hood: PX36 spikes &gt; 5.5 trigger a 3-cycle protection sequence (BD4→BD6→BD7); rare φ_IP/φ_OP excursions trigger a full engine trip with a 4-hour lockout banner and a Reset button. Toggling Emissions Mode ON during mapping triggers the same staging ladder, ending at BD6 or BD7 depending on load. These behaviors are intentional and not under the operator's direct control — they exist to make the panel feel like a real control room.</p>
 
       {_sub("🔥 Flame Temp & Properties")}
@@ -3600,7 +3600,7 @@ function AssumptionsPanel(){
     </AssumptionsGroup>
 
     <AssumptionsGroup title="16. Live Mapping (HMI sim — visual only, no engineering data)" subtitle="Real-time trace dashboard. Numbers are derived from the mapping correlation above plus a stochastic instrument-response model. Behavior is intentional and not under operator control.">
-      <Assumption label="Tick rate" value="1 Hz" note="One sample per second. Buffer holds 10 minutes (600 samples) and shifts oldest out."/>
+      <Assumption label="Tick rate" value="2 Hz" note="Two samples per second across every metric. Buffer holds 10 minutes (1200 samples) and shifts oldest out. The acoustic metrics (PX36_SEL, PX36_SEL_HI) need this resolution for transient spikes; slow metrics (NOx, CO, MWI_GC, MW) are dead-time / lag-dominated and just carry extra interpolation points."/>
       <Assumption label="Instrument response" value="History-based transport delay + 1st-order smoothstep" note="displayed(t) = lookup(history, t − deadT) blended via smoothstep over transT. Per-metric deadT/transT: PX36 0/1, NOx/CO 83/7, MWI_WIM 2/5, MWI_GC 415/5, MW 0/7."/>
       <Assumption label="Noise model" value="Per-metric, mean-band dependent" note="PX36: random step every 1–2 s, amplitude scales with mean (1.5–3.4% low, 7–9% high). NOx/CO: 20-second sine, amplitude re-rolled at each cycle. MWI: 2.5% white + slow 2-min sine."/>
       <Assumption label="PX36 trip threshold" value="px36 (display) > 5.5 psi" note="Triggers the protection cycle: BD4 for 50 s → BD6 for 30 s → BD7. Up to 3 cycles before LOCK at BD4."/>
@@ -3874,7 +3874,7 @@ function CombustorMappingPanel({
   // ═══════════════════════════════════════════════════════════════════════
   // LIVE MAPPING — real-time gas-turbine instrument simulation
   //
-  // Plays a 4-trace dashboard at 1 Hz showing what the operator would see on
+  // Plays a 4-trace dashboard at 2 Hz showing what the operator would see on
   // a control room HMI. Each trace centres on the cycle/correlation mean and
   // adds realistic instrument noise. When the user changes a parameter, the
   // displayed mean lags behind with sensor-realistic dead-time + smoothstep:
@@ -3889,14 +3889,14 @@ function CombustorMappingPanel({
   //   MWI_WIM               2 s         5 s        sine 1 s period, ±4 %
   //   MWI_GC              415 s         5 s        sine 120 s period, ±0.5 %
   //
-  // Buffer is a 600-sample ring (10 minutes at 1 Hz). Stored in a useRef so
+  // Buffer is a 1200-sample ring (10 minutes at 2 Hz). Stored in a useRef so
   // mutating it doesn't trigger React re-render — a separate tick counter
-  // useState bumps once per second to redraw the charts.
+  // useState bumps once per tick to redraw the charts.
   // ═══════════════════════════════════════════════════════════════════════
   const [mappingActive, setMappingActive] = useState(false);
   const [mappingStartedAt, setMappingStartedAt] = useState(null);  // wall-clock seconds since epoch
   const [tickCount, setTickCount] = useState(0);  // drives chart re-render
-  const bufferRef = useRef([]);                   // up to 600 samples
+  const bufferRef = useRef([]);                   // up to 1200 samples
   // User-editable y-axis ranges per plot. Stored in BASE units (psi for
   // PX36, ppm for NOx/CO, BTU/scf·√°R for MWI). The actual plot axis is
   // the MAX of (user-set range, data range) — auto-extends if live values
@@ -4199,7 +4199,7 @@ function CombustorMappingPanel({
     while (m.history.length > 1 && m.history[1].tc < cutoff) m.history.shift();
   };
 
-  // ── 1 Hz tick loop ──
+  // ── 2 Hz tick loop ──
   useEffect(() => {
     if (!mappingActive) return;
     const id = setInterval(() => {
@@ -4454,9 +4454,15 @@ function CombustorMappingPanel({
         MWI_WIM: wimVal, MWI_GC: gcVal,
         MW: mwVal,
       });
-      if (bufferRef.current.length > 600) bufferRef.current.shift();
+      // 2 Hz × 10-minute window = 1200 samples in the ring buffer.
+      // Every metric is sampled at 2 Hz; the acoustic ones (PX36_SEL,
+      // PX36_SEL_HI) need it for transient resolution, the slow ones
+      // (emissions, MWI_GC, MW) just carry extra interpolation points
+      // along their unchanged lagging-mean curves — their deadtime /
+      // time-constant smoothing is in seconds and is rate-invariant.
+      if (bufferRef.current.length > 1200) bufferRef.current.shift();
       setTickCount(c => c + 1);
-    }, 1000);
+    }, 500);
     return () => clearInterval(id);
   }, [mappingActive, phiIP, phiOP]);
 
@@ -4793,7 +4799,7 @@ function CombustorMappingPanel({
 
       {/* ═════════════════════════════════════════════════════════════════
           LIVE MAPPING — real-time HMI-style trace dashboard
-          1 Hz tick · 10-min sliding window · sensor-realistic noise + lag
+          2 Hz tick · 10-min sliding window · sensor-realistic noise + lag
          ═════════════════════════════════════════════════════════════════ */}
       {(() => {
         // X-axis range — first 10 min: [start, start+600s]; after that, slides.
@@ -4939,7 +4945,7 @@ function CombustorMappingPanel({
                   Live Mapping {mappingActive ? <span style={{fontSize:10,color:C.good,marginLeft:8,fontWeight:500,fontFamily:"monospace",letterSpacing:0}}>● RECORDING · {mm}:{ss}</span> : null}
                 </div>
                 <div style={{fontSize:10.5,color:C.txtMuted,lineHeight:1.45,fontFamily:"'Barlow',sans-serif",maxWidth:820}}>
-                  Real-time instrument simulation at 1 Hz with sensor-realistic noise. Response times reflect each instrument: acoustics (PX36) ≈ 1 s, power (MW) ≈ 7 s, Wobbe meter (WIM) ≈ 7 s, emissions (NOx / CO) ≈ 90 s, gas chromatograph (GC) ≈ 7 min. Exact dead-times and time constants are in the <strong>Assumptions</strong> tab.
+                  Real-time instrument simulation at 2 Hz with sensor-realistic noise. Response times reflect each instrument: acoustics (PX36) ≈ 1 s, power (MW) ≈ 7 s, Wobbe meter (WIM) ≈ 7 s, emissions (NOx / CO) ≈ 90 s, gas chromatograph (GC) ≈ 7 min. Exact dead-times and time constants are in the <strong>Assumptions</strong> tab.
                 </div>
               </div>
               <div style={{display:"flex",gap:8,flexShrink:0}}>
@@ -4979,7 +4985,7 @@ function CombustorMappingPanel({
             </div>
             {/* Engine TRIP banner — full shutdown sequence with 4-hour
                 countdown. Replaces the protection banner when active.
-                Countdown re-evaluates each tick (1 Hz) via tickCount.
+                Countdown re-evaluates each tick (2 Hz) via tickCount.
                 Auto-clears when timer hits zero; user can override with
                 the RESET button to bypass the lockdown. */}
             {tripBanner && (() => {
