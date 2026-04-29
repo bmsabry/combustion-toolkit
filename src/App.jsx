@@ -11157,7 +11157,7 @@ export default function App(){
               {/* ── Pressure ─────────────────────────────────────────── */}
               <div style={{marginBottom:10}}>
                 <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
-                <NumField value={uv(units,"P",P)} decimals={3} onCommit={v=>setP(uvI(units,"P",v))} style={S.inp}/>
+                <NumField value={uv(units,"P",P)} decimals={1} onCommit={v=>setP(uvI(units,"P",v))} style={S.inp}/>
                 {accurate&&hasOnline&&linkP3&&<LinkChip onBreak={_linkBreakable?()=>setLinkP3(false):null} label="Linked to Cycle P3"/>}
               </div>
               {/* ── Tflame (adiabatic, complete combustion) — third equivalent
@@ -11200,7 +11200,7 @@ export default function App(){
                           : "Adiabatic flame temperature, complete combustion (no dissociation), at the 3-stream mixed inlet T. Source: in-browser JS calcAFT. Setting this back-solves φ — pick the φ that produces this T_flame given the current fuel, oxidizer, T_fuel, and T_air. Lean solution only."}>
                         TFlame_CC ({uu(units,"T")}) {fromBackend?"":"(JS)"}
                       </label>
-                      <NumField value={tflame_disp} decimals={1} onCommit={onTflameCommit}
+                      <NumField value={tflame_disp} decimals={0} onCommit={onTflameCommit}
                         title="Type a target T_flame; the lean φ that produces it is back-solved automatically."
                         style={{width:82,padding:"3px 6px",fontFamily:"monospace",color:C.warm,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.warm}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
                     </div>
@@ -11221,7 +11221,7 @@ export default function App(){
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
                   <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>phi (φ)</label>
-                  <NumField value={phi} decimals={4} onCommit={setPhiClamped} title="Type any φ between 0.3 and 1.0 (or drag the slider)"
+                  <NumField value={phi} decimals={3} onCommit={setPhiClamped} title="Type any φ between 0.3 and 1.0 (or drag the slider)"
                     style={{width:72,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
                 </div>
                 <input type="range" min="0.3" max="1.0" step="0.01" value={phi} onChange={e=>setPhi(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
@@ -11232,11 +11232,11 @@ export default function App(){
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
                   <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}} title="Fuel-Air Ratio by mass. Linked to φ via FAR = φ × FAR_stoich.">Fuel/Air Ratio (mass)</label>
-                  <NumField value={FAR} decimals={5} onCommit={setFAR} title="Type any FAR within the allowed range; φ updates automatically."
+                  <NumField value={FAR} decimals={4} onCommit={setFAR} title="Type any FAR within the allowed range; φ updates automatically."
                     style={{width:82,padding:"3px 6px",fontFamily:"monospace",color:C.accent2,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent2}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
                 </div>
                 <input type="range" min={0.3*FAR_stoich} max={FAR_stoich} step={FAR_stoich/1000} value={FAR} onChange={e=>setFAR(+e.target.value)} style={{width:"100%",accentColor:C.accent2}}/>
-                <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>Stoichiometric FAR = {FAR_stoich.toFixed(5)} (kg fuel / kg air)</div>
+                <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>Stoichiometric FAR = {FAR_stoich.toFixed(4)} (kg fuel / kg air)</div>
               </div>
               {/* ── Fuel Temp (last in Operating Conditions) ─────────── */}
               <div>
