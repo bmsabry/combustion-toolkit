@@ -7288,6 +7288,36 @@ function _chartSpecToSvgString(spec){
   return s;
 }
 
+// Wrap a chart SVG with a title + (optional) subtitle bar at the top so
+// every PNG export carries the same context the on-screen panel shows
+// above its chart — what's plotted, what's grouped, what's held constant.
+// Returns a fresh SVG string with width = w and height = h + headerH;
+// the caller passes that taller height to _svgStringToPngBlob so the
+// canvas matches.
+function _wrapChartWithHeader(chartSvg, w, h, title, subtitle){
+  const HEADER_H = subtitle ? 52 : 32;
+  const totalH = h + HEADER_H;
+  // Strip the chart's outer <svg> wrapper so we can nest it inside the
+  // composed parent SVG via a <g transform="translate(...)">.
+  const inner = chartSvg
+    .replace(/^<svg[^>]*>/, "")
+    .replace(/<\/svg>$/, "");
+  // XML-escape title / subtitle so ampersands, angle brackets, etc.
+  // don't break the SVG when it hits the canvas rasterizer.
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const titleY = subtitle ? 22 : 22;
+  const subtitleY = 41;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${totalH}" width="${w}" height="${totalH}">
+<rect x="0" y="0" width="${w}" height="${totalH}" fill="${C.bg}"/>
+<text x="${w/2}" y="${titleY}" fill="${C.accent}" font-size="14" font-family="'Barlow Condensed',sans-serif" font-weight="700" text-anchor="middle" letter-spacing=".5px">${esc(title)}</text>
+${subtitle ? `<text x="${w/2}" y="${subtitleY}" fill="${C.txtDim}" font-size="11" font-family="'Barlow',sans-serif" text-anchor="middle">${esc(subtitle)}</text>` : ""}
+<g transform="translate(0,${HEADER_H})">${inner}</g>
+</svg>`;
+}
+
 // CRC32 over a byte slice — used to compute the PNG chunk CRC when we
 // inject a pHYs (physical pixel dimensions) chunk for DPI metadata.
 // Standard PNG/zlib polynomial. Cached lookup table for speed.
@@ -8339,7 +8369,18 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
         connectLines: xCol.kind === "input",
       };
       const svg = _chartSpecToSvgString(props);
-      const png = await _svgStringToPngBlob(svg, props.w, props.h);
+      // Build the same title + held-vars subtitle the on-screen panel
+      // shows above its chart so the exported PNG carries the same
+      // context — what's plotted, what's grouped, what's held constant.
+      let title = `${yCol.label}${yCol.unit ? ` (${yCol.unit})` : ""} vs ${xCol.label}${xCol.unit ? ` (${xCol.unit})` : ""}`;
+      if (gColorCol) title += ` · color by ${gColorCol.label}`;
+      if (gFacetCol) title += ` · faceted by ${gFacetCol.label}`;
+      const subtitle = (customSliceData.mainSlice || customSliceData.slice)
+        ? _heldSliceCaption(customSliceData.mainSlice || customSliceData.slice, units)
+        : null;
+      const HEADER_H = subtitle ? 52 : 32;
+      const wrapped = _wrapChartWithHeader(svg, props.w, props.h, title, subtitle);
+      const png = await _svgStringToPngBlob(wrapped, props.w, props.h + HEADER_H);
       const colSuf = gColorCol ? `_color_${_sanitizeFilename(gColorCol.label)}` : "";
       const logSuffix = props.yLog ? "_logy" : "";
       const fname = `${_sanitizeFilename(yCol.label)}_vs_${_sanitizeFilename(xCol.label)}${colSuf}${logSuffix}.png`;
@@ -8350,7 +8391,7 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
     } finally {
       setExporting(null);
     }
-  }, [xCol, yCol, gColorCol, customSliceData, customLog]);
+  }, [xCol, yCol, gColorCol, gFacetCol, customSliceData, customLog, units]);
 
   // Export the entire facet grid as one composed SVG → PNG. Builds a
   // single big <svg> containing all panels in a 3-column grid plus a
@@ -8409,12 +8450,22 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
       }).join("");
 
       const heading = `${yLabel} vs ${xLabel} — faceted by ${facetVarLabel}`;
-      const subHeading = gColorCol ? `Color: ${gColorCol.label}` : "Single series per panel";
+      // Include the held-vars caption (everything held constant for the
+      // ENTIRE grid, excluding the facet variable which varies per panel)
+      // so a reader of the exported image sees the same context the
+      // on-screen panel shows above the chart.
+      const heldCap = (customSliceData.slice && customSliceData.slice.held && customSliceData.slice.held.length > 0)
+        ? _heldSliceCaption({...customSliceData.slice, held: customSliceData.slice.held.filter(h => h.varSpec.id !== gFacetCol.varId)}, units)
+        : "";
+      const colorPart = gColorCol ? `Color: ${gColorCol.label}` : "Single series per panel";
+      const subHeading = heldCap
+        ? `${colorPart} · ${heldCap}`
+        : `${colorPart} · ${N} panels · shared X/Y axes`;
 
       const composed = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${TOTAL_W} ${TOTAL_H}" width="${TOTAL_W}" height="${TOTAL_H}">
 <rect x="0" y="0" width="${TOTAL_W}" height="${TOTAL_H}" fill="${C.bg}"/>
 <text x="${TOTAL_W/2}" y="22" fill="${C.accent}" font-size="16" font-family="'Barlow Condensed',sans-serif" font-weight="700" text-anchor="middle" letter-spacing=".7px">${heading}</text>
-<text x="${TOTAL_W/2}" y="40" fill="${C.txtDim}" font-size="11" font-family="'Barlow',sans-serif" text-anchor="middle">${subHeading} · ${N} panels · shared X/Y axes</text>
+<text x="${TOTAL_W/2}" y="40" fill="${C.txtDim}" font-size="11" font-family="'Barlow',sans-serif" text-anchor="middle">${subHeading}</text>
 ${panels}
 </svg>`;
 
@@ -8430,7 +8481,7 @@ ${panels}
     } finally {
       setExporting(null);
     }
-  }, [gFacetCol, gColorCol, xCol, yCol, customSliceData, customLog]);
+  }, [gFacetCol, gColorCol, xCol, yCol, customSliceData, customLog, units]);
 
   const exportSingleAuto = useCallback(async (ch) => {
     setExporting(ch.key);
@@ -8438,7 +8489,12 @@ ${panels}
       const useLog = logFlags[ch.key] != null ? logFlags[ch.key] : false;
       const props = _autoChartSpec(ch, useLog);
       const svg = _chartSpecToSvgString(props);
-      const png = await _svgStringToPngBlob(svg, props.w, props.h);
+      // Add the same conditions header the on-screen panel shows so the
+      // exported PNG carries the context of what was held constant.
+      const subtitle = ch.slice ? _heldSliceCaption(ch.slice, units) : null;
+      const HEADER_H = subtitle ? 52 : 32;
+      const wrapped = _wrapChartWithHeader(svg, props.w, props.h, ch.title, subtitle);
+      const png = await _svgStringToPngBlob(wrapped, props.w, props.h + HEADER_H);
       const logSuffix = props.yLog ? "_logy" : "";
       const base = ch.filename.replace(/\.png$/, "");
       _triggerBlobDownload(png, `${base}${logSuffix}.png`);
@@ -8448,7 +8504,7 @@ ${panels}
     } finally {
       setExporting(null);
     }
-  }, [logFlags]);
+  }, [logFlags, units]);
 
   const exportZipAll = useCallback(async () => {
     if (renderedCharts.length === 0) return;
@@ -8464,7 +8520,11 @@ ${panels}
         const useLog = logFlags[ch.key] != null ? logFlags[ch.key] : false;
         const props  = _autoChartSpec(ch, useLog);
         const svg    = _chartSpecToSvgString(props);
-        const png    = await _svgStringToPngBlob(svg, props.w, props.h);
+        // Same conditions header treatment as the single-export path.
+        const subtitle = ch.slice ? _heldSliceCaption(ch.slice, units) : null;
+        const HEADER_H = subtitle ? 52 : 32;
+        const wrapped  = _wrapChartWithHeader(svg, props.w, props.h, ch.title, subtitle);
+        const png      = await _svgStringToPngBlob(wrapped, props.w, props.h + HEADER_H);
         const folder = zip.folder(ch.category);
         counters[ch.category] = (counters[ch.category] || 0) + 1;
         const ord = String(counters[ch.category]).padStart(2, "0");
