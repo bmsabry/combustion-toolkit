@@ -1,0 +1,27 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Render static-site cache-control headers.
+# Vite copies this file from `public/` into `dist/_headers` at build time;
+# Render reads it at deploy time and serves the matching Cache-Control
+# header on every response.
+#
+# Strategy:
+#   • /assets/*   — Vite emits content-hashed filenames (e.g.
+#                   index-CnxTEqk-.js). Safe to cache immutably for one
+#                   year — when the content changes, the URL changes.
+#                   This is what makes deploys cheap to ship.
+#   • Everything else — including /index.html and the bare-root path / —
+#                   is served `no-cache, must-revalidate`. The browser
+#                   ALWAYS revalidates on next navigation, so a fresh
+#                   index.html (referencing the new bundle hash) is
+#                   picked up immediately after a Render deploy. No more
+#                   "hard refresh required" after each ship.
+#
+# More specific rules win, so the /assets/* immutable rule overrides
+# the /* fallback.
+# ─────────────────────────────────────────────────────────────────────────
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/*
+  Cache-Control: no-cache, must-revalidate
