@@ -932,7 +932,7 @@ const sA=[
   ["5. Combustor","Combustor ΔP","4%","P4 = 0.96 · P3."],
   ["","Combustor bypass fraction","LM6000: 0.683 / LMS100: 0.747","Per-engine calibration. Core-to-casing split."],
   ["","Combustor air fraction (flame/total)","0.88 (both)","Flame vs dilution zone split."],
-  ["","T4 target","LM6000: 1755 K / LMS100: 1825 K","Firing temperature — commanded by deck."],
+  ["","T4 target","LM6000: 1755 K / LMS100: 1800 K","Firing temperature — commanded by deck. LMS100 lowered from 1825 K to 1800 K (2826°F → 2780°F) for the PB+ uprate."],
   ["","φ4 solve","Cantera equilibrate(\"HP\")","Back-solved so product T = T4. Equilibrium only."],
   ["","T_Bulk","equilibrate(\"HP\") at (T3,P3,φ_Bulk)","Drives downstream panels when linked."],
   ["","Heat loss","0%","Adiabatic combustor (AFT panel has separate HL input)."],
@@ -961,7 +961,7 @@ const sA=[
   ["","Derate application","MW_net = MW_uncapped · (1 − derate%)","Stacks with part-load, not with ambient droop."],
 
   ["10. Engine Deck Anchors","LM6000PF","45.0 MW @ 60 °F / 60% RH","T3 811 K · P3 30.3 bar · T4 1755 K · η 42.4% · HR 8493 BTU/kWh."],
-  ["","LMS100PB+","107.5 MW @ 44 °F / 80% RH","T3 644 K · P3 44.0 bar · T4 1825 K · η 44.0% · HR 8178 BTU/kWh · intercooled."],
+  ["","LMS100PB+","107.5 MW @ 44 °F / 80% RH","T3 644 K · P3 44.0 bar · T4 1800 K (2780°F) · η_LHV 44.2% · HR 8146 kJ/kWh · intercooled. T4 anchor and η_isen_turb co-tuned for the PB+ uprate (cooler firing, more efficient turbine)."],
   ["","Anchor method","combustor_bypass_frac + η_isen_turb","Two per-engine knobs fit MW and η at anchor."],
 
   ["11. Off-design Scaling","Density lapse","mdot_air ∝ ρ_amb · VGV(T_amb)","Engine-specific lapse curve."],
@@ -3510,7 +3510,7 @@ function AssumptionsPanel(){
       <Assumption label="Combustor pressure drop" value="4%" note="P4 = 0.96 · P3. Fixed. Typical DLE range is 3–5%."/>
       <Assumption label="Combustor bypass fraction" value="LM6000: 0.683  /  LMS100: 0.747" note="Fraction of compressor discharge routed to the combustor core. Remainder is casing/HPT cooling. Private per-engine calibration so design-point MW and η land exactly."/>
       <Assumption label="Combustor air fraction (flame/total)" value="0.88 (both)" note="Flame zone gets 88% of combustor air; dilution zone gets 12%. FAR_Bulk = FAR4 / 0.88."/>
-      <Assumption label="T4 target" value="LM6000: 1755 K  /  LMS100: 1825 K" note="Firing temperature. Commanded by the deck, not solved."/>
+      <Assumption label="T4 target" value="LM6000: 1755 K  /  LMS100: 1800 K" note="Firing temperature. Commanded by the deck, not solved. LMS100 anchor lowered from 1825 K to 1800 K (2826 °F → 2780 °F) for the PB+ uprate."/>
       <Assumption label="φ4 solve" value="Cantera equilibrate(&quot;HP&quot;)" note="Back-solved so equilibrium product T at (T3, P3) equals T4. No kinetics — equilibrium only."/>
       <Assumption label="T_Bulk (flame zone)" value="Cantera equilibrate(&quot;HP&quot;) at (T3, P3, φ_Bulk)" note="Adiabatic equilibrium. Drives downstream flame-speed / blowoff / autoignition panels when linked."/>
       <Assumption label="Heat loss" value="0%" note="Adiabatic combustor. The AFT panel has a separate heat-loss option for hand analysis."/>
@@ -3549,7 +3549,7 @@ function AssumptionsPanel(){
 
     <AssumptionsGroup title="10. Engine Deck Anchors" subtitle="Design-point numbers each off-design scaling law is anchored at. These must match the published deck exactly.">
       <Assumption label="LM6000PF" value="45.0 MW @ 60 °F / 60% RH" note="T3 811 K · P3 30.3 bar · T4 1755 K · η_LHV 42.4% · HR 8493 BTU/kWh · no intercooler."/>
-      <Assumption label="LMS100PB+" value="107.5 MW @ 44 °F / 80% RH" note="T3 644 K · P3 44.0 bar · T4 1825 K · η_LHV 44.0% · HR 8178 BTU/kWh · with intercooler."/>
+      <Assumption label="LMS100PB+" value="107.5 MW @ 44 °F / 80% RH" note="T3 644 K · P3 44.0 bar · T4 1800 K (2780 °F) · η_LHV 44.2% · HR 8146 kJ/kWh · with intercooler. T4 anchor and η_isen_turb co-tuned for the PB+ uprate (cooler firing, more efficient turbine)."/>
       <Assumption label="Anchor method" value="Calibrate combustor_bypass_frac + eta_isen_turb" note="Two per-engine knobs fit both MW and η at anchor. Everything else is physical."/>
     </AssumptionsGroup>
 

@@ -22,7 +22,7 @@ Design-point anchors (exactly reproduced by the correlations at load=100%):
 
     LMS100PB+ at T_amb=44°F, RH=80%, P_amb=1.013 bar, load=100%
       T3 = 644 K (700°F)         P3 = 44.0 bar (638 psia)
-      T4 = 1825 K (2825°F)       MW_net = 107.5
+      T4 = 1800 K (2780°F)       MW_net = 107.5
 
     LM6000PF at T_amb=60°F, RH=60%, P_amb=1.013 bar, load=100%
       T3 = 811 K (1000°F)        P3 = 30.3 bar (440 psia)
@@ -117,20 +117,26 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         "P_amb_design_bar": 1.01325,
         "T3_design_K": 644.26,       # 700°F  (HPC exit / combustor inlet)
         "P3_design_bar": 44.0,       # 638 psia
-        "T4_design_K": 1825.37,      # 2825°F (turbine inlet / firing temp)
+        "T4_design_K": 1799.82,      # 2780°F (turbine inlet / firing temp)
         "MW_design": 107.5,
         "airflow_design_kg_s": 208.0,  # LMS100 rated inlet flow (~460 lb/s)
         # Fraction of compressor discharge air that enters the combustor.
         # The balance (1 − combustor_bypass_frac) is film/cooling air bled
-        # around the combustor that rejoins downstream. Calibrated so the
-        # design anchor with pure CH4 reproduces the published heat rate
-        # (~8180 kJ/kWh → η_LHV ≈ 44 %). Distinct from combustor_air_frac,
-        # which is the intra-combustor flame/dilution split.
+        # around the combustor that rejoins downstream. With the cooler
+        # PB+ T4 anchor (1799.82 K / 2780°F) and the recalibrated turbine
+        # eta_isen_turb = 0.7770, the design point produces ~8146 kJ/kWh
+        # → η_LHV ≈ 44.2 %. Distinct from combustor_air_frac, which is
+        # the intra-combustor flame/dilution split.
         "combustor_bypass_frac": 0.747,
         # Polytropic turbine/compressor efficiencies (Option A physics).
         # Calibrated so MW_gross = W_turb − W_comp − W_parasitic reaches
         # MW_cap at the design anchor for pure CH4 humid-air operation.
-        "eta_isen_turb": 0.7640,   # HP+IP+LP expansion, P3 → P_exhaust = 1.05 bar
+        "eta_isen_turb": 0.7770,   # HP+IP+LP expansion, P3 → P_exhaust = 1.05 bar
+                                   # (re-calibrated +1.70% when T4 anchor was
+                                   # lowered 1825.37 → 1799.82 K, to restore
+                                   # MW_gross ≈ 108.0 ≥ MW_cap at the design
+                                   # point — matches the original cap-binding
+                                   # margin of +0.5 MW.)
         "eta_isen_comp": 0.88,     # used in LPC T-rise; HPC captured by T3 anchor
         "P_exhaust_bar": 1.05,     # back-pressure at LP turbine exit (stack losses)
         "W_parasitic_frac_of_rated": 0.015,  # 1.5 % of rated MW (oil pumps, gearbox, aux)

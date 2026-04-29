@@ -3,8 +3,8 @@
 The pinned design-point anchors are the hard constraints the user gave:
 
     LMS100PB+ at 44°F / 80% RH / 1.013 bar / 100% load:
-        T3 = 644.26 K,  P3 = 44.0 bar,  T4 = 1825.37 K, MW_net = 107.5
-        η_LHV ≈ 44 %  (heat rate ≈ 8180 kJ/kWh)
+        T3 = 644.26 K,  P3 = 44.0 bar,  T4 = 1799.82 K (2780°F), MW_net = 107.5
+        η_LHV ≈ 44.2 %  (heat rate ≈ 8146 kJ/kWh)
 
     LM6000PF  at 60°F / 60% RH / 1.013 bar / 100% load:
         T3 = 810.93 K,  P3 = 30.3  bar, T4 = 1755.37 K, MW_net = 45.0
@@ -37,17 +37,19 @@ def test_lms100_design_anchor_exact():
     r = cycle.run("LMS100PB+", 1.01325, 279.817, 80.0, 100.0)
     assert r["T3_K"] == pytest.approx(644.26, abs=0.05)
     assert r["P3_bar"] == pytest.approx(44.0, abs=0.01)
-    assert r["T4_K"] == pytest.approx(1825.37, abs=0.05)
+    assert r["T4_K"] == pytest.approx(1799.82, abs=0.05)
     assert r["MW_net"] == pytest.approx(107.5, abs=0.05)
     assert r["intercooled"] is True
     # Intercooler duty must be positive and in a sensible range
     assert 20.0 < r["intercooler_duty_MW"] < 60.0
-    # Cold-fuel convention (fuel at user T_fuel_K, not preheated to T3) shifts
-    # η about −1 pt vs the OEM-deck convention. OEM published 44 % LHV implicitly
-    # assumes fuel preheat from recuperation; our honest Brayton number is ~43 %.
-    assert r["efficiency_LHV"] == pytest.approx(0.430, abs=0.005), r["efficiency_LHV"]
-    # Heat rate ~8360 kJ/kWh at 43 % eff
-    assert r["heat_rate_kJ_per_kWh"] == pytest.approx(8360.0, abs=100.0)
+    # T4 anchor was lowered from 1825.37 → 1799.82 (2826°F → 2780°F) per the
+    # PB+ uprate (cooler firing, longer hot-section life). MW_net is OEM-deck
+    # commanded so it's unaffected. mdot_fuel drops with T4 (less fuel needed
+    # for the cooler combustor exit), pushing η_LHV slightly UP at the same
+    # commanded power. Honest Brayton number is now ~44.2 %.
+    assert r["efficiency_LHV"] == pytest.approx(0.442, abs=0.005), r["efficiency_LHV"]
+    # Heat rate ~8146 kJ/kWh at 44.2 % eff
+    assert r["heat_rate_kJ_per_kWh"] == pytest.approx(8146.0, abs=100.0)
 
 
 def test_lm6000_design_anchor_exact():
