@@ -2450,7 +2450,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
     </>}
   </div>);}
 
-function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,measH2,setMeasH2,combMode,setCombMode}){
+function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,measH2,setMeasH2,fuelFlowKgs,setFuelFlowKgs,fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv,costPeriod,setCostPeriod,combMode,setCombMode}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   const Tair=T0;
@@ -2582,6 +2582,40 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
   // T_ad to display: at zero slip → burn-side. With slip → Cantera/JS at φ_eff.
   const T_ad_disp_O2  = !slipO2.slipActive  ? rO2?.T_ad  : (accurate && bkFedO2.data?.T_ad)  ? bkFedO2.data.T_ad  : (localFedO2?.T_ad  ?? rO2?.T_ad);
   const T_ad_disp_CO2 = !slipCO2.slipActive ? rCO2?.T_ad : (accurate && bkFedCO2.data?.T_ad) ? bkFedCO2.data.T_ad : (localFedCO2?.T_ad ?? rCO2?.T_ad);
+
+  // ── Fuel & Money — operating-point cost / penalty computation ────────
+  // Uses the O₂-derived chemical-equilibrium FAR (η_c-corrected fed-side)
+  // and η_c. O₂ is the more common stack measurement so we anchor on it;
+  // the CO₂ path can differ slightly in φ inversion but is rarely the
+  // primary operational signal.
+  const FAR_for_air = slipO2.slipActive ? slipO2.FAR_fed : (rO2?.FAR_mass || NaN);
+  const eta_c_money = slipO2.slipActive ? slipO2.eta_c   : 1;
+  // Air mass flow (kg/s): m_air = m_fuel / FAR_mass
+  const airFlowKgs = (Number.isFinite(fuelFlowKgs) && Number.isFinite(FAR_for_air) && FAR_for_air > 0)
+    ? fuelFlowKgs / FAR_for_air : NaN;
+  // Heat-input rate (MW) — m_fuel × LHV_mass. fp.LHV_mass is in MJ/kg, so
+  // kg/s × MJ/kg = MJ/s = MW directly.
+  const heatInputMW = (Number.isFinite(fuelFlowKgs) && fp.LHV_mass > 0)
+    ? fuelFlowKgs * fp.LHV_mass : NaN;
+  // Heat-input rate (MMBTU/hr) for ENG display — 1 MW = 3.41214 MMBTU/hr.
+  const heatInputMMBtuHr = Number.isFinite(heatInputMW) ? heatInputMW * 3.41214 : NaN;
+  // Total fuel cost per period (USD).
+  //   $/hr = MMBTU/hr × $/MMBTU
+  //   $/period = $/hr × hours/period
+  const _hoursPerPeriod = costPeriod === "year"  ? 8760
+                        : costPeriod === "month" ? 730
+                        : 168;  // week (default)
+  const totalCostPerHr = (Number.isFinite(heatInputMMBtuHr) && fuelCostUsdPerMmbtuLhv > 0)
+    ? heatInputMMBtuHr * fuelCostUsdPerMmbtuLhv : NaN;
+  const totalCostPerPeriod   = Number.isFinite(totalCostPerHr) ? totalCostPerHr * _hoursPerPeriod : NaN;
+  // Penalty = fraction of fuel cost wasted on slip = total × (1 − η_c).
+  const penaltyCostPerPeriod = Number.isFinite(totalCostPerPeriod) ? totalCostPerPeriod * (1 - eta_c_money) : NaN;
+  // Display formatters: thousand-separated USD with 0 decimals (penalty
+  // always shown in the same precision as total so the two are visually
+  // comparable; small penalty values still read cleanly).
+  const _fmtUSD = (v) => Number.isFinite(v)
+    ? "$" + v.toLocaleString("en-US", {minimumFractionDigits: 0, maximumFractionDigits: 0})
+    : "—";
   const o2Sweep=useMemo(()=>{const r=[];for(let o2=0.5;o2<=15;o2+=0.5){const Tm0=mixT(fuel,ox,0.6,Tfuel,Tair);const res0=calcExhaustFromO2(fuel,ox,o2,Tm0,P,combMode);const Tm1=mixT(fuel,ox,res0.phi,Tfuel,Tair);const res=calcExhaustFromO2(fuel,ox,o2,Tm1,P,combMode);r.push({O2:o2,T_ad:uv(units,"T",res.T_ad),phi:res.phi});}return r;},[fuel,ox,Tfuel,Tair,P,combMode,units]);
   const modeToggle=<div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:5,overflow:"hidden",marginBottom:10}}>
     {["complete","equilibrium"].map(m=><button key={m} onClick={()=>setCombMode(m)} style={{padding:"6px 12px",fontSize:10.5,fontWeight:combMode===m?700:400,color:combMode===m?C.bg:C.txtDim,background:combMode===m?C.accent:"transparent",border:"none",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",transition:"all .15s"}}>{m==="complete"?"Complete Combustion":"Chemical Equilibrium"}</button>)}
@@ -2648,6 +2682,89 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
         η_c = 1 − (N_dry/fuel) · (X_CO·LHV_CO + X_UHC·LHV_CH₄ + X_H₂·LHV_H₂) / LHV_fuel  [ASME PTC 4 / Lefebvre Ch. 9].
       </div>
     </div>
+
+    {/* ── Fuel & Money — operating-point flows + cost / penalty ────────
+        Inputs:  fuel mass flow (lb/hr ENG / kg/hr SI) — default 40,000 lb/hr;
+                  fuel cost ($/MMBTU LHV) — default $4.00;
+                  period toggle (week / month / year).
+        Computed using the O₂-derived chemical-equilibrium fed-side FAR &
+        η_c (so changing CO/UHC/H₂ above re-flows down to all four cards):
+                  air mass flow (lb/s ENG / kg/s SI) = m_fuel / FAR_fed
+                  heat-input rate (MMBTU/hr ENG / MW SI) = m_fuel · LHV_mass
+                  total fuel cost / period
+                  PENALTY / period = total × (1 − η_c)   [warm color] */}
+    <div style={{padding:"10px 14px",background:`${C.accent2}0A`,
+      border:`1px solid ${C.accent2}30`,borderRadius:6,
+      display:"flex",flexDirection:"column",gap:10}}>
+      <div style={{fontSize:10,fontWeight:700,color:C.accent2,
+        textTransform:"uppercase",letterSpacing:"1.2px",
+        fontFamily:"'Barlow Condensed',sans-serif"}}>
+        Fuel &amp; Money — at this operating point
+      </div>
+      {/* Inputs row */}
+      <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <Tip text="Total mass flow of fuel metered to the combustor. Default = 40,000 lb/hr (typical heavy-duty GT baseload, e.g. an LMS100 at full load). Stored internally in kg/s; the field shows lb/hr in English units, kg/hr in SI.">
+            <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
+              Fuel Flow ({units==="ENG"?"lb/hr":"kg/hr"}) ⓘ:
+            </label>
+          </Tip>
+          <NumField value={units==="ENG"?(fuelFlowKgs*7936.64):(fuelFlowKgs*3600)}
+            decimals={0}
+            onCommit={v=>{
+              const val = Math.max(0, +v || 0);
+              setFuelFlowKgs(units==="ENG" ? val/7936.64 : val/3600);
+            }}
+            style={{width:96,padding:"4px 6px",fontFamily:"monospace",
+              color:C.accent2,fontSize:12,fontWeight:700,background:C.bg,
+              border:`1px solid ${C.accent2}50`,borderRadius:4,textAlign:"center"}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <Tip text="Fuel cost in US dollars per million BTU on a LHV basis — the standard contract / regulatory unit for natural gas. Default $4.00/MMBTU LHV (typical 2024-2026 industrial-tier U.S. NG benchmark). Adjust to your actual fuel contract.">
+            <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
+              Fuel Cost ($/MMBTU LHV) ⓘ:
+            </label>
+          </Tip>
+          <NumField value={fuelCostUsdPerMmbtuLhv} decimals={2}
+            onCommit={v=>setFuelCostUsdPerMmbtuLhv(Math.max(0, +v || 0))}
+            style={{width:78,padding:"4px 6px",fontFamily:"monospace",
+              color:C.accent2,fontSize:12,fontWeight:700,background:C.bg,
+              border:`1px solid ${C.accent2}50`,borderRadius:4,textAlign:"center"}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace"}}>Period:</label>
+          <div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:4,overflow:"hidden"}}>
+            {[{k:"week",l:"Wk"},{k:"month",l:"Mo"},{k:"year",l:"Yr"}].map(p=>(
+              <button key={p.k} onClick={()=>setCostPeriod(p.k)}
+                style={{padding:"4px 12px",fontSize:10.5,fontWeight:costPeriod===p.k?700:400,
+                  fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",
+                  color:costPeriod===p.k?C.bg:C.txtDim,
+                  background:costPeriod===p.k?C.accent2:"transparent",
+                  border:"none",cursor:"pointer",transition:"all .15s"}}>
+                {p.l}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* Computed row 1: air flow + heat input */}
+      <div style={{...S.row,gap:8}}>
+        <M l="Air Mass Flow" v={Number.isFinite(airFlowKgs)?(units==="ENG"?(airFlowKgs*2.20462).toFixed(2):airFlowKgs.toFixed(3)):"—"}
+          u={units==="ENG"?"lb/s":"kg/s"} c={C.accent3}
+          tip={`Mass flow of combustion air (post-bleed if cycle is linked). Computed from m_air = m_fuel / FAR_fed using the η_c-corrected fed-side FAR from the Chemical Equilibrium card on the O₂ side: FAR_fed = ${Number.isFinite(FAR_for_air)?FAR_for_air.toFixed(5):"—"}. Changes with both the fuel-flow input and the slip measurements above.`}/>
+        <M l="Heat Input (LHV)" v={Number.isFinite(heatInputMMBtuHr)?(units==="ENG"?heatInputMMBtuHr.toFixed(0):heatInputMW.toFixed(2)):"—"}
+          u={units==="ENG"?"MMBTU/hr":"MW"} c={C.accent}
+          tip="Fuel-side heat input rate on a LHV basis: m_fuel · LHV_mass. Independent of efficiency — this is the chemical energy entering the combustor per unit time. Useful sanity-check against expected MW output."/>
+      </div>
+      {/* Computed row 2: cost + penalty (penalty in warm to draw the eye) */}
+      <div style={{...S.row,gap:8}}>
+        <M l={`Total Fuel Cost / ${costPeriod}`} v={_fmtUSD(totalCostPerPeriod)} u="USD" c={C.txtDim}
+          tip={`Total fuel bill at this operating point: heat input × ${fuelCostUsdPerMmbtuLhv.toFixed(2)} $/MMBTU LHV × ${_hoursPerPeriod} hr. The full amount the operator pays for fuel — informational, regardless of efficiency.`}/>
+        <M l={`PENALTY / ${costPeriod}`} v={_fmtUSD(penaltyCostPerPeriod)} u={`USD · η_c=${(eta_c_money*100).toFixed(2)}%`} c={C.warm}
+          tip={`Money walking out the stack as unburned CO + UHC + H₂. Computed as Total Fuel Cost × (1 − η_c). At η_c = 1 (no slip), this is zero. The actionable number for justifying combustor tuning interventions.`}/>
+      </div>
+    </div>
+
     {/* ============== FROM MEASURED O2 ============== */}
     <div style={S.card}>
       <div style={{...S.cardT,display:"flex",alignItems:"center",gap:8}}>From Measured O₂ (% dry) {status(bkO2)}</div>
@@ -10171,6 +10288,18 @@ export default function App(){
   const[measCO,setMeasCO]=useState(0);
   const[measUHC,setMeasUHC]=useState(0);
   const[measH2,setMeasH2]=useState(0);
+  // ── Fuel & Money operating-point inputs (for the Fuel & Money card on
+  // the Exhaust panel). Stored in SI (kg/s) so the panel-side display
+  // logic can convert to either kg/hr (SI) or lb/hr (ENG) and the panel
+  // is unit-toggle-aware. Default = 40,000 lb/hr (typical heavy-duty GT
+  // baseload fuel rate, e.g. an LMS100 at full load) = 5.0399 kg/s.
+  const[fuelFlowKgs,setFuelFlowKgs]=useState(40000 * 0.453592 / 3600);
+  // Fuel cost in USD per million BTU on a LHV basis — the standard
+  // contract / regulatory unit for natural gas. Default $4.00/MMBTU LHV
+  // (a typical 2024-2026 industrial-tier U.S. NG benchmark).
+  const[fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv]=useState(4.00);
+  // Time period for the weekly / monthly / annual cost rollup.
+  const[costPeriod,setCostPeriod]=useState("week"); // "week" | "month" | "year"
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
   const[showPricing,setShowPricing]=useState(false);
@@ -10919,7 +11048,7 @@ export default function App(){
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}
               psrActive={psrActive} setPsrActive={setPsrActive}
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
-            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} combMode={combMode} setCombMode={setCombMode}/>}
+            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} fuelFlowKgs={fuelFlowKgs} setFuelFlowKgs={setFuelFlowKgs} fuelCostUsdPerMmbtuLhv={fuelCostUsdPerMmbtuLhv} setFuelCostUsdPerMmbtuLhv={setFuelCostUsdPerMmbtuLhv} costPeriod={costPeriod} setCostPeriod={setCostPeriod} combMode={combMode} setCombMode={setCombMode}/>}
             {/* AutomatePanel is always mounted (just hidden when not the
                 active tab) so an in-progress run, captured results, the
                 wizard state, and the Plot Data panel survive tab switches.
