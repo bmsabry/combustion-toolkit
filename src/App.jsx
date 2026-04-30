@@ -533,14 +533,21 @@ function lefebvreLBO(A, m_air_kg_s, T3_K, V_pz_m3, P3_kPa, LCV_MJ_kg, FAR_stoich
 const PREMIXER_TYPES = {
   swirl: {
     label: "Swirl burner",
-    ref:   "Lieuwen 2021",
-    note:  "Geometric swirl S_n governs Da_crit. Most DLN combustors land here.",
+    ref:   "screening proxy (uncalibrated)",
+    note:  "Geometric swirl S_n shifts the Da_crit screen — calibrate against rig data before design use.",
     inputs: [
       { id:"swirlNumber", label:"Swirl number S_n", min:0.4, max:1.2,
         step:0.05, default:0.6, decimals:2,
-        tooltip:"Geometric swirl S_n = G_θ/(G_x·R). 0.4-0.6 weak; 0.6-1.0 typical DLN; >1.0 high-swirl. Da_crit grows ~linearly: 0.5 at S_n=0.6, 1.0 at S_n=1.0." },
+        tooltip:"Geometric swirl S_n = G_θ/(G_x·R). 0.4-0.6 weak; 0.6-1.0 typical DLN; >1.0 high-swirl. The Da_crit values below are an approximate screening interpolation (NOT measured); per Lieuwen 2021 §10.2.3, simple Da/Da_crit correlations capture only the first pre-blowoff stage and should be treated as conservative screening — calibrate against your own rig data for design-margin decisions." },
     ],
-    // Lieuwen Table 7.1: 0.5 at S_n=0.6, 1.0 at S_n=1.0; piecewise linear.
+    // CAUTION: this piecewise interpolation (0.30 / 0.50 / 1.00 at S_n =
+    // 0.4 / 0.6 / 1.0) is an approximate engineering screen, NOT a fitted
+    // correlation. Lieuwen, "Unsteady Combustor Physics" (2nd ed., 2021)
+    // §10.2.3 (p. 396-400) explicitly cautions that Da_crit-style numbers
+    // for swirl burners are screening proxies for the first pre-blowoff
+    // stage only — the fundamentally correct framework is the extinction
+    // stretch rate κ_ext (Lieuwen Eq. and Fig. 10.20). Refit these
+    // numbers against measured plant blowoff data when available.
     daCrit: (p) => {
       const sn = +p.swirlNumber || 0.6;
       if (sn <= 0.4) return 0.30;
@@ -2928,13 +2935,41 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const uPrime_premix = uPrimeRatio * Math.max(Vpremix, 0);
   const lT_premix = 0.10 * Math.max(D_h_premix, 1e-6);    // l_T = 0.1·D_h
 
-  // ── Gate A: boundary-layer flashback (Lewis-von Elbe extended) ──────
-  // g_c is already computed above (S_L² / α_th).
-  // g_actual = (8 · V_premix / D_h) · (1 + ε_turb)
-  // Pass: g_actual > g_c (wall flow fast enough to push the flame back).
-  const g_actual = (8 * Vpremix / Math.max(D_h_premix, 1e-6)) * (1 + eps_turb);
-  const gateA_pass = g_actual > g_c;
-  const gateA_margin = g_actual / Math.max(g_c, 1e-9);
+  // ── Gate A: boundary-layer flashback (Lewis-von Elbe / Lieuwen 2021) ──
+  // Per Lieuwen, "Unsteady Combustor Physics" 2nd ed., Ch. 10 §10.1.2.1
+  // (pp. 382-385). Flashback condition (Eq. 10.4):
+  //     g_u · δ_q / s_d^u = 1     →   flashback when g_u·δ_q < s_d^u
+  // Equivalent flashback Karlovitz (Eq. 10.5, assuming δ_q ∝ δ_F):
+  //     Ka_fb = g_u · δ_F / s_d^u
+  // Pass criterion: Ka_fb ≥ 1 (wall shear fast enough to keep the flame
+  // swept downstream).
+  //
+  // For laminar boundary layers the Poiseuille-flow estimate g_u_pipe ≈
+  // 8·V/D_h is the wall gradient. For TURBULENT boundary layers,
+  // Lieuwen p. 385 reports g_u,turbulent ≈ 3·g_u,laminar (Eichler-
+  // Sattelmayer 2011). We model this as a multiplier (1 + ε_turb), with
+  // ε_turb ≈ 0 for laminar (factor 1) up to ε_turb ≈ 2 for fully
+  // turbulent (factor 3). Default 0.7 is mid-range, conservative.
+  //
+  // For H₂-rich flames in CONFINED channels, Lieuwen Fig. 10.9 (p. 387)
+  // shows g_u,confined / g_u,unconfined ≈ √σ_ρ to σ_ρ, where σ_ρ = T_b/T_u
+  // — i.e. confinement raises the EFFECTIVE critical g_c by gas-expansion
+  // back-pressure. We apply √σ_ρ when H₂ > 30% as the conservative
+  // mid-range; richer H₂ should be flagged for CFD.
+  const g_u_pipe   = 8 * Vpremix / Math.max(D_h_premix, 1e-6);
+  const g_u_actual = g_u_pipe * (1 + eps_turb);
+  // T_b: prefer Cantera flame T_max when available; else estimate from φ.
+  const T_b_card3  = (accurate && bk.data && bk.data.T_max) ? bk.data.T_max : 1800;
+  const sigma_rho  = T_b_card3 / Math.max(Tmix, 1);
+  const confine_correction = (H2_frac > 0.30) ? Math.sqrt(Math.max(sigma_rho, 1)) : 1.0;
+  const g_c_eff    = g_c * confine_correction;
+  const Ka_flashback = (g_u_actual > 0 && SL_ms > 0)
+    ? (g_u_actual * delta_F) / SL_ms
+    : NaN;
+  const gateA_pass    = g_u_actual > g_c_eff;       // equivalently Ka_fb ≥ 1
+  const gateA_margin  = g_u_actual / Math.max(g_c_eff, 1e-9);
+  // Legacy alias for the Card 3 JSX (still reads g_actual)
+  const g_actual = g_u_actual;
 
   // ── Gate B: CIVB (Combustion-Induced Vortex Breakdown, Sattelmayer 2004)
   // Π_CIVB = S_L · D_h / Γ_swirl, with Γ_swirl = S_n · V_premix · D_h · π
@@ -3337,15 +3372,16 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
 
       {/* ── Four gates row ───────────────────────────────────────────── */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:10}}>
-        {/* Gate A — Boundary-layer flashback */}
+        {/* Gate A — Boundary-layer flashback (Lieuwen Eq. 10.4-10.6) */}
         <div style={{background:gateA_pass?`${C.good}10`:`${C.warm}10`,border:`1.5px solid ${gateA_pass?C.good:C.warm}55`,borderRadius:6,padding:"8px 10px"}}>
           <div style={{fontSize:10,fontWeight:700,color:gateA_pass?C.good:C.warm,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>{gateA_pass?"✓":"✗"} Gate A — Boundary-Layer Flashback</div>
           <div style={{fontSize:11,fontFamily:"monospace",color:C.txt,lineHeight:1.5}}>
-            <span title="g_c = S_L² / α_th (Lewis-von Elbe critical gradient).">g_c = <strong>{g_c.toFixed(0)}</strong> 1/s</span><br/>
-            <span title={`g_actual = (8·V_premix/D_h)·(1+ε_turb) — wall shear amplification factor ε_turb=${eps_turb.toFixed(2)}.`}>g_actual = <strong style={{color:gateA_pass?C.good:C.warm}}>{g_actual.toFixed(0)}</strong> 1/s</span><br/>
-            <span style={{fontSize:10,color:C.txtMuted}}>margin = {gateA_margin.toFixed(2)}× (need &gt; 1)</span>
+            <span title={`Critical wall gradient g_c = S_L²/α_th (Lewis-von Elbe). ${H2_frac>0.30?`Confined H₂-flame correction √σ_ρ=${confine_correction.toFixed(2)} applied per Lieuwen Fig. 10.9 (g_c_eff shown).`:"Unconfined; no σ_ρ correction."}`}>g_c{H2_frac>0.30?"_eff":""} = <strong>{g_c_eff.toFixed(0)}</strong> 1/s</span><br/>
+            <span title={`Actual wall gradient: 8·V_premix/D_h Poiseuille estimate × (1+ε_turb)=${(1+eps_turb).toFixed(2)}. Lieuwen p. 385 reports g_u,turbulent ≈ 3·g_u,laminar (Eichler-Sattelmayer).`}>g_actual = <strong style={{color:gateA_pass?C.good:C.warm}}>{g_actual.toFixed(0)}</strong> 1/s</span><br/>
+            <span title={`Flashback Karlovitz Ka_fb = g_u·δ_F/s_d^u (Lieuwen Eq. 10.5). Pass: Ka_fb ≥ 1.`}>Ka_fb = <strong>{Number.isFinite(Ka_flashback)?Ka_flashback.toFixed(2):"—"}</strong> <span style={{color:C.txtMuted}}>(need ≥ 1)</span></span><br/>
+            <span style={{fontSize:10,color:C.txtMuted}}>margin = {gateA_margin.toFixed(2)}×</span>
           </div>
-          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Dominant for tube burners and micromixers (D_h &lt; 5 mm); secondary for swirl DLN.</div>
+          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Lieuwen Eq. 10.4-10.6. Dominant for tube burners and micromixers; H₂ flames {H2_frac>0.30?"(>30% — √σ_ρ confinement applied)":"hit this gate hardest"}.</div>
         </div>
 
         {/* Gate B — CIVB */}
