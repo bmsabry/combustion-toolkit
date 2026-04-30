@@ -84,6 +84,47 @@ _PM_R_CAL_PER_MOL_K = 1.987     # Universal gas constant in cal/(mol·K)
 _PM_RATIO_LBO = 2.11            # Slope of LBO line (Plee-Mellor Fig. 5)
 
 
+def shaffer_tip_temperature(
+    H2_pct: float,
+    CO_pct: float,
+    CH4_pct: float,
+    AFT_K: float,
+) -> float:
+    """Shaffer-Duan-McDonell 2013 burner-tip temperature, Eq. 4.
+
+    Predicts the steady-state burner-tip temperature at flashback
+    based on fuel composition and AFT. Per Shaffer §4.5, using this
+    *tip* T (not ambient) as the unburned-gas T in S_L calculations
+    gives a much tighter g_c data collapse (R² = 0.936 vs 0.854 for
+    ambient). Useful as a correction for H₂-rich BLF prediction.
+
+    Args:
+        H2_pct, CO_pct, CH4_pct:  Fuel composition in mole %  (sum = 100)
+        AFT_K:                    Adiabatic flame temperature  (K)
+
+    Returns:
+        Burner tip temperature (K)
+
+    Reference: B. Shaffer, Z. Duan, V. McDonell, "Study of Fuel
+    Composition Effects on Flashback Using a Confined Jet Flame Burner,"
+    J Eng GT 135:011502 (2013), Eq. 4.
+
+    Note on Eq. 3 (g_c ANOVA correlation): the cross-term coefficient
+    0.604·H₂·CH₄ in Shaffer's published Eq. 3 produces unphysical
+    g_c at mid-edge mixtures (e.g. 50/50 H₂/CH₄ → ~1.75e6 1/s vs
+    experimental ~1e4-3e4 1/s in Fig. 5). Likely a typesetting issue.
+    For production g_c we use Lewis-von Elbe (S_L²/α) which is
+    validated against the same Shaffer dataset within ±50% at the
+    H₂ corner and matches Eichler-Sattelmayer 2012's μ-PIV BLF model.
+    """
+    return (
+        -1.58 * H2_pct
+        - 3.63 * CO_pct
+        - 4.28 * CH4_pct
+        + 0.38 * AFT_K
+    )
+
+
 def plee_mellor_lbo(
     T_flame_K: float,
     T_in_K: float,

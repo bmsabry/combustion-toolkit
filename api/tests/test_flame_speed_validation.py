@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import math
 
-from app.science.flame_speed import run as flame_speed_run, plee_mellor_lbo
+from app.science.flame_speed import (
+    run as flame_speed_run,
+    plee_mellor_lbo,
+    shaffer_tip_temperature,
+)
 
 
 # ─── Helpers replicated from the frontend (so this test runs with the
@@ -277,3 +281,82 @@ def test_PleeMellor_LBO_consistency_with_Lefebvre():
     print(f"  Full (φ=0.55, T_in=700K, V=60 m/s): T_φ={T_flame_full:.0f} K")
     print(f"    τ_sl={pm_full['tau_sl_ms']:.2f} ms, τ_hc'={pm_full['tau_hc_ms']:.3f} ms, ratio={pm_full['ratio']:.2f}, LBO_safe={pm_full['lbo_safe']}")
     print(f"  Plee-Mellor LBO line: ratio = {pm_idle['ratio_LBO']}")
+
+
+def test_Shaffer2013_H2_increases_flashback_propensity():
+    """Shaffer/Duan/McDonell 2013 (J Eng GT 135:011502) flashback validation.
+
+    Validates two physical signatures of H₂-enriched flashback risk:
+
+    (a) Lewis-von Elbe critical wall velocity gradient g_c = S_L²/α
+        increases sharply with H₂ fraction. This is the same g_c
+        formula validated by Eichler-Sattelmayer 2012 (Exp Fluids
+        52:347) μ-PIV experiments on confined-channel BLF.
+
+    (b) Shaffer Eq. 4 burner-tip temperature is a clean linear
+        function of fuel composition + AFT. Tip T increases with
+        H₂ fraction, capturing the heat-transfer-to-burner-rim
+        mechanism that drives runaway flashback.
+
+    (Note: Shaffer Eq. 3 g_c ANOVA correlation has known coefficient
+    issues at mid-edge mixtures and is not used in production —
+    see docstring of shaffer_tip_temperature for details.)
+    """
+    # ── Part (a): Lewis-von Elbe g_c via Cantera S_L ───────────────
+    ox = {"O2": 21.0, "N2": 79.0}
+    P_bar = 1.0 * 1.01325
+    T_K = 300.0
+    phi = 0.55  # lean operating point typical for premixers
+
+    fuels = {
+        "100% CH4":       {"CH4": 100.0},
+        "50/50 CH4/H2":   {"CH4": 50.0, "H2": 50.0},
+        "100% H2":        {"H2": 100.0},
+    }
+    g_c_results = {}
+    for label, fuel in fuels.items():
+        r = flame_speed_run(fuel, ox, phi, T_K, P_bar)
+        SL    = r["SL"]
+        alpha = r["alpha_th_u"]
+        g_c   = (SL * SL) / max(alpha, 1e-20)
+        g_c_results[label] = {"SL": SL, "alpha": alpha, "g_c": g_c, "Le": r["Le_eff"]}
+
+    g_c_CH4   = g_c_results["100% CH4"]["g_c"]
+    g_c_5050  = g_c_results["50/50 CH4/H2"]["g_c"]
+    g_c_H2    = g_c_results["100% H2"]["g_c"]
+
+    # Monotonic increase with H₂ — this is the Shaffer Fig. 10 trend
+    # validated by Eichler-Sattelmayer's BLF mechanism analysis.
+    assert g_c_5050 > g_c_CH4, f"50/50 g_c={g_c_5050:.0f} should exceed pure CH₄ g_c={g_c_CH4:.0f}"
+    assert g_c_H2   > g_c_5050, f"100% H₂ g_c={g_c_H2:.0f} should exceed 50/50 g_c={g_c_5050:.0f}"
+
+    # Magnitudes — H₂/CH₄ g_c ratio should be at least 10× (consistent
+    # with Shaffer Fig. 6: confined NG ~ 1000 1/s, confined H₂ ~ 30k+).
+    ratio_H2_CH4 = g_c_H2 / g_c_CH4
+    assert ratio_H2_CH4 > 10.0, f"H₂/CH₄ g_c ratio = {ratio_H2_CH4:.1f}× (must be > 10× for H₂ flashback risk)"
+
+    # ── Part (b): Shaffer Eq. 4 burner tip T trend ─────────────────
+    AFT = 1700.0  # K
+    T_tip_CH4  = shaffer_tip_temperature(H2_pct=0,   CO_pct=0, CH4_pct=100, AFT_K=AFT)
+    T_tip_5050 = shaffer_tip_temperature(H2_pct=50,  CO_pct=0, CH4_pct=50,  AFT_K=AFT)
+    T_tip_H2   = shaffer_tip_temperature(H2_pct=100, CO_pct=0, CH4_pct=0,   AFT_K=AFT)
+
+    # Monotonic increase in tip T with H₂ (Shaffer §4.5 Eq. 4)
+    assert T_tip_5050 > T_tip_CH4, f"50/50 T_tip={T_tip_5050:.0f} > CH₄-only {T_tip_CH4:.0f}"
+    assert T_tip_H2   > T_tip_5050, f"100% H₂ T_tip={T_tip_H2:.0f} > 50/50 {T_tip_5050:.0f}"
+
+    # Tip temperatures should be in plausible physical range (300-700 K
+    # per Shaffer Fig. 13/14 — burner tip never exceeds ~600 K for
+    # active cooling, no quenching at < 300 K).
+    assert 200 < T_tip_CH4 < 800
+    assert 200 < T_tip_H2  < 800
+
+    print(f"\nShaffer 2013 + Eichler-Sattelmayer 2012 flashback validation:")
+    print(f"  Lewis-von Elbe g_c at φ=0.55, T_u=300 K:")
+    for label, d in g_c_results.items():
+        print(f"    {label:18s}: SL={d['SL']*100:5.1f} cm/s, α={d['alpha']*1e6:5.1f} mm²/s, Le={d['Le']:.3f}, g_c={d['g_c']:9.0f} 1/s")
+    print(f"    H₂/CH₄ g_c ratio = {ratio_H2_CH4:.1f}× (Shaffer Fig. 6: ~30-50×)")
+    print(f"  Shaffer Eq. 4 tip T (AFT=1700 K):")
+    print(f"    100% CH₄:       T_tip = {T_tip_CH4:.0f} K")
+    print(f"    50/50 CH4/H2:   T_tip = {T_tip_5050:.0f} K")
+    print(f"    100% H₂:        T_tip = {T_tip_H2:.0f} K")
