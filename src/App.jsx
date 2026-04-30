@@ -538,7 +538,7 @@ const PREMIXER_TYPES = {
     inputs: [
       { id:"swirlNumber", label:"Swirl number S_n", min:0.4, max:1.2,
         step:0.05, default:0.6, decimals:2,
-        tooltip:"Geometric swirl S_n = G_θ/(G_x·R). 0.4-0.6 weak; 0.6-1.0 typical DLN; >1.0 high-swirl. The Da_crit values below are an approximate screening interpolation (NOT measured); per Lieuwen 2021 §10.2.3, simple Da/Da_crit correlations capture only the first pre-blowoff stage and should be treated as conservative screening — calibrate against your own rig data for design-margin decisions." },
+        tooltip:"Swirl number convention: this slider treats S_n as the momentum-based S_m = (axial flux of angular momentum)/(a · axial flux of axial momentum) per Lieuwen Eq. 4.6 (p. 144). The velocity-based S_v ≈ S_m for typical jet profiles but values quoted in different papers may use either convention — verify before benchmarking. Typical ranges: 0.4-0.6 weak swirl, 0.6-1.0 typical DLN, >1.0 high-swirl. Vortex breakdown (Lieuwen §4.4.2) is bistable: below S_A no breakdown ever; above S_B always breakdown; hysteresis between. For typical combustor jets at a_core/a ≈ 0.56, χ ≈ 1/3, Lieuwen Fig. 4.39 puts S_B,v ≈ 0.6-0.85 — reasonable proxy for the swirl scale at which CIVB becomes a flashback risk. The Da_crit screen below is engineering-grade and uncalibrated; per Lieuwen §10.2.3 (p. 396-400), Da/Da_crit captures only the first pre-blowoff stage. The fundamentally correct quantity is the extinction stretch rate κ_ext (Lieuwen Fig. 10.20). Calibrate against rig data for design-margin decisions." },
     ],
     // CAUTION: this piecewise interpolation (0.30 / 0.50 / 1.00 at S_n =
     // 0.4 / 0.6 / 1.0) is an approximate engineering screen, NOT a fitted
@@ -2971,10 +2971,26 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // Legacy alias for the Card 3 JSX (still reads g_actual)
   const g_actual = g_u_actual;
 
-  // ── Gate B: CIVB (Combustion-Induced Vortex Breakdown, Sattelmayer 2004)
-  // Π_CIVB = S_L · D_h / Γ_swirl, with Γ_swirl = S_n · V_premix · D_h · π
-  //        ⇒ Π_CIVB = S_L / (S_n · V_premix · π)
-  // Threshold: 0.05 for natural gas, 0.03 for H₂ blends (>30% H₂).
+  // ── Gate B: CIVB (Combustion-Induced Vortex Breakdown) ────────────
+  // Sattelmayer 2004 (J. Eng. Gas Turbines Power 126:276-283):
+  //   Π_CIVB = S_L · D_h / Γ_swirl, with Γ_swirl = S_n · V_premix · D_h · π
+  //          ⇒ Π_CIVB = S_L / (S_n · V_premix · π)
+  // Empirical threshold: 0.05 (natural gas); tightened to 0.03 for H₂
+  // blends > 30% (Sattelmayer 2014, J. Eng. Gas Turbines Power 138:011503).
+  //
+  // Physical context (Lieuwen, Unsteady Combustor Physics 2nd ed.,
+  // §4.4.2 pp. 147-150 + §10.1.1 pp. 381-382):
+  //   • Vortex breakdown is BISTABLE: S < S_A (no breakdown), S > S_B
+  //     (always breakdown), S_A < S < S_B (hysteresis depending on
+  //     initial conditions).
+  //   • For typical combustor jets at a_core/a ≈ 0.56, χ = 1/3 the
+  //     S_B breakdown threshold is S_v ≈ 0.6-0.85 (Lieuwen Fig. 4.39).
+  //   • CIVB occurs when the FLAME's adverse pressure gradient + radial
+  //     divergence acts as the finite-amplitude perturbation that flips
+  //     the system from non-breakdown into breakdown — even when the
+  //     non-reacting flow itself is sub-S_B. Π_CIVB captures when this
+  //     flame-driven mechanism activates.
+  //
   // Only meaningful when the premixer type is "swirl" — for non-swirl
   // architectures CIVB doesn't apply (gate is auto-pass with N/A label).
   const civb_applicable = (premixerType === "swirl");
@@ -3390,7 +3406,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
           {civb_applicable ? (
             <div style={{fontSize:11,fontFamily:"monospace",color:C.txt,lineHeight:1.5}}>
               <span title="Π_CIVB = S_L / (S_n · V_premix · π) — Sattelmayer 2004 simplified.">Π_CIVB = <strong style={{color:gateB_pass?C.good:C.warm}}>{piCIVB.toFixed(4)}</strong></span><br/>
-              <span title={`Threshold ${civb_threshold} ${H2_frac>0.30?"(tightened for H₂ > 30%)":"(natural-gas value)"}.`}>threshold &lt; <strong>{civb_threshold.toFixed(2)}</strong></span><br/>
+              <span title={`Threshold ${civb_threshold} — ${H2_frac>0.30?"tightened to 0.03 for H₂ > 30% (Sattelmayer et al., J. Eng. Gas Turbines Power 138:011503, 2014)":"natural-gas value from Fritz/Kröner/Sattelmayer 2004 (J. Eng. Gas Turbines Power 126:276-283)"}.`}>threshold &lt; <strong>{civb_threshold.toFixed(2)}</strong></span><br/>
               <span style={{fontSize:10,color:C.txtMuted}}>S_n = {swirlNumber.toFixed(2)}</span>
             </div>
           ) : (
@@ -3398,7 +3414,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
               <em>N/A</em> — Card 2 premixer type is "{_typeEntry.label}". CIVB applies only to swirl burners.
             </div>
           )}
-          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Dominant flashback mode for swirl DLN.</div>
+          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Dominant flashback mode for swirl DLN. Bistable: above the Π threshold the flame's pressure rise flips the vortex into breakdown (Lieuwen §4.4.2, Fig. 4.39).</div>
         </div>
 
         {/* Gate C — Turbulent core (Bradley) */}
