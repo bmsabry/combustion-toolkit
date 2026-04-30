@@ -31,17 +31,23 @@ const AccurateCtx = createContext({ accurate:false, setAccurate:()=>{}, availabl
 // Busy tracker — any Cantera call registers a task here while in-flight so the global overlay
 // can show a large "calculations in progress" banner that disappears when all tasks complete.
 const BusyCtx = createContext({ begin:()=>()=>{}, tasks:[] });
+// Generic-but-honest labels for the global busy banner. Kept short — the
+// banner already carries the timer and the "please wait" framing, so each
+// label just says which Cantera workload is running. Accuracy beats
+// verbosity: e.g. combustor_mapping is correlation-based now (the per-
+// circuit T_AFT calls go through Cantera HP-equilibrium, but there is
+// no PSR/PFR network here).
 const BUSY_LABELS = {
-  aft: "Computing adiabatic flame temperature (Cantera HP equilibrium + complete-combustion companion)…",
-  flame: "Solving 1D premixed flame — laminar flame speed S_L (Cantera FreeFlame, mixture-averaged transport)…",
-  combustor: "Running PSR → PFR combustor network (Cantera reactor net, NOx + CO kinetics)…",
-  exhaust: "Inverting exhaust O₂ / CO₂ to equivalence ratio (Cantera equilibrium + complete-combustion)…",
-  props: "Computing mixture fluid properties (Cantera thermodynamics + transport)…",
-  autoignition: "Integrating 0D ignition-delay (Cantera constant-HP reactor)…",
-  cycle: "Solving gas-turbine cycle (compressor / combustor / turbine + bleed + water injection)…",
-  combustor_mapping: "Running 4-circuit combustor mapping (PSR + PFR per circuit → mix → bulk PFR)…",
-  flame_sweep: "Sweeping laminar flame speed across φ (Cantera FreeFlame × N points)…",
-  load_sweep: "Running load sweep — cycle + AFT at each load point (20 → 100 %)…",
+  aft:               "Computing adiabatic flame temperature…",
+  flame:             "Solving laminar flame speed (Cantera FreeFlame)…",
+  combustor:         "Running PSR → PFR combustor network…",
+  exhaust:           "Inverting exhaust O₂ / CO₂ to equivalence ratio…",
+  props:             "Computing mixture properties…",
+  autoignition:      "Integrating 0D ignition-delay…",
+  cycle:             "Solving gas-turbine cycle…",
+  combustor_mapping: "Computing combustor mapping correlations…",
+  flame_sweep:       "Sweeping laminar flame speed across φ…",
+  load_sweep:        "Running load sweep…",
 };
 const UC = {
   SI: { T:{u:"K",from:v=>v,to:v=>v}, P:{u:"atm",from:v=>v,to:v=>v}, vel:{u:"m/s",from:v=>v,to:v=>v}, len:{u:"m",from:v=>v,to:v=>v}, lenSmall:{u:"cm",from:v=>v,to:v=>v}, SL:{u:"cm/s",from:v=>v,to:v=>v}, mass:{u:"kg",from:v=>v,to:v=>v}, energy_mass:{u:"MJ/kg",from:v=>v,to:v=>v}, energy_vol:{u:"MJ/m³",from:v=>v,to:v=>v}, cp:{u:"J/(mol·K)",from:v=>v,to:v=>v}, h_mol:{u:"kJ/mol",from:v=>v,to:v=>v}, s_mol:{u:"J/(mol·K)",from:v=>v,to:v=>v}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"kg/kg",from:v=>v,to:v=>v} },
@@ -11217,7 +11223,11 @@ export default function App(){
     // Compressor-discharge bleed dumped to ambient. Reduces air to combustor
     // + turbine; backend iteratively elevates T4 to hold gross power.
     bleed_air_frac:bleedAirFrac,
-  },accurate&&hasOnline);
+  // Cycle endpoint is only ever rendered in gts / advanced modes — gate the
+  // call so Free / Combustion Toolkit don't fire (and don't surface a misleading
+  // "Solving gas-turbine cycle…" line in the global busy banner when the user
+  // doesn't have a Cycle panel at all).
+  },accurate&&hasOnline&&(mode==="gts"||mode==="advanced"));
   const cycleResult=bkCycle.data;
 
   // ── App-level mapping-table lookup + auto-fill. Runs whenever cycleResult,
@@ -11265,7 +11275,12 @@ export default function App(){
       WFR, water_mode:waterMode,
       nox_mult:_noxMult, co_mult:_coMult, px36_mult:_px36Mult,
     },
-    !!(accurate && _oxHumid && _m_air_post_bleed > 0 && _m_fuel_total > 0)
+    // Mapping endpoint is only ever rendered in gts / advanced. Don't fire
+    // it in Free / Combustion Toolkit — those modes have no Mapping panel,
+    // so a "Computing combustor mapping correlations…" line in the global
+    // busy banner there would be a lie.
+    !!(accurate && _oxHumid && _m_air_post_bleed > 0 && _m_fuel_total > 0
+       && (mode==="gts"||mode==="advanced"))
   );
 
   // panelState is built AFTER cycleResult to avoid temporal-dead-zone reference.
