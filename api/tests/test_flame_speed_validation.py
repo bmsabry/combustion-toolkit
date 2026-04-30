@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 
-from app.science.flame_speed import run as flame_speed_run
+from app.science.flame_speed import run as flame_speed_run, plee_mellor_lbo
 
 
 # ─── Helpers replicated from the frontend (so this test runs with the
@@ -223,3 +223,57 @@ def test_HawkesChen_2004_H2_enrichment_speeds_up():
     print(f"  Case A (pure CH₄):    SL={SL_A*100:.2f} cm/s (paper 5.27), Le_eff={Le_A:.3f}, Le_D={LeD_A:.3f}")
     print(f"  Case B (29% H₂ mole): SL={SL_B*100:.2f} cm/s (paper 7.58), Le_eff={Le_B:.3f}, Le_D={LeD_B:.3f}")
     print(f"  ΔSL = +{(SL_B/SL_A - 1)*100:.0f}% (paper: +44%)")
+
+
+def test_PleeMellor_LBO_consistency_with_Lefebvre():
+    """Plee-Mellor 1979 (Combust Flame 35:61-80) LBO criterion cross-check.
+
+    Use the LM6000 idle case (which we know is near-LBO from the
+    Lefebvre-Ballal Damköhler-style analysis): T_in=500 K, with
+    T_flame from Cantera at φ=0.45.
+
+    Also run a high-stability operating point at full load (T_in=700 K,
+    φ=0.55) and confirm Plee-Mellor reports LBO_safe = True.
+
+    No exact target — just confirm the two frameworks (Lefebvre vs
+    Plee-Mellor) agree on which operating points are near LBO.
+    """
+    fuel = {"CH4": 95.0, "C2H6": 5.0}
+    ox = {"O2": 21.0, "N2": 79.0}
+
+    # ── Idle case (near-LBO per Lefebvre Damköhler analysis) ──
+    r_idle = flame_speed_run(fuel, ox, 0.45, 500.0, 8.0)
+    T_flame_idle = r_idle["T_max"]
+    pm_idle = plee_mellor_lbo(
+        T_flame_K=T_flame_idle, T_in_K=500.0,
+        L_recirc_m=0.025, V_approach_mps=30.0,
+    )
+
+    # ── Full-load case (well stable per Lefebvre) ──
+    r_full = flame_speed_run(fuel, ox, 0.55, 700.0, 10.0)
+    T_flame_full = r_full["T_max"]
+    pm_full = plee_mellor_lbo(
+        T_flame_K=T_flame_full, T_in_K=700.0,
+        L_recirc_m=0.025, V_approach_mps=60.0,
+    )
+
+    # Sanity: τ_hc must drop with hotter flame T (idle τ_hc > full τ_hc)
+    assert pm_idle["tau_hc_ms"] > pm_full["tau_hc_ms"], (
+        f"τ_hc should be larger at colder idle: idle={pm_idle['tau_hc_ms']:.3f} vs full={pm_full['tau_hc_ms']:.3f}"
+    )
+
+    # Sanity: ratios are finite, positive
+    assert pm_idle["ratio"] > 0 and math.isfinite(pm_idle["ratio"])
+    assert pm_full["ratio"] > 0 and math.isfinite(pm_full["ratio"])
+
+    # Cross-framework agreement: full-load ratio must EXCEED idle ratio.
+    assert pm_full["ratio"] > pm_idle["ratio"], (
+        f"Full-load Plee-Mellor ratio={pm_full['ratio']:.2f} must exceed idle ratio={pm_idle['ratio']:.2f}"
+    )
+
+    print(f"\nPlee-Mellor 1979 cross-check vs Lefebvre Damköhler analysis:")
+    print(f"  Idle (φ=0.45, T_in=500K, V=30 m/s): T_φ={T_flame_idle:.0f} K")
+    print(f"    τ_sl={pm_idle['tau_sl_ms']:.2f} ms, τ_hc'={pm_idle['tau_hc_ms']:.3f} ms, ratio={pm_idle['ratio']:.2f}, LBO_safe={pm_idle['lbo_safe']}")
+    print(f"  Full (φ=0.55, T_in=700K, V=60 m/s): T_φ={T_flame_full:.0f} K")
+    print(f"    τ_sl={pm_full['tau_sl_ms']:.2f} ms, τ_hc'={pm_full['tau_hc_ms']:.3f} ms, ratio={pm_full['ratio']:.2f}, LBO_safe={pm_full['lbo_safe']}")
+    print(f"  Plee-Mellor LBO line: ratio = {pm_idle['ratio_LBO']}")

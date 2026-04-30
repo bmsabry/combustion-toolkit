@@ -62,6 +62,62 @@ def _mole_weighted_EaR(fuel_pct: Dict[str, float]) -> float:
     return Ea_kcal * _KCAL_TO_J / _R_J_PER_MOL_K
 
 
+# ── Plee-Mellor 1979 characteristic-time LBO criterion ──────────────────
+# Reference: S.L. Plee & A.M. Mellor, "Characteristic Time Correlation for
+# Lean Blowoff of Bluff-Body-Stabilized Flames," Combust Flame 35:61-80
+# (1979).  Eq. 17 for Configuration A (45° conical baffle, gaseous propane,
+# fitted to Ballal-Lefebvre data):
+#     τ_hc' (msec) = 10⁻⁴ · (T_φ/T_in) · exp(21000 / (R·T_φ))
+# with R = 1.987 cal/(mol·K), so 21000/R ≈ 10568 K. The LBO line:
+#     τ_sl,LBO = 2.11 · τ_hc' − 0.46  [msec]
+# So premixer is STABLE when τ_sl/τ_hc' > 2.11 (operating point above the
+# LBO line in Fig. 5).  τ_sl = L_recirc / V_a (msec) is the shear-layer
+# residence time using the bluff-body geometry.
+#
+# Cross-validated against Sturgess et al., "Lean Blowout in a Research
+# Combustor at Simulated Low Pressures," J Eng GT 118:773 (1996), which
+# correlates LBO via the WSR loading parameter ṁ_air/(V·P^n·F).
+# Both frameworks agree that LBO is fundamentally a Damköhler-style
+# competition between residence time and chemical (ignition) time.
+_PM_E_CAL_PER_MOL = 21000.0     # Plee-Mellor Eq. 17 activation energy (cal/mol)
+_PM_R_CAL_PER_MOL_K = 1.987     # Universal gas constant in cal/(mol·K)
+_PM_RATIO_LBO = 2.11            # Slope of LBO line (Plee-Mellor Fig. 5)
+
+
+def plee_mellor_lbo(
+    T_flame_K: float,
+    T_in_K: float,
+    L_recirc_m: float,
+    V_approach_mps: float,
+) -> dict:
+    """Plee-Mellor 1979 LBO criterion (Eq. 16-17).
+
+    Args:
+        T_flame_K:     Adiabatic flame T at approach φ (the eddy ignition T)
+        T_in_K:        Inlet/approach gas T (compressor discharge for premixers)
+        L_recirc_m:    Recirculation-zone length scale (m). For a 45°-conical
+                       bluff body, L = D_baffle / √3 (Plee-Mellor optimum).
+                       For a generic dome: L ≈ D_can - D_baffle.
+        V_approach_mps: Approach flow velocity at the bluff-body station (m/s)
+
+    Returns:
+        dict with τ_sl, τ_hc', stability ratio, and LBO flag.
+    """
+    T_f = max(float(T_flame_K), 1.0)
+    T_i = max(float(T_in_K),    1.0)
+    EaR_K = _PM_E_CAL_PER_MOL / _PM_R_CAL_PER_MOL_K
+    tau_hc_ms = 1.0e-4 * (T_f / T_i) * math.exp(EaR_K / T_f)
+    tau_sl_ms = (L_recirc_m / max(V_approach_mps, 1e-9)) * 1000.0
+    ratio = tau_sl_ms / max(tau_hc_ms, 1e-12)
+    return {
+        "tau_sl_ms":  tau_sl_ms,
+        "tau_hc_ms":  tau_hc_ms,
+        "ratio":      ratio,
+        "lbo_safe":   ratio > _PM_RATIO_LBO,
+        "ratio_LBO":  _PM_RATIO_LBO,
+    }
+
+
 def run(
     fuel_pct: Dict[str, float],
     ox_pct: Dict[str, float],
