@@ -3220,7 +3220,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
             style={{width:74,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5}}>
-          <Tip text={`Lefebvre constant A — empirical per-engine calibration in Eq. 5.27 (Lefebvre & Ballal 2010, p. 185).\n\nReference values from production aero-engines (Lefebvre Table 5.1, p. 186):\n  J 79-17A 0.042   J 79-17C 0.031\n  F 101    0.032   TF 41    0.013\n  TF 39    0.037   J 85     0.064\n  TF 33    0.025   F 100    0.023\n\nDefault 0.025 sits at the median (TF 33). Provisional — refit from measured plant φ_LBO at known T_3, P_3, m_air, V_pz."}><label style={{color:C.txtDim,cursor:"help"}}>A ⓘ</label></Tip>
+          <Tip text={`Lefebvre constant A — empirical per-engine calibration in Eq. 5.27 (Lefebvre & Ballal 2010, p. 185).\n\nReference values from production aero-engines (Lefebvre Table 5.1, p. 186):\n  J 79-17A 0.042   J 79-17C 0.031\n  F 101    0.032   TF 41    0.013\n  TF 39    0.037   J 85     0.064\n  TF 33    0.025   F 100    0.023\n\nDefault 0.025 sits at the median (TF 33). Provisional — refit from measured plant φ_LBO at known T_3, P_3, m_air, V_pz.`}><label style={{color:C.txtDim,cursor:"help"}}>A ⓘ</label></Tip>
           <NumField value={K_LBO} decimals={4}
             onCommit={v=>setKLBO(Math.max(1e-5, Math.min(1, +v)))}
             style={{width:64,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
