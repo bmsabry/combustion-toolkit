@@ -1,6 +1,7 @@
 """Laminar flame speed via Cantera 1D freely-propagating premixed flame."""
 from __future__ import annotations
 
+import math
 from typing import Dict, Optional
 
 import cantera as ct
@@ -8,6 +9,46 @@ import numpy as np
 
 from .mixture import make_gas, make_gas_mixed
 from .water_mix import make_gas_mixed_with_water
+
+
+# ── Per-fuel global activation energy (kcal/mol) ──────────────────────
+# Source: Bechtold & Matalon, "The Dependence of the Markstein Length
+# on Stoichiometry," Combust Flame 127:1906-1913 (2001), Table 1.
+# These are the *global* one-step E values used in their asymptotic
+# theory; Cantera's detailed kinetics do not expose a single E_a, so
+# we use these literature values for the Zeldovich number β only.
+# Inert species (N2, CO2, H2O, Ar) do not appear here. Hydrocarbons
+# not in the table are mapped to the closest backbone:
+#     C2H6, C2H4, C4H10  → C3H8 (small alkane proxy)
+#     C5H12+              → C8H18 (heavy alkane proxy)
+# CO is mapped to CH4 (its global E_a is similarly ~25–50 kcal/mol).
+_EA_KCAL_PER_MOL = {
+    "CH4":  47.435,
+    "H2":   20.000,
+    "C3H8": 34.223,
+    "C2H6": 34.223,
+    "C2H4": 34.223,
+    "C4H10": 34.223,
+    "C8H18": 41.394,
+    "CO":   47.435,
+}
+_R_J_PER_MOL_K = 8.31446
+_KCAL_TO_J = 4184.0
+
+
+def _mole_weighted_EaR(fuel_pct: Dict[str, float]) -> float:
+    """Mole-weighted E_a/R (in K) across the fuel composition.
+
+    Falls back to CH4 value for any species not in _EA_KCAL_PER_MOL.
+    """
+    total = sum(max(float(v), 0.0) for v in fuel_pct.values())
+    if total <= 0:
+        return _EA_KCAL_PER_MOL["CH4"] * _KCAL_TO_J / _R_J_PER_MOL_K
+    Ea_kcal = 0.0
+    for k, v in fuel_pct.items():
+        x = max(float(v), 0.0) / total
+        Ea_kcal += _EA_KCAL_PER_MOL.get(k, _EA_KCAL_PER_MOL["CH4"]) * x
+    return Ea_kcal * _KCAL_TO_J / _R_J_PER_MOL_K
 
 
 def run(
@@ -41,20 +82,15 @@ def run(
         T_mixed = float(T0_K)
 
     # ── Unburned-mixture transport bundle ────────────────────────────────
-    # Computed once at (T_mixed, P, X_unburned). The frontend Card 1
-    # (regime diagnostics) depends on every member of this bundle:
-    #   α_th = k / (ρ·c_p)              thermal diffusivity (Lewis-von Elbe g_c)
-    #   ν    = μ / ρ                    kinematic viscosity (Reynolds Re_T)
-    #   D_def= mix-avg diffusivity of   deficient-reactant species used for Le
-    #          the deficient reactant
-    #   Le   = α_th / D_def             effective Lewis number (deficient basis)
-    #   δ_F  = α_th / S_L               flame thickness (Zeldovich, Williams 1985)
-    #   Ma   = (Ze/2)·(Le − 1)          Markstein number (Bechtold-Matalon
-    #                                   simplified — full expansion deferred
-    #                                   to Phase 4 validation)
-    # Ze (Zeldovich number) is approximated as Ze ≈ E_a·(T_b−T_u)/(R·T_b²).
-    # We use the empirical E_a/R = 15000 K placeholder (typical for hydrocarbon
-    # premixed flames) — replaced with a per-fuel fit in Phase 4.
+    # Computed once at (T_mixed, P, X_unburned). Card 1 (regime diagnostics)
+    # depends on every member of this bundle:
+    #   α_th = k / (ρ·c_p)          thermal diffusivity (Lewis-von Elbe g_c)
+    #   ν    = μ / ρ                kinematic viscosity (Reynolds Re_T)
+    #   Le_E = α_th / D_excess      Lewis number of excess reactant
+    #   Le_D = α_th / D_deficient   Lewis number of deficient reactant
+    #   Le_eff = Bechtold-Matalon weighted average (Eq. 6)
+    #   δ_F  = α_th / S_L           Zeldovich flame thickness (Williams 1985)
+    #   Ma   = full B-M Eq. 12      Markstein number (sheet ref, λ=T^(1/2))
     rho_u  = float(gas.density)
     cp_u   = float(gas.cp_mass)
     k_u    = float(gas.thermal_conductivity)
@@ -62,29 +98,41 @@ def run(
     alpha_th_u = k_u / (rho_u * cp_u)
     nu_u   = mu_u / rho_u
 
-    # Deficient-reactant mixture-averaged diffusivity for Le.
-    # For lean (φ ≤ 1): fuel is deficient → take fuel's mix-avg D.
-    # For rich (φ > 1): O₂ is deficient → take O₂'s mix-avg D.
-    # Pick the dominant fuel species by mole fraction (CH4 / H2 / etc.).
+    # Compute BOTH fuel and O₂ Lewis numbers; Bechtold-Matalon Eq. 6
+    # weights them via the activation-energy parameter A = 1 + β(Φ−1).
+    # Φ ≥ 1 is the excess-to-deficient mass-ratio (Φ=1/φ for lean, φ for rich).
     try:
         D_mix = gas.mix_diff_coeffs                       # m²/s, length n_species
-        if float(phi) <= 1.0:
-            # Find the species whose mole fraction in fuel_pct is largest.
-            fuel_keys = [k for k, v in fuel_pct.items() if v > 0]
-            if fuel_keys:
-                dominant = max(fuel_keys, key=lambda k: float(fuel_pct.get(k, 0)))
-                idx = gas.species_index(dominant) if dominant in gas.species_names else gas.species_index("CH4")
-            else:
-                idx = gas.species_index("CH4")
+        # Dominant fuel species by mole fraction
+        fuel_keys = [k for k, v in fuel_pct.items() if v > 0]
+        if fuel_keys:
+            dominant = max(fuel_keys, key=lambda k: float(fuel_pct.get(k, 0)))
+            idx_fuel = (
+                gas.species_index(dominant)
+                if dominant in gas.species_names
+                else gas.species_index("CH4")
+            )
         else:
-            idx = gas.species_index("O2") if "O2" in gas.species_names else 0
-        D_def = float(D_mix[idx]) if idx < len(D_mix) else alpha_th_u
-        if not (D_def > 0):
-            D_def = alpha_th_u
+            idx_fuel = gas.species_index("CH4")
+        idx_O2 = gas.species_index("O2") if "O2" in gas.species_names else 0
+
+        D_fuel = float(D_mix[idx_fuel]) if idx_fuel < len(D_mix) else alpha_th_u
+        D_O2   = float(D_mix[idx_O2])   if idx_O2   < len(D_mix) else alpha_th_u
+        if not (D_fuel > 0): D_fuel = alpha_th_u
+        if not (D_O2   > 0): D_O2   = alpha_th_u
     except Exception:
-        # Fallback: assume Le = 1 (α_th == D_def).
-        D_def = alpha_th_u
-    Le_eff = alpha_th_u / max(D_def, 1e-12)
+        D_fuel = D_O2 = alpha_th_u
+
+    Le_fuel = alpha_th_u / max(D_fuel, 1e-12)
+    Le_O2   = alpha_th_u / max(D_O2,   1e-12)
+    if float(phi) <= 1.0:
+        # Lean: O₂ is excess, fuel is deficient
+        Le_E, Le_D = Le_O2, Le_fuel
+        Phi_BM = 1.0 / max(float(phi), 1e-9)
+    else:
+        # Rich: fuel is excess, O₂ is deficient
+        Le_E, Le_D = Le_fuel, Le_O2
+        Phi_BM = float(phi)
 
     flame = ct.FreeFlame(gas, width=domain_length_m)
     flame.set_refine_criteria(ratio=3.0, slope=0.08, curve=0.15)
@@ -112,15 +160,44 @@ def run(
     # diagrams and Karlovitz definitions.
     delta_F = alpha_th_u / max(SL, 1e-9)
 
-    # Markstein number, Bechtold-Matalon simplified form:
-    #   Ze = E_a / R · (T_b − T_u) / T_b²    (Zeldovich number)
-    #   Ma ≈ (Ze / 2) · (Le_eff − 1)
-    # Sign convention: Ma > 0 = thermo-diffusively stable; Ma < 0 = unstable.
-    T_u = float(T_mixed)
-    T_b = float(T.max())
-    EaR = 15000.0  # K — generic hydrocarbon E_a/R placeholder; per-fuel fit deferred to Phase 4
-    Ze  = EaR * max(T_b - T_u, 1.0) / max(T_b * T_b, 1.0)
-    Ma  = 0.5 * Ze * (Le_eff - 1.0)
+    # ── Markstein number per Bechtold & Matalon 2001 (Combust Flame 127:1906) ──
+    # Eq. 6 — effective Lewis number weighted by reactant excess:
+    #     A      = 1 + β·(Φ − 1)
+    #     Le_eff = 1 + [(Le_E − 1) + (Le_D − 1)·A] / (1 + A)
+    # Eq. 12 — flame speed S_f = S_L − δ·Ma·K with reaction-sheet reference
+    # and λ=T^(1/2) variable conductivity (paper's choice for Figs. 2–3):
+    #     σ      = ρ_u/ρ_b ≈ T_b/T_u           (thermal expansion ratio)
+    #     γ_1    = 2σ / (√σ + 1)
+    #     γ_2    = (4/(σ−1)) · [√σ − 1 − ln((√σ + 1)/2)]
+    #     Ma     = γ_1/σ + ½·β·(Le_eff − 1)·γ_2
+    # β is the Zeldovich number with E_a from Bechtold-Matalon Table 1
+    # (mole-weighted across the fuel composition).  Sign convention:
+    # Ma > 0 = thermo-diffusively stable; Ma < 0 = unstable (cellular).
+    T_u  = float(T_mixed)
+    T_b  = float(T.max())
+    EaR  = _mole_weighted_EaR(fuel_pct)                    # K
+    beta = EaR * max(T_b - T_u, 1.0) / max(T_b * T_b, 1.0) # Zeldovich number
+
+    # Bechtold-Matalon Le_eff
+    A_bm   = 1.0 + beta * (Phi_BM - 1.0)
+    Le_eff = 1.0 + ((Le_E - 1.0) + (Le_D - 1.0) * A_bm) / (1.0 + A_bm)
+
+    # σ from actual burned/unburned densities (more rigorous than T_b/T_u
+    # because it accounts for the molar-mass change across the flame).
+    try:
+        rho_b = float(flame.density[-1])
+        sigma = rho_u / max(rho_b, 1e-9)
+    except Exception:
+        sigma = T_b / max(T_u, 1.0)
+    sigma = max(sigma, 1.0001)                             # guard against σ→1
+
+    sqrt_sig = math.sqrt(sigma)
+    gamma1 = 2.0 * sigma / (sqrt_sig + 1.0)
+    gamma2 = (4.0 / (sigma - 1.0)) * (
+        sqrt_sig - 1.0 - math.log(0.5 * (sqrt_sig + 1.0))
+    )
+    Ma = gamma1 / sigma + 0.5 * beta * (Le_eff - 1.0) * gamma2
+    Ze = beta                                              # alias for response field
 
     # Downsample profile to <=200 points for the frontend
     n = len(x)
@@ -138,6 +215,8 @@ def run(
         "nu_u":       float(nu_u),
         "delta_F":    float(delta_F),
         "Le_eff":     float(Le_eff),
+        "Le_E":       float(Le_E),
+        "Le_D":       float(Le_D),
         "Ma":         float(Ma),
         "Ze":         float(Ze),
         "T_profile": T_out,

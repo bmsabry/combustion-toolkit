@@ -182,9 +182,11 @@ class FlameSpeedResponse(BaseModel):
     alpha_th_u: float = 0.0  # thermal diffusivity α_th = k/(ρ·c_p), m²/s
     nu_u: float = 0.0        # kinematic viscosity ν = μ/ρ, m²/s
     delta_F: float = 0.0     # Zeldovich flame thickness α_th/S_L, m
-    Le_eff: float = 1.0      # effective Lewis number, deficient-reactant basis
-    Ma: float = 0.0          # Markstein number, simplified Bechtold-Matalon
-    Ze: float = 0.0          # Zeldovich number used in Ma
+    Le_eff: float = 1.0      # effective Lewis number, Bechtold-Matalon Eq. 6
+    Le_E:   float = 1.0      # Lewis number of excess reactant
+    Le_D:   float = 1.0      # Lewis number of deficient reactant
+    Ma: float = 0.0          # Markstein number, Bechtold-Matalon 2001 Eq. 12 (sheet ref, λ=T^(1/2))
+    Ze: float = 0.0          # Zeldovich number β = E_a/R · (T_b−T_u)/T_b² used in Eq. 6 & Eq. 12
     T_profile: List[float]
     x_profile: List[float]
     grid_points: int
