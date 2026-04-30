@@ -11137,7 +11137,14 @@ export default function App(){
   const[fuel,setFuel]=useState(initF);const[ox,setOx]=useState(initO);
   const FAR_stoich=useMemo(()=>1/(calcFuelProps(fuel,ox).AFR_mass||1e-12),[fuel,ox]);
   const FAR=phi*FAR_stoich;
-  const setPhiClamped=v=>{if(Number.isFinite(v))setPhi(Math.max(0.3,Math.min(1.0,v)));};
+  // Phi clamp: only enforce non-negativity. Cantera HP-equilibrium and the
+  // complete-combustion path both handle rich mixtures correctly (φ > 1
+  // triggers water-gas-shift logic on the deficient-O₂ side), so there's
+  // no UI reason to cap φ at 1.0 the way the legacy Free-mode JS model
+  // required. Free-mode users still see the "accurate for φ ≤ 1.0 only"
+  // banner — the warning, not the slider, is the right place for that
+  // guidance.
+  const setPhiClamped=v=>{if(Number.isFinite(v))setPhi(Math.max(0,+v));};
   const setFAR=v=>{if(Number.isFinite(v))setPhiClamped(v/FAR_stoich);};
   // ── T_flame (canonical) ───────────────────────────────────────────────
   // The OPERATING CONDITIONS sidebar shows T_flame = adiabatic flame T at
@@ -11612,10 +11619,10 @@ export default function App(){
               <div style={{marginBottom:10}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
                   <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>phi (φ)</label>
-                  <NumField value={phi} decimals={3} onCommit={setPhiClamped} title="Type any φ between 0.3 and 1.0 (or drag the slider)"
+                  <NumField value={phi} decimals={3} onCommit={setPhiClamped} title="Type any φ ≥ 0 — rich mixtures (φ > 1) are supported by the Cantera path. Slider covers 0.0 – 3.0 for fast scrubbing; type a value to go higher."
                     style={{width:72,padding:"3px 6px",fontFamily:"monospace",color:C.accent,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
                 </div>
-                <input type="range" min="0.3" max="1.0" step="0.01" value={phi} onChange={e=>setPhi(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
+                <input type="range" min="0" max="3.0" step="0.01" value={Math.min(3.0,phi)} onChange={e=>setPhiClamped(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{phi<0.95?"lean":phi>1.05?"rich":"~stoichiometric"}</div>
                 {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={_linkBreakable?()=>setLinkFAR(false):null} label="Linked to Cycle φ_Bulk"/>}
               </div>
@@ -11626,7 +11633,7 @@ export default function App(){
                   <NumField value={FAR} decimals={4} onCommit={setFAR} title="Type any FAR within the allowed range; φ updates automatically."
                     style={{width:82,padding:"3px 6px",fontFamily:"monospace",color:C.accent2,fontSize:13,fontWeight:700,background:C.bg,border:`1px solid ${C.accent2}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
                 </div>
-                <input type="range" min={0.3*FAR_stoich} max={FAR_stoich} step={FAR_stoich/1000} value={FAR} onChange={e=>setFAR(+e.target.value)} style={{width:"100%",accentColor:C.accent2}}/>
+                <input type="range" min={0} max={3*FAR_stoich} step={FAR_stoich/1000} value={Math.min(3*FAR_stoich,FAR)} onChange={e=>setFAR(+e.target.value)} style={{width:"100%",accentColor:C.accent2}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>Stoichiometric FAR = {FAR_stoich.toFixed(4)} (kg fuel / kg air)</div>
               </div>
               {/* ── Fuel Temp (last in Operating Conditions) ─────────── */}
