@@ -2420,6 +2420,20 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // u'/U turbulence intensity. Default 0.10 = smooth duct. Range 0.05–0.30.
   // 0.20 ≈ swirl premixer; 0.30 ≈ highly turbulated dump combustor.
   const [uPrimeRatio, setUPrimeRatio] = useState(0.10);
+  // Reference velocity for u' computation (Option B):
+  //   "vref"    = V_ref at the flame anchor — used by Card 1 (regime
+  //               diagnostics, Borghi/Bradley) and Card 2 (blowoff /
+  //               flame-anchor stability). Physically the approach
+  //               velocity into the recirculation zone.
+  //   "vpremix" = V_premix bulk channel velocity — used by Card 3
+  //               (premixer flashback) where the relevant turbulence is
+  //               the channel turbulence upstream of the flame. Choose
+  //               this when the regime question is "can the flame propagate
+  //               upstream into the premixer?" rather than "can the
+  //               anchor hold against blow-off?".
+  // Single source of truth — every place in the panel that builds u'
+  // reads this toggle so Card 1 / Card 2 / Card 3 always agree.
+  const [uReference, setUReference] = useState("vref");
   // Integral length scale l_T (m). null = auto (0.1·L_char per
   // Tennekes-Lumley). User can override with any positive value.
   const [lTOverride, setLTOverride] = useState(null);
@@ -2517,7 +2531,8 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
     const Le_local = (accurate && bk.data && bk.data.Le_eff)
       ? bk.data.Le_eff
       : lewisNumberFreeMode(fuel);
-    const uPrime_local = uPrimeRatio * Math.max(velocity, 0);
+    const uRef_local = (uReference === "vpremix") ? Vpremix : velocity;
+    const uPrime_local = uPrimeRatio * Math.max(uRef_local, 0);
     const lT_local = (lTOverride && lTOverride > 0)
       ? lTOverride
       : 0.1 * Math.max(Lchar, 1e-6);
@@ -2545,7 +2560,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       return next.length > 20 ? next.slice(next.length - 20) : next;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flameActive, accurate, bk.data, phi, T0, P, Tfuel, velocity, Lchar, uPrimeRatio, lTOverride, JSON.stringify(fuel), JSON.stringify(ox)]);
+  }, [flameActive, accurate, bk.data, phi, T0, P, Tfuel, velocity, Vpremix, Lchar, uPrimeRatio, uReference, lTOverride, JSON.stringify(fuel), JSON.stringify(ox)]);
 
   // ─── EARLY RETURN: deactivated panel ──────────────────────────────────
   // Hooks above all ran (and short-circuited). Below this line: nothing
@@ -2625,7 +2640,11 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const Ma_eff = (accurate && bk.data && Number.isFinite(bk.data.Ma))
     ? bk.data.Ma
     : 0;     // Free-mode placeholder — Phase 4 will fit this per fuel
-  const uPrime = uPrimeRatio * Math.max(velocity, 0);
+  // Resolve u' reference per the Card 1 toggle (Option B). Same
+  // resolution is repeated inside the trail-push useEffect above so
+  // the dot on the Borghi diagram is computed identically.
+  const uReferenceVal = (uReference === "vpremix") ? Vpremix : velocity;
+  const uPrime = uPrimeRatio * Math.max(uReferenceVal, 0);
   const lT_auto = 0.1 * Math.max(Lchar, 1e-6);
   const lT = (lTOverride && lTOverride > 0) ? lTOverride : lT_auto;
   const bradley = bradleyST(SL_ms, Math.max(uPrime, 1e-9), lT, nu_u, Le_eff);
@@ -2708,13 +2727,31 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         Flame Speed &amp; Regime Diagnostics {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}
       </div>
 
-      {/* ── Inputs row (u'/U slider, l_T) ─────────────────────────────── */}
+      {/* ── Inputs row (u' reference, u'/U slider, l_T) ───────────────── */}
       <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",marginBottom:12,padding:"8px 10px",background:`${C.accent}08`,border:`1px solid ${C.accent}30`,borderRadius:6}}>
+        {/* u' reference selector — drives the U in u' = (u'/U)·U everywhere on the panel */}
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <Tip text="Which reference velocity feeds u'.\n• V_ref (flame anchor): approach velocity into the flame-anchoring zone. Use for blow-off, Borghi regimes, anchor-side turbulence.\n• V_premix (channel): bulk velocity through the premixer channel. Use for upstream flashback questions where the channel turbulence governs the flame's ability to propagate into the premixer."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help",whiteSpace:"nowrap"}}>u' ref ⓘ</label></Tip>
+          <div style={{display:"flex",border:`1px solid ${C.violet}55`,borderRadius:5,overflow:"hidden",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
+            <button onClick={()=>setUReference("vref")}
+              title={`Use V_ref (flame anchor) = ${uv(units,"vel",velocity).toFixed(1)} ${uu(units,"vel")}`}
+              style={{padding:"3px 8px",fontSize:10,fontWeight:700,
+                color:uReference==="vref"?C.bg:C.violet,
+                background:uReference==="vref"?C.violet:"transparent",
+                border:"none",cursor:"pointer"}}>V_ref</button>
+            <button onClick={()=>setUReference("vpremix")}
+              title={`Use V_premix (channel) = ${uv(units,"vel",Vpremix).toFixed(1)} ${uu(units,"vel")}`}
+              style={{padding:"3px 8px",fontSize:10,fontWeight:700,
+                color:uReference==="vpremix"?C.bg:C.violet,
+                background:uReference==="vpremix"?C.violet:"transparent",
+                border:`1px solid ${C.violet}55`,borderLeft:"none",cursor:"pointer"}}>V_premix</button>
+          </div>
+        </div>
         <div style={{display:"flex",alignItems:"center",gap:6,flex:"1 1 240px"}}>
           <Tip text="Turbulence intensity u'/U. 0.10 = smooth duct or flow-conditioned premixer; 0.20 = swirl-stabilized DLN; 0.30 = highly turbulated dump combustor. Drives Re_T, Ka, Da and the Bradley turbulent flame speed."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help",whiteSpace:"nowrap"}}>u'/U ⓘ</label></Tip>
           <input type="range" min="0.05" max="0.30" step="0.01" value={uPrimeRatio} onChange={e=>setUPrimeRatio(+e.target.value)} style={{flex:1,accentColor:C.violet,minWidth:90}}/>
           <NumField value={uPrimeRatio} decimals={2} onCommit={v=>setUPrimeRatio(Math.max(0.01,Math.min(0.5,+v)))} style={{width:54,padding:"3px 5px",fontFamily:"monospace",color:C.violet,fontSize:11.5,fontWeight:700,background:C.bg,border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-          <span style={{fontSize:10,color:C.txtDim,fontFamily:"monospace",whiteSpace:"nowrap"}}>u' = {uv(units,"vel",uPrime).toFixed(2)} {uu(units,"vel")}</span>
+          <span style={{fontSize:10,color:C.txtDim,fontFamily:"monospace",whiteSpace:"nowrap"}}>u' = {uv(units,"vel",uPrime).toFixed(2)} {uu(units,"vel")} <span style={{color:C.txtMuted}}>({uReference==="vpremix"?"V_premix":"V_ref"})</span></span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:6}}>
           <Tip text="Integral turbulent length scale l_T. Default auto = 0.1·L_char (Tennekes-Lumley). Override for specific geometries: ~grid spacing × 0.2 for turbulence grids, ~0.1·D_swirl for swirl premixers."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help",whiteSpace:"nowrap"}}>l_T ({uu(units,"len")}) ⓘ</label></Tip>
