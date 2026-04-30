@@ -2263,7 +2263,13 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // ───── Premixer stability metrics ─────
   // SL in m/s for these formulas (SL state variable is cm/s).
   const SL_ms=SL/100;
-  // Zukoski blow-off time (s): τ_BO = D_flameholder / (1.5 · S_L). Longer = more flashback-resistant.
+  // Zukoski blow-off time (s): τ_BO = D_flameholder / (1.5 · S_L).
+  // Time for the flame to detach from the bluff body. Longer τ_BO means
+  // the anchor is more resistant to BLOW-OFF (flame swept downstream).
+  // It is NOT a flashback metric — flashback is the flame propagating
+  // upstream against the flow, governed by separate criteria
+  // (Lewis-von Elbe boundary-layer gradient g_c, CIVB, and turbulent
+  // core flashback via S_T) which are computed elsewhere on the panel.
   const tau_BO=Dfh/Math.max(1.5*SL_ms,1e-20);
   // Thermal diffusivity of unburnt mixture (m²/s). Prefer Cantera α_th from the flame response.
   const alphaTh=(accurate&&bk.data&&bk.data.alpha_th_u)?bk.data.alpha_th_u:alphaThU(Tmix,P);
@@ -2351,7 +2357,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
           <NumField value={uv(units,"vel",Vpremix)} decimals={2} onCommit={v=>setVpremix(uvI(units,"vel",v))} style={{...S.inp,width:65}}/></div>
       </div>
       <div style={{...S.row,gap:8,marginBottom:10}}>
-        <M l="Zukoski BOT (τ_BO)" v={(tau_BO*1000).toFixed(3)} u="ms" c={C.accent3} tip="Zukoski blow-off / flashback time: τ_BO = D_flameholder / (1.5·S_L). Longer τ_BO indicates the flameholder is less prone to flashback."/>
+        <M l="Zukoski Blow-off Time (τ_BO)" v={(tau_BO*1000).toFixed(3)} u="ms" c={C.accent3} tip="Time for the flame to detach from the bluff body: τ_BO = D_flameholder / (1.5·S_L). Longer τ_BO ⇒ flame anchor is more stable against BLOW-OFF (flame swept downstream). This is NOT a flashback metric — flashback (flame propagating upstream) is gated by separate criteria (Lewis-von Elbe g_c, CIVB, turbulent core S_T) shown below."/>
         <M l="Thermal Diffusivity (α_th)" v={(alphaTh*1e6).toFixed(2)} u="mm²/s" c={C.violet} tip={`Thermal diffusivity of unburnt mixture at T_mixed. α_th = k/(ρ·c_p). ${accurate&&bk.data&&bk.data.alpha_th_u?"Value from Cantera transport model.":"Free-mode approximation: α_th = 2.0e-5·(T/300)^1.7/P[atm]."}`}/>
         <M l="Lewis-von Elbe g_c" v={g_c.toFixed(0)} u="1/s" c={C.accent} tip="Lewis–von Elbe critical boundary velocity gradient: g_c = S_L² / α_th. Flame flashes back if actual near-wall velocity gradient falls below g_c. Higher g_c = more flashback-resistant."/>
         <M l="Autoignition Delay (τ_ign)" v={tau_ign_source==="none"?"N/A":(tau_ign_is_lower_bound?">":"")+(tau_ign*1000).toFixed(tau_ign<1?3:tau_ign<10?2:1)} u={tau_ign_source==="none"?"—":"ms"} c={tau_ign_source==="none"?C.txtMuted:C.accent2} tip={tau_ign_source==="cantera"?(bkIgn.data.ignited?"Ignition delay time from Cantera 0D const-P reactor (max dT/dt criterion) — first-principles kinetics from GRI-Mech 3.0.":`Mixture did not ignite within the ${(bkIgn.data.tau_ign_s).toFixed(1)} s integration window — τ_ign is at least this value, and the displayed margin is a lower bound.`):tau_ign_source==="spad_colk"?"Free-mode Spadaccini–Colket NG correlation: τ_ign = 3.09e-5·P^-1.12·exp(20130/T). Valid for natural-gas-like fuels only.":`Free-mode τ_ign correlation is disabled — this fuel contains ${(H2_frac*100).toFixed(0)}% H₂ or CO/NH₃ components. The Spadaccini-Colket correlation is calibrated for pure NG and is unreliable here. Switch to Accurate mode for Cantera 0D.`}/>
