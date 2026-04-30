@@ -10366,6 +10366,12 @@ function formatRuntime(seconds){
   return `${h}h ${rm}m`;
 }
 
+// Sidebar Engine & Ambient block.
+// `section` selects which subset to render so the parent can place groups
+// non-contiguously in the sidebar:
+//   "top"   (default) — Engine selector, Emissions Mode toggle, Load card,
+//                       Ambient Conditions + Comb. Air Frac
+//   "bleed" — just the Compressor Bleed card (its own outer wrapper)
 function EngineAmbientSidebar({
   engine,setEngine,Pamb,setPamb,Tamb,setTamb,RH,setRH,loadPct,setLoadPct,
   Tcool,setTcool,airFrac,setAirFrac,
@@ -10375,6 +10381,7 @@ function EngineAmbientSidebar({
   loadStepPct,setLoadStepPct,
   emissionsMode,setEmissionsMode,
   accurate,
+  section="top",
 }){
   // Clamp the editable step to a sane range. The buttons read this value;
   // the inline NumField below the load row writes it.
@@ -10396,6 +10403,101 @@ function EngineAmbientSidebar({
   const lbl={fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3};
   const sec={fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6};
   const subSec={fontSize:9.5,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1.2px",marginTop:10,marginBottom:6,paddingTop:8,borderTop:`1px solid ${C.border}50`};
+  // ── BLEED-ONLY render (separate sidebar card) ─────────────────────────
+  if (section === "bleed") {
+    return (<div style={wrap}>
+      <div style={sec}>Compressor Bleed {dim&&<span style={{fontSize:9,color:C.warm,fontWeight:600,letterSpacing:".4px",textTransform:"none",marginLeft:6}}>(Accurate Mode required)</span>}</div>
+      <div>
+        <label style={lbl} title="Maximum bleed split %: the hard upper bound on how much compressor air the bleed valve can dump at 100% open. A function of valve/line size (bigger valve → more bleed possible). Free-type any value.">Max Bleed split % (valve/line size)</label>
+        <NumField value={bleedValveSizePct} decimals={2} onCommit={v=>setBleedValveSizePct(Math.max(0,Math.min(100,+v)))} style={S.inp}/>
+      </div>
+      <div style={{marginTop:8}}>
+        <div style={{display:"flex",gap:6,marginBottom:6}}>
+          {[
+            {k:"auto",lbl:"AUTO (vs Load)",tip:"Bleed open % is a continuous function of load. 100% open ≤75% load, 0% ≥95%, linear between."},
+            {k:"manual",lbl:"MANUAL",tip:"You set the bleed open % directly — type a value, click ± with the selected step, or drag the slider."},
+          ].map(o=>(
+            <button key={o.k} onClick={()=>{
+              if(o.k==="manual"&&bleedMode!=="manual"){
+                setBleedOpenManualPct(bleedOpenPct);
+              }
+              setBleedMode(o.k);
+            }} title={o.tip} style={{
+              flex:1,padding:"4px 8px",fontSize:10,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",
+              letterSpacing:".5px",
+              color:bleedMode===o.k?C.bg:C.accent,
+              background:bleedMode===o.k?C.accent:"transparent",
+              border:`1px solid ${C.accent}`,borderRadius:4,cursor:"pointer"
+            }}>{o.lbl}</button>
+          ))}
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3,gap:4}}>
+          <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>Bleed Open (%)</label>
+          <div style={{display:"flex",alignItems:"center",gap:3}}>
+            <button
+              onClick={()=>{if(bleedMode==="manual"){const s=Math.max(1,bleedStepPct);setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(bleedOpenPct-s))));}}}
+              disabled={bleedMode==="auto"}
+              title={bleedMode==="auto"?"AUTO mode — switch to MANUAL":`Decrease by ${Math.max(1,bleedStepPct)}%`}
+              style={{padding:"2px 6px",fontSize:12,fontWeight:700,fontFamily:"monospace",
+                color:bleedMode==="auto"?C.txtMuted:C.accent2,
+                background:"transparent",border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}80`,
+                borderRadius:3,cursor:bleedMode==="auto"?"not-allowed":"pointer",lineHeight:1}}>−</button>
+            <NumField
+              value={bleedOpenPct}
+              decimals={0}
+              onCommit={v=>{
+                if(bleedMode==="manual")setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(+v))));
+              }}
+              disabled={bleedMode==="auto"}
+              title={bleedMode==="auto"?"AUTO mode — switch to MANUAL to type a value":"Type any value 0–100, or use ± to bump by the selected step"}
+              style={{width:56,padding:"3px 6px",fontFamily:"monospace",
+                color:bleedMode==="auto"?C.txtMuted:C.accent2,
+                fontSize:12,fontWeight:700,background:C.bg,
+                border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}50`,
+                borderRadius:4,textAlign:"center",outline:"none"}}/>
+            <button
+              onClick={()=>{if(bleedMode==="manual"){const s=Math.max(1,bleedStepPct);setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(bleedOpenPct+s))));}}}
+              disabled={bleedMode==="auto"}
+              title={bleedMode==="auto"?"AUTO mode — switch to MANUAL":`Increase by ${Math.max(1,bleedStepPct)}%`}
+              style={{padding:"2px 6px",fontSize:12,fontWeight:700,fontFamily:"monospace",
+                color:bleedMode==="auto"?C.txtMuted:C.accent2,
+                background:"transparent",border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}80`,
+                borderRadius:3,cursor:bleedMode==="auto"?"not-allowed":"pointer",lineHeight:1}}>+</button>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:4,marginTop:2,marginBottom:4}}>
+          <span style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace"}} title="Step size for ± buttons and the slider. Type any value directly regardless of step.">Step:</span>
+          <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+            {[0,15,30,45,60,75,90].map(v=>{
+              const active=bleedStepPct===v||(v===0&&bleedStepPct<=1);
+              return(
+                <button key={v} onClick={()=>{if(bleedMode==="manual")setBleedStepPct(v===0?1:v);}}
+                  disabled={bleedMode==="auto"}
+                  title={v===0?"Fine step — arrows bump by 1%":`Arrows bump by ${v}%`}
+                  style={{padding:"1px 5px",fontSize:9,fontWeight:600,fontFamily:"monospace",
+                    color:active?C.bg:(bleedMode==="auto"?C.txtMuted:C.txtDim),
+                    background:active?C.accent2:"transparent",
+                    border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}50`,
+                    borderRadius:3,cursor:bleedMode==="auto"?"not-allowed":"pointer",
+                    opacity:bleedMode==="auto"?0.5:1}}>{v===0?"1":v}</button>
+              );
+            })}
+          </div>
+        </div>
+        <input type="range" min="0" max="100" step={Math.max(1,bleedStepPct)}
+          value={bleedOpenPct}
+          disabled={bleedMode==="auto"}
+          onChange={e=>{if(bleedMode==="manual")setBleedOpenManualPct(+e.target.value);}}
+          style={{width:"100%",accentColor:C.accent2,opacity:bleedMode==="auto"?0.45:1}}/>
+        <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:1,fontStyle:"italic",lineHeight:1.3}}>
+          {bleedMode==="auto"?"programmed schedule (Load → Open %)":"manual override"}
+          {" · "}lost air = <strong style={{color:C.accent2}}>{(bleedAirFrac*100).toFixed(2)}%</strong>
+        </div>
+      </div>
+    </div>);
+  }
+
+  // ── TOP-GROUP render: Engine / Emissions / Load / Ambient ─────────────
   return(<div style={wrap}>
     <div style={sec}>Engine & Ambient {dim&&<span style={{fontSize:9,color:C.warm,fontWeight:600,letterSpacing:".4px",textTransform:"none",marginLeft:6}}>(Accurate Mode required)</span>}</div>
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -10488,97 +10590,6 @@ function EngineAmbientSidebar({
         <input type="range" min="0.30" max="1.00" step="0.005" value={airFrac} onChange={e=>setAirFrac(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
       </div>
 
-      {/* ── BLEED ───────────────────────────────────────────── */}
-      <div style={subSec}>Compressor Bleed</div>
-      <div>
-        <label style={lbl} title="Maximum bleed split %: the hard upper bound on how much compressor air the bleed valve can dump at 100% open. A function of valve/line size (bigger valve → more bleed possible). Free-type any value.">Max Bleed split % (valve/line size)</label>
-        <NumField value={bleedValveSizePct} decimals={2} onCommit={v=>setBleedValveSizePct(Math.max(0,Math.min(100,+v)))} style={S.inp}/>
-      </div>
-      <div>
-        <div style={{display:"flex",gap:6,marginBottom:6}}>
-          {[
-            {k:"auto",lbl:"AUTO (vs Load)",tip:"Bleed open % is a continuous function of load. 100% open ≤75% load, 0% ≥95%, linear between."},
-            {k:"manual",lbl:"MANUAL",tip:"You set the bleed open % directly — type a value, click ± with the selected step, or drag the slider."},
-          ].map(o=>(
-            <button key={o.k} onClick={()=>{
-              if(o.k==="manual"&&bleedMode!=="manual"){
-                // Seed manual % with the current programmed value when switching modes
-                setBleedOpenManualPct(bleedOpenPct);
-              }
-              setBleedMode(o.k);
-            }} title={o.tip} style={{
-              flex:1,padding:"4px 8px",fontSize:10,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",
-              letterSpacing:".5px",
-              color:bleedMode===o.k?C.bg:C.accent,
-              background:bleedMode===o.k?C.accent:"transparent",
-              border:`1px solid ${C.accent}`,borderRadius:4,cursor:"pointer"
-            }}>{o.lbl}</button>
-          ))}
-        </div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3,gap:4}}>
-          <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace"}}>Bleed Open (%)</label>
-          <div style={{display:"flex",alignItems:"center",gap:3}}>
-            <button
-              onClick={()=>{if(bleedMode==="manual"){const s=Math.max(1,bleedStepPct);setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(bleedOpenPct-s))));}}}
-              disabled={bleedMode==="auto"}
-              title={bleedMode==="auto"?"AUTO mode — switch to MANUAL":`Decrease by ${Math.max(1,bleedStepPct)}%`}
-              style={{padding:"2px 6px",fontSize:12,fontWeight:700,fontFamily:"monospace",
-                color:bleedMode==="auto"?C.txtMuted:C.accent2,
-                background:"transparent",border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}80`,
-                borderRadius:3,cursor:bleedMode==="auto"?"not-allowed":"pointer",lineHeight:1}}>−</button>
-            <NumField
-              value={bleedOpenPct}
-              decimals={0}
-              onCommit={v=>{
-                if(bleedMode==="manual")setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(+v))));
-              }}
-              disabled={bleedMode==="auto"}
-              title={bleedMode==="auto"?"AUTO mode — switch to MANUAL to type a value":"Type any value 0–100, or use ± to bump by the selected step"}
-              style={{width:56,padding:"3px 6px",fontFamily:"monospace",
-                color:bleedMode==="auto"?C.txtMuted:C.accent2,
-                fontSize:12,fontWeight:700,background:C.bg,
-                border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}50`,
-                borderRadius:4,textAlign:"center",outline:"none"}}/>
-            <button
-              onClick={()=>{if(bleedMode==="manual"){const s=Math.max(1,bleedStepPct);setBleedOpenManualPct(Math.max(0,Math.min(100,Math.round(bleedOpenPct+s))));}}}
-              disabled={bleedMode==="auto"}
-              title={bleedMode==="auto"?"AUTO mode — switch to MANUAL":`Increase by ${Math.max(1,bleedStepPct)}%`}
-              style={{padding:"2px 6px",fontSize:12,fontWeight:700,fontFamily:"monospace",
-                color:bleedMode==="auto"?C.txtMuted:C.accent2,
-                background:"transparent",border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}80`,
-                borderRadius:3,cursor:bleedMode==="auto"?"not-allowed":"pointer",lineHeight:1}}>+</button>
-          </div>
-        </div>
-        {/* Step chips — only active in MANUAL mode. Value "0" means fine step (1%). */}
-        <div style={{display:"flex",alignItems:"center",gap:4,marginTop:2,marginBottom:4}}>
-          <span style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace"}} title="Step size for ± buttons and the slider. Type any value directly regardless of step.">Step:</span>
-          <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
-            {[0,15,30,45,60,75,90].map(v=>{
-              const active=bleedStepPct===v||(v===0&&bleedStepPct<=1);
-              return(
-                <button key={v} onClick={()=>{if(bleedMode==="manual")setBleedStepPct(v===0?1:v);}}
-                  disabled={bleedMode==="auto"}
-                  title={v===0?"Fine step — arrows bump by 1%":`Arrows bump by ${v}%`}
-                  style={{padding:"1px 5px",fontSize:9,fontWeight:600,fontFamily:"monospace",
-                    color:active?C.bg:(bleedMode==="auto"?C.txtMuted:C.txtDim),
-                    background:active?C.accent2:"transparent",
-                    border:`1px solid ${bleedMode==="auto"?C.border:C.accent2}50`,
-                    borderRadius:3,cursor:bleedMode==="auto"?"not-allowed":"pointer",
-                    opacity:bleedMode==="auto"?0.5:1}}>{v===0?"1":v}</button>
-              );
-            })}
-          </div>
-        </div>
-        <input type="range" min="0" max="100" step={Math.max(1,bleedStepPct)}
-          value={bleedOpenPct}
-          disabled={bleedMode==="auto"}
-          onChange={e=>{if(bleedMode==="manual")setBleedOpenManualPct(+e.target.value);}}
-          style={{width:"100%",accentColor:C.accent2,opacity:bleedMode==="auto"?0.45:1}}/>
-        <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:1,fontStyle:"italic",lineHeight:1.3}}>
-          {bleedMode==="auto"?"programmed schedule (Load → Open %)":"manual override"}
-          {" · "}lost air = <strong style={{color:C.accent2}}>{(bleedAirFrac*100).toFixed(2)}%</strong>
-        </div>
-      </div>
     </div>
   </div>);
 }
@@ -11454,40 +11465,60 @@ export default function App(){
         <div style={{display:"flex",flex:"1 1 auto",minHeight:0}}>
           {/* SIDEBAR (hidden on Account tab) */}
           {tab!=="account"&&<div style={{width:255,flexShrink:0,borderRight:`1px solid ${C.border}`,padding:"12px 10px",overflowY:"auto",background:`${C.bg}CC`}}>
-            {/* Engine & Ambient — only relevant when the cycle solver is
-                actually running. Hidden in Free and Combustion Toolkit
-                modes (combustion-only workflows that never invoke the
-                cycle deck); visible in Gas Turbine Simulator and
-                Advanced where the cycle drives downstream values. */}
-            {(mode==="gts"||mode==="advanced")&&<EngineAmbientSidebar
-              engine={cycleEngine} setEngine={setCycleEngine}
-              Pamb={cyclePamb} setPamb={setCyclePamb}
-              Tamb={cycleTamb} setTamb={setCycleTamb}
-              RH={cycleRH} setRH={setCycleRH}
-              loadPct={cycleLoad} setLoadPct={setCycleLoad}
-              Tcool={cycleTcool} setTcool={setCycleTcool}
-              airFrac={cycleAirFrac} setAirFrac={setCycleAirFrac}
-              bleedMode={bleedMode} setBleedMode={setBleedMode}
-              bleedOpenPct={bleedOpenPct}
-              bleedOpenManualPct={bleedOpenManualPct} setBleedOpenManualPct={setBleedOpenManualPct}
-              bleedValveSizePct={bleedValveSizePct} setBleedValveSizePct={setBleedValveSizePct}
-              bleedStepPct={bleedStepPct} setBleedStepPct={setBleedStepPct}
-              loadStepPct={loadStepPct} setLoadStepPct={setLoadStepPct}
-              bleedAirFrac={bleedAirFrac}
-              emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
-              accurate={accurate&&hasOnline}
-            />}
-            {/* ── SIDEBAR INPUT ORDER (per Application Mode spec) ──────
-                  1. Operating Conditions  (Air Temp → Pressure → TFlame_CC →
-                                            phi → FAR → Fuel Temp)
-                  2. Oxidizer composition
-                  3. Fuel composition (with Quick Start hint)
-                  4. Water / Steam Injection (last; secondary lever)
-                  Engine & Ambient (above) is gated to GTS / Advanced.
-                  Emissions Transfer Function (below) is gated to GTS /
-                  Advanced — both modes that include Combustor Mapping. */}
+            {/* ── SIDEBAR INPUT ORDER ─────────────────────────────────
+                  Free / Combustion Toolkit (no cycle, no mapping):
+                    1. Operating Conditions
+                    2. Oxidizer composition
+                    3. Fuel composition
+                    4. Water / Steam Injection
+                  Gas Turbine Simulator / Advanced (cycle + mapping):
+                    1. Engine & Ambient (Engine, Emissions Mode, Load,
+                       Ambient Conditions, Comb. Air Frac)
+                    2. Fuel composition
+                    3. Water / Steam Injection
+                    4. Operating Conditions
+                    5. Oxidizer composition
+                    6. Compressor Bleed
+                    7. Emissions Transfer Function
 
-            {/* ── 1. Operating Conditions ───────────────────────────── */}
+                Each card is built once as a JSX const inside the IIFE
+                below, then placed in the per-mode order. Avoids duplicating
+                the ~150-line Operating Conditions / Water JSX. */}
+            {(() => {
+              const isGtsOrAdv = mode === "gts" || mode === "advanced";
+
+              const engineAmbientTop = isGtsOrAdv ? (
+                <EngineAmbientSidebar
+                  section="top"
+                  engine={cycleEngine} setEngine={setCycleEngine}
+                  Pamb={cyclePamb} setPamb={setCyclePamb}
+                  Tamb={cycleTamb} setTamb={setCycleTamb}
+                  RH={cycleRH} setRH={setCycleRH}
+                  loadPct={cycleLoad} setLoadPct={setCycleLoad}
+                  Tcool={cycleTcool} setTcool={setCycleTcool}
+                  airFrac={cycleAirFrac} setAirFrac={setCycleAirFrac}
+                  loadStepPct={loadStepPct} setLoadStepPct={setLoadStepPct}
+                  emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
+                  accurate={accurate&&hasOnline}
+                />
+              ) : null;
+
+              const bleedCard = isGtsOrAdv ? (
+                <EngineAmbientSidebar
+                  section="bleed"
+                  bleedMode={bleedMode} setBleedMode={setBleedMode}
+                  bleedOpenPct={bleedOpenPct}
+                  bleedOpenManualPct={bleedOpenManualPct} setBleedOpenManualPct={setBleedOpenManualPct}
+                  bleedValveSizePct={bleedValveSizePct} setBleedValveSizePct={setBleedValveSizePct}
+                  bleedStepPct={bleedStepPct} setBleedStepPct={setBleedStepPct}
+                  bleedAirFrac={bleedAirFrac}
+                  accurate={accurate&&hasOnline}
+                />
+              ) : null;
+
+              const opCondCard = (
+            <div data-card="operating-conditions">
+            {/* ── Operating Conditions ───────────────────────────── */}
             <div style={{background:C.bg2,border:`1px solid ${C.accent}25`,borderRadius:8,padding:12,marginBottom:10}}>
               <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:8}}>Operating Conditions</div>
               {/* Field order per Application Mode spec:
@@ -11593,19 +11624,23 @@ export default function App(){
                 <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T_fuel).toFixed(2)} onChange={e=>setTfuel(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.orange,marginTop:4}}/>
               </div>
             </div>
+            </div>
+              );
 
-            {/* ── 2. Oxidizer composition ──────────────────────────── */}
+              const oxCard = (
             <div>
               <CompEditor title="Oxidizer (mol%)" comp={ox} setComp={setOx} presets={OX_PRESETS} speciesList={OX_SP} accent={C.accent3} initialPreset="Humid Air (60%RH 25°C)"
                 helpText="Enter oxidizer composition in mole percent. 'Dry Air' is the standard. Use humid air, O₂-enriched, or vitiated air for specialized analyses."/>
               {accurate&&hasOnline&&linkOx&&<div style={{marginTop:-2,marginBottom:8}}><LinkChip onBreak={_linkBreakable?()=>setLinkOx(false):null} label="Linked to Cycle humid air"/></div>}
             </div>
+              );
 
-            {/* ── 3. Fuel composition ──────────────────────────────── */}
+              const fuelCard = (
             <CompEditor title="Fuel (mol%)" comp={fuel} setComp={setFuel} presets={FUEL_PRESETS} speciesList={FUEL_SP} accent={C.accent2} initialPreset="Pipeline NG (US)"
               helpText="Enter fuel composition in mole percent. Select a preset for common fuels or enter custom values. Total must sum to 100%. CO₂ and N₂ in fuel are treated as diluents."/>
+              );
 
-            {/* ── 4. Water / Steam Injection (last; secondary lever) ─ */}
+              const waterCard = (
             <div style={{background:C.bg2,border:`1px solid ${C.accent3}25`,borderRadius:8,padding:12,marginTop:10,marginBottom:10}}>
               <div style={{fontSize:10,fontWeight:700,color:C.accent3,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6}}>Water / Steam Injection</div>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
@@ -11641,38 +11676,56 @@ export default function App(){
                 </div>
               </div>
             </div>
+              );
 
-            {/* ── EMISSIONS TRANSFER FUNCTION ────────────────────────────
-                Trim multipliers for the Combustor Mapping correlation —
-                only meaningful in modes that include the Mapping panel.
-                Hidden in Free and Combustion Toolkit (no mapping there);
-                visible in Gas Turbine Simulator and Advanced. */}
-            {(mode==="gts"||mode==="advanced")&&<div style={{background:C.bg2,border:`1px solid ${C.violet}30`,borderRadius:8,padding:12,marginTop:10}}>
-              <div style={{fontSize:10,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:8}}>Emissions Transfer Function</div>
-              <div style={{display:"grid",gridTemplateColumns:"50px 1fr 1fr 1fr",gap:4,alignItems:"center",fontSize:10,fontFamily:"monospace"}}>
-                <div></div>
-                <div style={{color:C.strong,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>NOx ×</div>
-                <div style={{color:C.orange,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>CO ×</div>
-                <div style={{color:C.warm,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>PX36 ×</div>
-                {[7,6,4,2].map(k=>(
-                  <Fragment key={k}>
-                    <div style={{color:C.violet,fontWeight:700,fontSize:10}}>BR={k}</div>
-                    <NumField value={emTfMults?.[k]?.NOx??1.0} decimals={2}
-                      onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),NOx:Math.max(0,+v)}}))}
-                      style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.strong,fontWeight:600,background:C.bg,border:`1px solid ${C.strong}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
-                    <NumField value={emTfMults?.[k]?.CO??1.0} decimals={2}
-                      onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),CO:Math.max(0,+v)}}))}
-                      style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.orange,fontWeight:600,background:C.bg,border:`1px solid ${C.orange}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
-                    <NumField value={emTfMults?.[k]?.PX36??1.0} decimals={2}
-                      onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),PX36:Math.max(0,+v)}}))}
-                      style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.warm,fontWeight:600,background:C.bg,border:`1px solid ${C.warm}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
-                  </Fragment>
-                ))}
-              </div>
-              <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic",marginTop:6,lineHeight:1.3}}>
-                Multipliers applied to NOx15 / CO15 / PX36_SEL correlation output based on current BRNDMD. Persists across reloads.
-              </div>
-            </div>}
+              const etfCard = isGtsOrAdv ? (
+                <div style={{background:C.bg2,border:`1px solid ${C.violet}30`,borderRadius:8,padding:12,marginTop:10}}>
+                  <div style={{fontSize:10,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:8}}>Emissions Transfer Function</div>
+                  <div style={{display:"grid",gridTemplateColumns:"50px 1fr 1fr 1fr",gap:4,alignItems:"center",fontSize:10,fontFamily:"monospace"}}>
+                    <div></div>
+                    <div style={{color:C.strong,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>NOx ×</div>
+                    <div style={{color:C.orange,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>CO ×</div>
+                    <div style={{color:C.warm,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>PX36 ×</div>
+                    {[7,6,4,2].map(k=>(
+                      <Fragment key={k}>
+                        <div style={{color:C.violet,fontWeight:700,fontSize:10}}>BR={k}</div>
+                        <NumField value={emTfMults?.[k]?.NOx??1.0} decimals={2}
+                          onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),NOx:Math.max(0,+v)}}))}
+                          style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.strong,fontWeight:600,background:C.bg,border:`1px solid ${C.strong}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                        <NumField value={emTfMults?.[k]?.CO??1.0} decimals={2}
+                          onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),CO:Math.max(0,+v)}}))}
+                          style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.orange,fontWeight:600,background:C.bg,border:`1px solid ${C.orange}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                        <NumField value={emTfMults?.[k]?.PX36??1.0} decimals={2}
+                          onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),PX36:Math.max(0,+v)}}))}
+                          style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.warm,fontWeight:600,background:C.bg,border:`1px solid ${C.warm}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
+                      </Fragment>
+                    ))}
+                  </div>
+                  <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic",marginTop:6,lineHeight:1.3}}>
+                    Multipliers applied to NOx15 / CO15 / PX36_SEL correlation output based on current BRNDMD. Persists across reloads.
+                  </div>
+                </div>
+              ) : null;
+
+              // Per-mode render order (see header comment for the spec).
+              if (isGtsOrAdv) {
+                return (<>
+                  {engineAmbientTop}
+                  {fuelCard}
+                  {waterCard}
+                  {opCondCard}
+                  {oxCard}
+                  {bleedCard}
+                  {etfCard}
+                </>);
+              }
+              return (<>
+                {opCondCard}
+                {oxCard}
+                {fuelCard}
+                {waterCard}
+              </>);
+            })()}
           </div>}
 
           {/* CONTENT */}
