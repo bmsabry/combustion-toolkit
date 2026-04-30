@@ -570,7 +570,7 @@ function exportToExcel(fuel,ox,phi,T0,P,_unitsIgnored,ps){
 }
 
 function _buildExportWorkbook(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,measCO=0,measUHC=0,measH2=0,fuelFlowKgs=0,fuelCostUsdPerMmbtuLhv=4.00,costPeriod="week",combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult,mappingTables,
-  emissionsMode=true,mapW36w3=0.8,mapFracIP=2.3,mapFracOP=2.2,mapFracIM=39.9,mapFracOM=55.6,
+  emissionsMode=true,mapW36w3=0.75,mapFracIP=2.3,mapFracOP=2.2,mapFracIM=39.9,mapFracOM=55.6,
   mapPhiIP=0.25,mapPhiOP=0.65,mapPhiIM=0.50,mapResult=null,emTfMults=null,
   linkT3=true,linkP3=true,linkFAR=true,linkFuelFlow=true,loadStepPct=5,bleedStepPct=15,
   appMode="advanced"
@@ -5318,7 +5318,7 @@ function CombustorMappingPanel({
 
         {/* W36/W3 knob */}
         <div style={{padding:"9px 11px",background:`${C.accent}0A`,border:`1px solid ${C.accent}45`,borderRadius:6,marginBottom:10,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-          <div style={{minWidth:160}} title="W36 = mass flow into the combustor dome (i.e. into the four DLE circuits + cooling air). W3 = total compressor exit air (post-bleed). The remaining (1 − W36/W3) is wall cooling air that bypasses the dome. Default 0.8.">
+          <div style={{minWidth:160}} title="W36 = mass flow into the combustor dome (i.e. into the four DLE circuits + cooling air). W3 = total compressor exit air (post-bleed). The remaining (1 − W36/W3) is wall cooling air that bypasses the dome. Default 0.75.">
             <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1px"}}>W36 / W3</div>
             <div style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",fontStyle:"italic"}}>fraction of W3 → combustor dome</div>
           </div>
@@ -10894,7 +10894,7 @@ export default function App(){
   // ── Combustor-Mapping panel inputs (lifted to App so Operations Summary
   // can reuse the same correlation result — /calc/combustor_mapping is
   // fired once in App and the bkMap handle is passed to both panels).
-  const[mapW36w3,setMapW36w3]=useState(0.8);
+  const[mapW36w3,setMapW36w3]=useState(0.75);
   const[mapFracIP,setMapFracIP]=useState(2.3);
   const[mapFracOP,setMapFracOP]=useState(2.2);
   const[mapFracIM,setMapFracIM]=useState(39.9);
