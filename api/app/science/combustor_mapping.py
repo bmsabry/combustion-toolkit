@@ -225,12 +225,31 @@ def run(
     # DT_Main: °F difference between OM and IM flame temperatures (Δ K × 1.8)
     DT_Main_F = (T_AFT_OM - T_AFT_IM) * 1.8
 
-    # Tflame: mass-flow-weighted average of the 4 circuit T_AFT values
-    mdots = [m_air_IP + m_fuel_IP, m_air_OP + m_fuel_OP,
-             m_air_IM + m_fuel_IM, m_air_OM + m_fuel_OM]
-    tafs  = [T_AFT_IP, T_AFT_OP, T_AFT_IM, T_AFT_OM]
-    total_m = sum(mdots)
-    Tflame_K = sum(m * t for m, t in zip(mdots, tafs)) / total_m if total_m > 0 else float(T3_K)
+    # Tflame ≡ T_Bulk: single-zone HP-equilibrium adiabatic flame T at the
+    # bulk equivalence ratio. We sum all four circuits' air + all the fuel,
+    # form the bulk FAR, derive φ_Bulk, and burn that mixture once via Cantera
+    # (same complete_combustion path as the per-circuit T_AFT calls — but
+    # called once on the aggregate, not four times on the splits).
+    #
+    # Why this and not the prior 4-circuit mass-weighted average:
+    #   The NOx correlation reference (Tflame_ref = 3035 °F) was anchored on
+    #   the cycle's single-zone T_Bulk. The mass-weighted average of four
+    #   separately-burning circuits is a different physical quantity and runs
+    #   ~70-120 °F cooler (Jensen's inequality on the concave T_AFT(φ) curve,
+    #   plus dilution from any φ ≈ 0 dead circuits like a deactivated pilot).
+    #   Using the single-zone T here keeps the evaluation consistent with the
+    #   calibration anchor and matches the cycle's reported T_Bulk to within
+    #   the air-tree mismatch (W36/W3 vs combustor_bypass_frac), which is a
+    #   separate knob and tackled in the UI layer.
+    flame_air_total = m_air_IP + m_air_OP + m_air_IM + m_air_OM
+    if flame_air_total > 0 and FAR_stoich > 0:
+        FAR_Bulk = float(m_fuel_total_kg_s) / flame_air_total
+        phi_Bulk = FAR_Bulk / FAR_stoich
+    else:
+        FAR_Bulk = 0.0
+        phi_Bulk = 0.0
+    Tflame_K = _T_AFT(fuel_pct, ox_pct, phi_Bulk,
+                      T_fuel_K, T3_K, P3_bar, WFR, water_mode)
     Tflame_F = _K_to_F(Tflame_K)
     T3_F     = _K_to_F(T3_K)
     P3_psia  = float(P3_bar) * 14.5038
@@ -331,6 +350,10 @@ def run(
             "DT_Main_F":       float(DT_Main_F),
             "Tflame_K":        float(Tflame_K),
             "Tflame_F":        float(Tflame_F),
+            "T_Bulk_K":        float(Tflame_K),   # alias — single-zone bulk T
+            "T_Bulk_F":        float(Tflame_F),
+            "phi_Bulk":        float(phi_Bulk),
+            "FAR_Bulk":        float(FAR_Bulk),
             "T3_F":            float(T3_F),
             "P3_psia":         float(P3_psia),
             "C3_effective_pct": float(C3_eff),
