@@ -46,7 +46,7 @@ from .mixture import compute_ratios
 _REF = {
     "NOx15":       45.0,   # ppmvd @ 15 % O2
     "CO15":        180.0,  # ppmvd @ 15 % O2
-    "PX36_SEL":    4.0,    # low-frequency dynamics
+    "PX36_SEL":    4.3,    # low-frequency dynamics
     "PX36_SEL_HI": 2.2,    # high-frequency dynamics
 }
 
