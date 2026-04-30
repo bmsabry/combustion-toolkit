@@ -2482,6 +2482,71 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
     const r=[];for(let v=1;v<=200;v+=2){const b=calcBlowoff(fuel,phi,Tmix,P,v,Lchar);r.push({V:uv(units,"vel",v),Da:Math.min(b.Da*SL_scale2,100)});}return r;
   },[flameActive,fuel,phi,Tmix,P,Lchar,units,SL_scale2]);
 
+  // ── Borghi-Peters trail: reset on fuel/oxidizer change ───────────────
+  // Must live above the early return so the hook order is stable across
+  // (flameActive=false) ↔ (flameActive=true) renders. Reset clears stale
+  // trail entries that came from a different fuel — the regime diagnostic
+  // is meaningless across composition changes (δ_F can shift 5×).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setBorghiTrail([]); setBorghiHover(null); },
+    [JSON.stringify(fuel), JSON.stringify(ox)]);
+
+  // ── Borghi-Peters trail: push a new ops point per (φ, T, P) change ──
+  // Computes diagnostics inline (rather than reading the active-branch
+  // consts) so this hook can live above the early return. Bails silently
+  // when flameActive is off, when bk.data isn't ready, or when the
+  // computed (x, y) lands outside finite real space.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!flameActive) return;
+    const Tmix_local = mixT(fuel, ox, phi, Tfuel, T0);
+    const SL_local_cmps = (accurate && bk.data && bk.data.SL > 0)
+      ? bk.data.SL * 100
+      : calcSL(fuel, phi, Tmix_local, P) * 100;
+    const SL_ms_local = SL_local_cmps / 100;
+    if (!Number.isFinite(SL_ms_local) || SL_ms_local <= 0) return;
+    const alpha_local = (accurate && bk.data && bk.data.alpha_th_u)
+      ? bk.data.alpha_th_u
+      : alphaThU(Tmix_local, P);
+    const delta_F_local = (accurate && bk.data && bk.data.delta_F)
+      ? bk.data.delta_F
+      : alpha_local / Math.max(SL_ms_local, 1e-9);
+    const nu_local = (accurate && bk.data && bk.data.nu_u)
+      ? bk.data.nu_u
+      : alpha_local / 0.71;
+    const Le_local = (accurate && bk.data && bk.data.Le_eff)
+      ? bk.data.Le_eff
+      : lewisNumberFreeMode(fuel);
+    const uPrime_local = uPrimeRatio * Math.max(velocity, 0);
+    const lT_local = (lTOverride && lTOverride > 0)
+      ? lTOverride
+      : 0.1 * Math.max(Lchar, 1e-6);
+    const x = lT_local / Math.max(delta_F_local, 1e-12);
+    const y = uPrime_local / Math.max(SL_ms_local, 1e-9);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) return;
+    const br = bradleyST(SL_ms_local, Math.max(uPrime_local, 1e-9), lT_local, nu_local, Le_local);
+    const pt = {
+      phi: +phi.toFixed(3),
+      T0:  +T0.toFixed(1),
+      P:   +P.toFixed(3),
+      x, y,
+      Ka:  br.Ka,
+      Da:  (lT_local / Math.max(delta_F_local, 1e-12)) * (SL_ms_local / Math.max(uPrime_local, 1e-9)),
+      ReT: br.ReT,
+      ts: Date.now(),
+    };
+    setBorghiTrail(prev => {
+      const last = prev[prev.length - 1];
+      if (last
+          && Math.abs(last.phi - pt.phi) < 1e-4
+          && Math.abs(last.T0  - pt.T0)  < 1e-2
+          && Math.abs(last.P   - pt.P)   < 1e-4) return prev;
+      const next = [...prev, pt];
+      return next.length > 20 ? next.slice(next.length - 20) : next;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flameActive, accurate, bk.data, phi, T0, P, Tfuel, velocity, Lchar, uPrimeRatio, lTOverride, JSON.stringify(fuel), JSON.stringify(ox)]);
+
   // ─── EARLY RETURN: deactivated panel ──────────────────────────────────
   // Hooks above all ran (and short-circuited). Below this line: nothing
   // computes, nothing renders, nothing fires until flameActive=true.
@@ -2572,38 +2637,10 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // τ_chem (Williams) = α_th / S_L²; ms for display.
   const tau_chem_ms = (alphaTh / Math.max(SL_ms*SL_ms, 1e-18)) * 1000;
 
-  // Borghi-Peters trail. Push a new operating point whenever the
-  // governing inputs change. Cap at 20 entries (FIFO). Reset on
-  // fuel/oxidizer change.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { setBorghiTrail([]); setBorghiHover(null); },
-    [JSON.stringify(fuel), JSON.stringify(ox)]);
-  useEffect(() => {
-    if (!flameActive || !Number.isFinite(SL_ms) || SL_ms <= 0) return;
-    if (!Number.isFinite(delta_F) || delta_F <= 0) return;
-    const x = lT / delta_F;
-    const y = uPrime / Math.max(SL_ms, 1e-9);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) return;
-    const pt = {
-      phi: +phi.toFixed(3),
-      T0: +T0.toFixed(1),
-      P:  +P.toFixed(3),
-      x, y,
-      Ka: Ka_diag, Da: Da_diag, ReT: ReT_diag,
-      ts: Date.now(),
-    };
-    setBorghiTrail(prev => {
-      // Skip if essentially the same as latest entry
-      const last = prev[prev.length - 1];
-      if (last
-          && Math.abs(last.phi - pt.phi) < 1e-4
-          && Math.abs(last.T0  - pt.T0)  < 1e-2
-          && Math.abs(last.P   - pt.P)   < 1e-4) return prev;
-      const next = [...prev, pt];
-      return next.length > 20 ? next.slice(next.length - 20) : next;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flameActive, phi, T0, P, SL_ms, delta_F, lT, uPrime]);
+  // (Trail effects moved above the early return — see ABOVE the
+  // `if(!flameActive)` block in this same component. Hooks rules require
+  // identical hook call order on every render, so the trail-reset and
+  // trail-push useEffects can't live in the active branch.)
   // Autoignition delay (s).
   //   Accurate mode → Cantera 0D const-P reactor; if the run reaches its cutoff without ignition,
   //                   we report τ_ign > cutoff and use the cutoff as a conservative lower bound
