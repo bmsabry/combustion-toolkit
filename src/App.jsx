@@ -1808,7 +1808,7 @@ function BusyGuardedExportButton({onExport}){
 // numeric correctness of any cached endpoint changes, even when the
 // frontend build SHA wouldn't otherwise change. This forces every client
 // to drop stale entries on next load. Last bump: exhaust T_ad fix v2.
-const __BK_CACHE_VERSION = "v3-tbulk-mapping";
+const __BK_CACHE_VERSION = "v4-mapping-hp-eq";
 const __BK_BUILD = (typeof __BUILD_SHA__ !== "undefined") ? __BUILD_SHA__ : "dev";
 const __BK_LS_KEY = `ctk_bk_cache_${__BK_BUILD}_${__BK_CACHE_VERSION}`;
 const __BK_TTL_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days

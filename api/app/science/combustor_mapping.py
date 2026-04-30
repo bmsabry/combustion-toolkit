@@ -38,7 +38,8 @@ from __future__ import annotations
 
 from typing import Dict
 
-from .complete_combustion import run as complete_combustion_run
+from .complete_combustion import run as complete_combustion_run  # kept for legacy callers
+from .cycle import _t_bulk_with_mix_and_water as _hp_eq_with_water
 from .mixture import compute_ratios
 
 
@@ -141,17 +142,33 @@ def _phi_OP_multiplier(phi_OP: float) -> float:
 def _T_AFT(fuel_pct: Dict[str, float], ox_pct: Dict[str, float], phi: float,
            T_fuel_K: float, T_air_K: float, P_bar: float,
            WFR: float, water_mode: str) -> float:
-    """Per-circuit T_AFT from complete combustion. If phi ≈ 0 (no fuel),
-    fall back to the air inlet temperature (no heat release)."""
+    """Per-circuit / bulk-zone adiabatic flame T via Cantera HP-equilibrium.
+
+    Uses the exact same path the Cycle panel uses for T_Bulk
+    (`cycle._t_bulk_with_mix_and_water`):
+      - 3-stream enthalpy mix of fuel @ T_fuel_K + air @ T_air_K + optional
+        water (liquid h_fg or steam) at the given φ
+      - Cantera HP-equilibrium (full Gibbs minimization, with NO/OH/O/H
+        dissociation) on the mixed reactants
+
+    This guarantees the Mapping panel's per-circuit T_AFT values and the
+    new T_Bulk in the snapshot bar all line up with the Cycle panel's T_Bulk
+    when the air trees agree (W36/W3 ↔ combustor_bypass_frac).
+
+    If phi ≈ 0 (no fuel — e.g. a deactivated pilot circuit), short-circuit
+    to T_air_K — no fuel means no heat release means the stream stays at T3.
+    Cantera's set_equivalence_ratio(0, ...) is a degenerate case best
+    avoided.
+    """
     if phi < 1e-4:
         return float(T_air_K)
     try:
-        r = complete_combustion_run(
-            fuel_pct, ox_pct, float(phi),
+        return float(_hp_eq_with_water(
+            fuel_pct, ox_pct,
             T_fuel_K=float(T_fuel_K), T_air_K=float(T_air_K),
-            P_bar=float(P_bar), WFR=float(WFR), water_mode=str(water_mode),
-        )
-        return float(r["T_ad"])
+            P_bar=float(P_bar), phi=float(phi),
+            WFR=float(WFR), water_mode=str(water_mode),
+        ))
     except Exception:
         return float(T_air_K)
 
@@ -225,10 +242,10 @@ def run(
     # DT_Main: °F difference between OM and IM flame temperatures (Δ K × 1.8)
     DT_Main_F = (T_AFT_OM - T_AFT_IM) * 1.8
 
-    # Tflame ≡ T_Bulk: single-zone HP-equilibrium adiabatic flame T at the
-    # bulk equivalence ratio. We sum all four circuits' air + all the fuel,
-    # form the bulk FAR, derive φ_Bulk, and burn that mixture once via Cantera
-    # (same complete_combustion path as the per-circuit T_AFT calls — but
+    # Tflame ≡ T_Bulk: single-zone Cantera HP-equilibrium adiabatic flame T
+    # at the bulk equivalence ratio. We sum all four circuits' air + all the
+    # fuel, form the bulk FAR, derive φ_Bulk, and burn that mixture once via
+    # Cantera (same HP-equilibrium path as the per-circuit T_AFT calls — but
     # called once on the aggregate, not four times on the splits).
     #
     # Why this and not the prior 4-circuit mass-weighted average:
