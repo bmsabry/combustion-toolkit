@@ -173,10 +173,18 @@ class FlameSpeedRequest(BaseCalcRequest):
 
 class FlameSpeedResponse(BaseModel):
     SL: float  # m/s
-    flame_thickness: float  # m
+    flame_thickness: float  # m, geometric (T_b−T_u)/max|dT/dx|
     T_max: float
     T_mixed_inlet_K: float = 0.0  # adiabatic mix T of fuel+air at flame base
-    alpha_th_u: float = 0.0  # thermal diffusivity of unburned mixture (m²/s); used for Lewis–von Elbe g_c = S_L² / α_th
+    # ── Unburned-mixture transport bundle (regime diagnostics) ──
+    # All evaluated at (T_mixed, P, X_unburned). Required by the
+    # Flame Speed & Regime Diagnostics card on the frontend.
+    alpha_th_u: float = 0.0  # thermal diffusivity α_th = k/(ρ·c_p), m²/s
+    nu_u: float = 0.0        # kinematic viscosity ν = μ/ρ, m²/s
+    delta_F: float = 0.0     # Zeldovich flame thickness α_th/S_L, m
+    Le_eff: float = 1.0      # effective Lewis number, deficient-reactant basis
+    Ma: float = 0.0          # Markstein number, simplified Bechtold-Matalon
+    Ze: float = 0.0          # Zeldovich number used in Ma
     T_profile: List[float]
     x_profile: List[float]
     grid_points: int

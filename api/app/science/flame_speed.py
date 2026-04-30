@@ -40,10 +40,51 @@ def run(
         gas, _, _ = make_gas(fuel_pct, ox_pct, phi, T0_K, P_bar)
         T_mixed = float(T0_K)
 
-    # Thermal diffusivity of the unburned (premixed) gas at (T_mixed, P, X).
-    # α_th = k / (ρ · c_p). Used by the frontend for the Lewis-von Elbe
-    # critical boundary velocity gradient g_c = S_L² / α_th.
-    alpha_th_u = float(gas.thermal_conductivity / (gas.density * gas.cp_mass))
+    # ── Unburned-mixture transport bundle ────────────────────────────────
+    # Computed once at (T_mixed, P, X_unburned). The frontend Card 1
+    # (regime diagnostics) depends on every member of this bundle:
+    #   α_th = k / (ρ·c_p)              thermal diffusivity (Lewis-von Elbe g_c)
+    #   ν    = μ / ρ                    kinematic viscosity (Reynolds Re_T)
+    #   D_def= mix-avg diffusivity of   deficient-reactant species used for Le
+    #          the deficient reactant
+    #   Le   = α_th / D_def             effective Lewis number (deficient basis)
+    #   δ_F  = α_th / S_L               flame thickness (Zeldovich, Williams 1985)
+    #   Ma   = (Ze/2)·(Le − 1)          Markstein number (Bechtold-Matalon
+    #                                   simplified — full expansion deferred
+    #                                   to Phase 4 validation)
+    # Ze (Zeldovich number) is approximated as Ze ≈ E_a·(T_b−T_u)/(R·T_b²).
+    # We use the empirical E_a/R = 15000 K placeholder (typical for hydrocarbon
+    # premixed flames) — replaced with a per-fuel fit in Phase 4.
+    rho_u  = float(gas.density)
+    cp_u   = float(gas.cp_mass)
+    k_u    = float(gas.thermal_conductivity)
+    mu_u   = float(gas.viscosity)
+    alpha_th_u = k_u / (rho_u * cp_u)
+    nu_u   = mu_u / rho_u
+
+    # Deficient-reactant mixture-averaged diffusivity for Le.
+    # For lean (φ ≤ 1): fuel is deficient → take fuel's mix-avg D.
+    # For rich (φ > 1): O₂ is deficient → take O₂'s mix-avg D.
+    # Pick the dominant fuel species by mole fraction (CH4 / H2 / etc.).
+    try:
+        D_mix = gas.mix_diff_coeffs                       # m²/s, length n_species
+        if float(phi) <= 1.0:
+            # Find the species whose mole fraction in fuel_pct is largest.
+            fuel_keys = [k for k, v in fuel_pct.items() if v > 0]
+            if fuel_keys:
+                dominant = max(fuel_keys, key=lambda k: float(fuel_pct.get(k, 0)))
+                idx = gas.species_index(dominant) if dominant in gas.species_names else gas.species_index("CH4")
+            else:
+                idx = gas.species_index("CH4")
+        else:
+            idx = gas.species_index("O2") if "O2" in gas.species_names else 0
+        D_def = float(D_mix[idx]) if idx < len(D_mix) else alpha_th_u
+        if not (D_def > 0):
+            D_def = alpha_th_u
+    except Exception:
+        # Fallback: assume Le = 1 (α_th == D_def).
+        D_def = alpha_th_u
+    Le_eff = alpha_th_u / max(D_def, 1e-12)
 
     flame = ct.FreeFlame(gas, width=domain_length_m)
     flame.set_refine_criteria(ratio=3.0, slope=0.08, curve=0.15)
@@ -60,9 +101,26 @@ def run(
     SL = float(flame.velocity[0])
     T = flame.T
     x = flame.grid
-    # flame thickness δ = (T_b - T_u) / max(|dT/dx|)
+    # flame thickness δ = (T_b - T_u) / max(|dT/dx|) — geometric definition
     dTdx = np.gradient(T, x)
     thickness = float((T.max() - T.min()) / max(abs(dTdx).max(), 1e-9))
+
+    # Zeldovich flame thickness δ_F = α_th / S_L. Used in dimensionless
+    # ratios on the regime diagnostics card (l_T/δ_F, Ka). Numerically
+    # different from the geometric `thickness` above (typically smaller),
+    # but it is the conventional δ_F that appears in Borghi-Peters
+    # diagrams and Karlovitz definitions.
+    delta_F = alpha_th_u / max(SL, 1e-9)
+
+    # Markstein number, Bechtold-Matalon simplified form:
+    #   Ze = E_a / R · (T_b − T_u) / T_b²    (Zeldovich number)
+    #   Ma ≈ (Ze / 2) · (Le_eff − 1)
+    # Sign convention: Ma > 0 = thermo-diffusively stable; Ma < 0 = unstable.
+    T_u = float(T_mixed)
+    T_b = float(T.max())
+    EaR = 15000.0  # K — generic hydrocarbon E_a/R placeholder; per-fuel fit deferred to Phase 4
+    Ze  = EaR * max(T_b - T_u, 1.0) / max(T_b * T_b, 1.0)
+    Ma  = 0.5 * Ze * (Le_eff - 1.0)
 
     # Downsample profile to <=200 points for the frontend
     n = len(x)
@@ -75,7 +133,13 @@ def run(
         "flame_thickness": thickness,
         "T_max": float(T.max()),
         "T_mixed_inlet_K": float(T_mixed),
-        "alpha_th_u": alpha_th_u,
+        # Unburned-mixture transport bundle (used by regime diagnostics)
+        "alpha_th_u": float(alpha_th_u),
+        "nu_u":       float(nu_u),
+        "delta_F":    float(delta_F),
+        "Le_eff":     float(Le_eff),
+        "Ma":         float(Ma),
+        "Ze":         float(Ze),
         "T_profile": T_out,
         "x_profile": x_out,
         "grid_points": int(n),

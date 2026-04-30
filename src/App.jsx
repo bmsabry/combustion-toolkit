@@ -442,6 +442,63 @@ function calcSL(fuel,phi,Tu,P_atm){
   return Math.max(0,sl);
 }
 function calcBlowoff(fuel,phi,Tu,P_atm,velocity,Lchar){const SL=calcSL(fuel,phi,Tu,P_atm);const alpha_th=2.0e-5*Math.pow(Tu/300,1.7)/P_atm;const tau_chem=alpha_th/(SL*SL+1e-20);const tau_flow=Lchar/(velocity+1e-20);const Da=tau_flow/tau_chem;return{SL,tau_chem:tau_chem*1000,tau_flow:tau_flow*1000,Da,blowoff_velocity:Lchar/tau_chem,stable:Da>1};}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Flame Speed & Regime Diagnostics — Phase 0.3 helpers (redesign Step C).
+//
+//  bradleyST   — Bradley/Lau/Lawes 1992 turbulent flame speed correlation,
+//                handles all premixer / combustor turbulence regimes via
+//                Karlovitz scaling. Returns S_T plus the Karlovitz Ka and
+//                turbulent Reynolds Re_T diagnostics that drive the
+//                Borghi-Peters regime classification.
+//  damkohlerST — Damköhler 1940 corrugated-flamelet form. Cleaner closed
+//                form, valid for u'/SL < 1, used as a cross-check on
+//                Bradley. When the two disagree by >2× the user is
+//                outside both correlations' calibration range.
+//  lewisNumberFreeMode — JS fallback for the effective Lewis number when
+//                Cantera isn't running (free-mode users won't see this
+//                because the panel is paid-only as of Phase 0, but the
+//                helper is still useful for sweep cards that want a quick
+//                estimate without a backend round-trip). Coverage:
+//                NG / hydrocarbons (Le≈0.97), NG+H₂ blends (interpolated),
+//                pure H₂ (Le≈0.4), syngas CO/H₂/N₂, naphtha as C7H16
+//                surrogate. Per-fuel surrogates are documented inline.
+// ─────────────────────────────────────────────────────────────────────────
+function bradleyST(SL, uPrime, lT, nu, Le=1.0){
+  const SLs = Math.max(SL, 1e-9);
+  const ReT = uPrime * lT / Math.max(nu, 1e-12);                 // turbulent Reynolds
+  const Ka  = 0.157 * Math.pow(uPrime/SLs, 2) * Math.pow(Math.max(ReT, 1e-12), -0.5);
+  const ST  = 0.88 * uPrime * Math.pow(Math.max(Ka, 1e-12), -0.3) / Math.max(Le, 0.1);
+  return { ST, Ka, ReT };
+}
+function damkohlerST(SL, uPrime){
+  const SLs = Math.max(SL, 1e-9);
+  return SLs * Math.sqrt(1 + Math.pow(uPrime/SLs, 2));
+}
+function lewisNumberFreeMode(fuelComp){
+  // Composition is in mol % (matches the sidebar editor).
+  const xH2  = (fuelComp.H2  || 0) / 100;
+  const xCO  = (fuelComp.CO  || 0) / 100;
+  const xCH4 = (fuelComp.CH4 || 0) / 100;
+  const xC2  = ((fuelComp.C2H6||0) + (fuelComp.C2H4||0) + (fuelComp.C2H2||0))/100;
+  const xCge3= ((fuelComp.C3H8||0) + (fuelComp.C4H10||0) + (fuelComp.C5H12||0)
+              + (fuelComp.C6H14||0) + (fuelComp.C7H16||0) + (fuelComp.C8H18||0))/100;
+  const xC = xCH4 + xC2 + xCge3;
+  const xN2 = (fuelComp.N2||0)/100, xCO2=(fuelComp.CO2||0)/100;
+  const xCombust = xH2 + xCO + xC;
+  if (xCombust < 1e-6) return 1.0;                                   // inert — fall through
+  // Pure-fuel Lewis surrogates (deficient-reactant basis, lean side).
+  const Le_H2     = 0.40;  // pure H₂/air, lean: thermo-diffusively unstable
+  const Le_CO     = 1.10;  // CO/air, slightly above unity
+  const Le_CH4    = 0.97;  // CH₄/air, near unity (the canonical hydrocarbon)
+  const Le_C2     = 1.00;  // C2-class (C2H6/C2H4/C2H2): close to neutral
+  const Le_Cge3   = 1.10;  // C3+ (treated as C3H8 surrogate up through C8H18)
+  // Composition-weighted blend across the COMBUSTIBLE fraction (inerts don't
+  // change Le; they shift α_th and D_def in lockstep).
+  const Le = (xH2 * Le_H2  + xCO * Le_CO  + xCH4 * Le_CH4
+            + xC2 * Le_C2  + xCge3 * Le_Cge3) / xCombust;
+  return Le;
+}
 // Thermal diffusivity of unburnt mixture (m²/s). Free-mode approximation used when Cantera isn't available.
 // α_th = 2.0e-5 · (T/300)^1.7 / P[atm]. Matches the form in calcBlowoff.
 function alphaThU(Tu,P_atm){return 2.0e-5*Math.pow(Tu/300,1.7)/Math.max(P_atm,1e-6);}
@@ -1814,7 +1871,7 @@ function BusyGuardedExportButton({onExport}){
 // numeric correctness of any cached endpoint changes, even when the
 // frontend build SHA wouldn't otherwise change. This forces every client
 // to drop stale entries on next load. Last bump: exhaust T_ad fix v2.
-const __BK_CACHE_VERSION = "v4-mapping-hp-eq";
+const __BK_CACHE_VERSION = "v5-flame-speed-regime";
 const __BK_BUILD = (typeof __BUILD_SHA__ !== "undefined") ? __BUILD_SHA__ : "dev";
 const __BK_LS_KEY = `ctk_bk_cache_${__BK_BUILD}_${__BK_CACHE_VERSION}`;
 const __BK_TTL_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
@@ -2152,6 +2209,190 @@ function AFTPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",combMode,setC
       </div>
     </div></div>);}
 
+// ─────────────────────────────────────────────────────────────────────────
+//  Borghi-Peters regime diagram. Static log-log canvas with four standard
+//  reference diagonals (Ka=1, Ka=100, Da=1, Re_T=1) and four labeled
+//  regime quadrants (laminar / corrugated flamelet / thin reaction zone /
+//  broken reaction zone). The current operating point is rendered as a
+//  large violet dot; the trail (last 20 points) renders as smaller dots
+//  with alpha fading from 0.85 (newest) to 0.10 (oldest). Hovering any
+//  dot pops a readout showing (φ, T₀, P, Ka, Da, Re_T).
+//
+//  Reference-line math (Peters 2000, Borghi 1985 conventions):
+//    Re_T = const ⇒ log(u'/SL) = -log(l_T/δ_F) + log(Re_T)   slope -1
+//    Da   = const ⇒ log(u'/SL) =  log(l_T/δ_F) - log(Da)     slope +1
+//    Ka   = const ⇒ log(u'/SL) = (1/3)·log(l_T/δ_F) + (2/3)·log(Ka)
+//                                                            slope +1/3
+//  All on log-log axes X = log10(l_T/δ_F), Y = log10(u'/SL).
+// ─────────────────────────────────────────────────────────────────────────
+function BorghiPetersDiagram({ currentX, currentY, currentLabel, trail, hover, setHover, units }){
+  // Plot bounds (log10).
+  const xMinLog = 0;       // 10^0  = 1
+  const xMaxLog = 4;       // 10^4  = 10000
+  const yMinLog = -1;      // 10^-1 = 0.1
+  const yMaxLog = 3;       // 10^3  = 1000
+
+  // Pixel canvas. Width responsive via SVG viewBox; render aspect 720×440.
+  const W = 720, H = 440;
+  const M = { left: 50, right: 18, top: 14, bottom: 38 };
+  const plotW = W - M.left - M.right;
+  const plotH = H - M.top  - M.bottom;
+
+  const xToPx = (xLog) => M.left + (xLog - xMinLog) / (xMaxLog - xMinLog) * plotW;
+  const yToPx = (yLog) => M.top  + (yMaxLog - yLog) / (yMaxLog - yMinLog) * plotH;
+  const valToX = (v) => xToPx(Math.log10(Math.max(v, 10**xMinLog)));
+  const valToY = (v) => yToPx(Math.log10(Math.max(v, 10**yMinLog)));
+
+  // Build a reference line of given slope through given point, clipped to bounds.
+  const refLine = (slope, intercept, xLo=xMinLog, xHi=xMaxLog) => {
+    // y = slope·x + intercept
+    const y0 = slope * xLo + intercept;
+    const y1 = slope * xHi + intercept;
+    return { x1: xToPx(xLo), y1: yToPx(y0), x2: xToPx(xHi), y2: yToPx(y1) };
+  };
+  const ka1   = refLine(1/3, 0);                                    // Ka=1
+  const ka100 = refLine(1/3, (2/3)*Math.log10(100));                // Ka=100
+  const da1   = refLine(1, 0);                                       // Da=1
+  const reT1  = refLine(-1, 0);                                      // Re_T=1
+
+  // Tick generator: integer log decades
+  const xTicks = [];
+  for (let k = xMinLog; k <= xMaxLog; k++) xTicks.push(k);
+  const yTicks = [];
+  for (let k = yMinLog; k <= yMaxLog; k++) yTicks.push(k);
+
+  // Hover readout building.
+  const fmtT = (TK) => units==="SI" ? `${TK.toFixed(0)} K` : `${((TK-273.15)*9/5+32).toFixed(0)} °F`;
+  const fmtP = (Patm) => units==="SI" ? `${(Patm).toFixed(2)} atm` : `${(Patm*14.696).toFixed(0)} psia`;
+
+  // What's hovered: current point if hover.idx === -1, else trail[hover.idx]
+  const hoveredPt = (hover && Number.isFinite(hover.idx))
+    ? (hover.idx === -1
+        ? { ...currentLabel, x: currentX, y: currentY, isCurrent: true }
+        : { ...(trail[hover.idx] || {}), isCurrent: false })
+    : null;
+
+  return (
+    <div style={{marginTop:8,background:`${C.bg2}88`,border:`1px solid ${C.border}`,borderRadius:6,padding:"10px 8px 6px"}}>
+      <div style={{fontSize:10.5,fontWeight:700,color:C.txtDim,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase",margin:"0 4px 4px 6px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span>Borghi-Peters Regime Diagram</span>
+        <span style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",textTransform:"none",letterSpacing:0}}>● current point &nbsp;·&nbsp; ○ last {trail.length} ops &nbsp;·&nbsp; hover for readout</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"auto",display:"block"}} preserveAspectRatio="xMidYMid meet">
+        {/* Background regime tints */}
+        {/* Laminar (Re_T < 1) — bottom-left of Re_T=1 line — pale blue */}
+        <polygon points={`${xToPx(xMinLog)},${yToPx(yMinLog)} ${reT1.x1},${reT1.y1} ${xToPx(xMinLog)},${reT1.y1}`} fill={`${C.accent3}10`} />
+        {/* Flamelet (Ka<1, Da>1) — between Ka=1 and Da=1 lines — pale green */}
+        <polygon points={`${ka1.x1},${ka1.y1} ${ka1.x2},${ka1.y2} ${xToPx(xMaxLog)},${yToPx(yMinLog)}`} fill={`${C.good}12`} />
+        {/* Thin reaction zone (1<Ka<100) — between the two Ka lines — pale orange */}
+        <polygon points={`${ka1.x1},${ka1.y1} ${ka1.x2},${ka1.y2} ${ka100.x2},${ka100.y2} ${ka100.x1},${ka100.y1}`} fill={`${C.warm}10`} />
+        {/* Broken reaction zone (Ka>100) — top region — pale red */}
+        <polygon points={`${ka100.x1},${ka100.y1} ${ka100.x2},${ka100.y2} ${xToPx(xMaxLog)},${yToPx(yMaxLog)} ${xToPx(xMinLog)},${yToPx(yMaxLog)}`} fill={`${C.strong}10`} />
+
+        {/* Major tick grid */}
+        {xTicks.map(t => (
+          <line key={`xg${t}`} x1={xToPx(t)} y1={M.top} x2={xToPx(t)} y2={H-M.bottom} stroke={C.border} strokeWidth="0.5" strokeDasharray="2,3" opacity="0.5"/>
+        ))}
+        {yTicks.map(t => (
+          <line key={`yg${t}`} x1={M.left} y1={yToPx(t)} x2={W-M.right} y2={yToPx(t)} stroke={C.border} strokeWidth="0.5" strokeDasharray="2,3" opacity="0.5"/>
+        ))}
+
+        {/* Reference diagonals */}
+        <line x1={ka1.x1} y1={ka1.y1} x2={ka1.x2} y2={ka1.y2} stroke={C.warm} strokeWidth="1.5"/>
+        <line x1={ka100.x1} y1={ka100.y1} x2={ka100.x2} y2={ka100.y2} stroke={C.strong} strokeWidth="1.5"/>
+        <line x1={da1.x1} y1={da1.y1} x2={da1.x2} y2={da1.y2} stroke={C.accent2} strokeWidth="1.5" strokeDasharray="6,3"/>
+        <line x1={reT1.x1} y1={reT1.y1} x2={reT1.x2} y2={reT1.y2} stroke={C.accent3} strokeWidth="1.5" strokeDasharray="3,3"/>
+
+        {/* Diagonal labels */}
+        <text x={xToPx(2.7)} y={yToPx(1.2)} fill={C.warm} fontSize="11" fontFamily="monospace" fontWeight="700">Ka = 1</text>
+        <text x={xToPx(2.7)} y={yToPx(2.55)} fill={C.strong} fontSize="11" fontFamily="monospace" fontWeight="700">Ka = 100</text>
+        <text x={xToPx(0.3)} y={yToPx(1.0)} fill={C.accent2} fontSize="11" fontFamily="monospace" fontWeight="700">Da = 1</text>
+        <text x={xToPx(0.3)} y={yToPx(-0.9)} fill={C.accent3} fontSize="11" fontFamily="monospace" fontWeight="700">Re_T = 1</text>
+
+        {/* Regime labels */}
+        <text x={xToPx(2.4)} y={yToPx(-0.4)} fill={C.good} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">FLAMELET</text>
+        <text x={xToPx(2.4)} y={yToPx(0.8)} fill={C.warm} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">THIN REACTION ZONE</text>
+        <text x={xToPx(0.4)} y={yToPx(2.7)} fill={C.strong} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">BROKEN RXN</text>
+        <text x={xToPx(0.2)} y={yToPx(-0.6)} fill={C.accent3} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">LAMINAR</text>
+
+        {/* Frame */}
+        <rect x={M.left} y={M.top} width={plotW} height={plotH} fill="none" stroke={C.txtDim} strokeWidth="1"/>
+
+        {/* X axis ticks + labels */}
+        {xTicks.map(t => (
+          <g key={`xt${t}`}>
+            <line x1={xToPx(t)} y1={H-M.bottom} x2={xToPx(t)} y2={H-M.bottom+5} stroke={C.txtDim} strokeWidth="1"/>
+            <text x={xToPx(t)} y={H-M.bottom+18} fill={C.txtDim} fontSize="10" fontFamily="monospace" textAnchor="middle">10{t===0?"⁰":t===1?"¹":t===2?"²":t===3?"³":"⁴"}</text>
+          </g>
+        ))}
+        <text x={M.left+plotW/2} y={H-4} fill={C.txt} fontSize="11" fontFamily="monospace" textAnchor="middle">l_T / δ_F</text>
+
+        {/* Y axis ticks + labels */}
+        {yTicks.map(t => (
+          <g key={`yt${t}`}>
+            <line x1={M.left-5} y1={yToPx(t)} x2={M.left} y2={yToPx(t)} stroke={C.txtDim} strokeWidth="1"/>
+            <text x={M.left-8} y={yToPx(t)+3} fill={C.txtDim} fontSize="10" fontFamily="monospace" textAnchor="end">10{t===-1?"⁻¹":t===0?"⁰":t===1?"¹":t===2?"²":"³"}</text>
+          </g>
+        ))}
+        <text x={14} y={M.top+plotH/2} fill={C.txt} fontSize="11" fontFamily="monospace" textAnchor="middle" transform={`rotate(-90 14 ${M.top+plotH/2})`}>u' / S_L</text>
+
+        {/* Trail dots — fade alpha by age (older = fainter) */}
+        {trail.map((p, i) => {
+          if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+          const alpha = 0.10 + (0.75 * (i + 1) / Math.max(trail.length, 1));
+          const cx = valToX(p.x), cy = valToY(p.y);
+          if (cx < M.left || cx > W-M.right || cy < M.top || cy > H-M.bottom) return null;
+          return (
+            <g key={`tr${i}`}>
+              <circle cx={cx} cy={cy} r={3.5} fill={C.violet} opacity={alpha}/>
+              <circle cx={cx} cy={cy} r={9} fill="transparent"
+                onMouseEnter={()=>setHover({idx:i})} onMouseLeave={()=>setHover(null)}
+                style={{cursor:"crosshair"}}/>
+            </g>
+          );
+        })}
+
+        {/* Current operating point */}
+        {(() => {
+          const cx = valToX(currentX), cy = valToY(currentY);
+          if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+          return (
+            <g>
+              <circle cx={cx} cy={cy} r={9} fill={C.violet} opacity="0.25"/>
+              <circle cx={cx} cy={cy} r={5.5} fill={C.violet} stroke={C.bg} strokeWidth="1.5"/>
+              <circle cx={cx} cy={cy} r={14} fill="transparent"
+                onMouseEnter={()=>setHover({idx:-1})} onMouseLeave={()=>setHover(null)}
+                style={{cursor:"crosshair"}}/>
+            </g>
+          );
+        })()}
+
+        {/* Hover readout */}
+        {hoveredPt && Number.isFinite(hoveredPt.x) && Number.isFinite(hoveredPt.y) && (() => {
+          const cx = valToX(hoveredPt.x), cy = valToY(hoveredPt.y);
+          // Anchor box near point but clamp inside chart
+          let bx = cx + 14, by = cy - 10;
+          const bw = 178, bh = 86;
+          if (bx + bw > W - M.right) bx = cx - bw - 14;
+          if (by < M.top) by = M.top + 4;
+          if (by + bh > H - M.bottom) by = H - M.bottom - bh - 4;
+          return (
+            <g pointerEvents="none">
+              <rect x={bx} y={by} width={bw} height={bh} rx={5} fill={C.bg} stroke={C.violet} strokeWidth="1" opacity="0.97"/>
+              <text x={bx+8} y={by+15} fill={C.violet} fontSize="10.5" fontFamily="monospace" fontWeight="700">{hoveredPt.isCurrent?"● CURRENT":"○ TRAIL"}</text>
+              <text x={bx+8} y={by+30} fill={C.txt} fontSize="10" fontFamily="monospace">φ = {Number(hoveredPt.phi).toFixed(3)}</text>
+              <text x={bx+8} y={by+43} fill={C.txt} fontSize="10" fontFamily="monospace">T = {fmtT(Number(hoveredPt.T0))}</text>
+              <text x={bx+8} y={by+56} fill={C.txt} fontSize="10" fontFamily="monospace">P = {fmtP(Number(hoveredPt.P))}</text>
+              <text x={bx+8} y={by+69} fill={C.warm} fontSize="10" fontFamily="monospace">Ka = {Number(hoveredPt.Ka).toFixed(2)} · Da = {Number(hoveredPt.Da).toFixed(2)}</text>
+              <text x={bx+8} y={by+81} fill={C.accent3} fontSize="10" fontFamily="monospace">Re_T = {Number(hoveredPt.ReT)>=1e4?Number(hoveredPt.ReT).toExponential(1):Number(hoveredPt.ReT).toFixed(0)}</text>
+            </g>
+          );
+        })()}
+      </svg>
+    </div>
+  );
+}
+
 function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",velocity,setVelocity,Lchar,setLchar,Dfh,setDfh,Lpremix,setLpremix,Vpremix,setVpremix,
   // Activation state is lifted to App so it survives tab nav when the user
   // enables `keepActivated`. Both default to App-level useState(false), so
@@ -2175,6 +2416,22 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const [canteraSweeps,setCanteraSweeps]=useState(null);  // {hash, phi:[...], T:[...], P:[...]}
   const [sweepErr,setSweepErr]=useState(null);
   const [sweepRunning,setSweepRunning]=useState(false);
+  // ── Card 1 (Flame Speed & Regime Diagnostics) panel-local state ──────
+  // u'/U turbulence intensity. Default 0.10 = smooth duct. Range 0.05–0.30.
+  // 0.20 ≈ swirl premixer; 0.30 ≈ highly turbulated dump combustor.
+  const [uPrimeRatio, setUPrimeRatio] = useState(0.10);
+  // Integral length scale l_T (m). null = auto (0.1·L_char per
+  // Tennekes-Lumley). User can override with any positive value.
+  const [lTOverride, setLTOverride] = useState(null);
+  // Borghi-Peters trail — last 20 operating points (FIFO). Each entry:
+  //   {phi, T0, P, x: lT/δF, y: u'/SL, Ka, Da, ReT, ts}
+  // Cleared whenever fuel or oxidizer composition changes (apples vs
+  // oranges: δ_F shifts dramatically across fuels). Pure UI state, no
+  // localStorage persistence — the diagnostic loses meaning across reloads.
+  const [borghiTrail, setBorghiTrail] = useState([]);
+  // Current hover-target on the Borghi SVG. {idx} where idx=-1 means the
+  // current operating point, else the trail index. null = no hover.
+  const [borghiHover, setBorghiHover] = useState(null);
   // useMemo / useBackendCalc — short-circuit when !flameActive
   const Tmix=useMemo(()=>flameActive?mixT(fuel,ox,phi,Tfuel,Tair):0,[flameActive,fuel,ox,phi,Tfuel,Tair]);
   const bk=useBackendCalc("flame",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate&&flameActive);
@@ -2275,6 +2532,78 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const alphaTh=(accurate&&bk.data&&bk.data.alpha_th_u)?bk.data.alpha_th_u:alphaThU(Tmix,P);
   // Lewis–von Elbe critical boundary-velocity gradient (1/s): g_c = S_L² / α_th. Higher g_c = higher flashback resistance.
   const g_c=(SL_ms*SL_ms)/Math.max(alphaTh,1e-20);
+
+  // ── Card 1: Flame Speed & Regime Diagnostics — derived quantities ─────
+  // All transport-derived numbers come from Cantera (bk.data) when accurate
+  // mode is on; otherwise we fall back to JS approximations or set to NaN
+  // so the UI shows "—" instead of a fictitious value.
+  //
+  //   δ_F  : Zeldovich flame thickness (m) = α_th / S_L.
+  //   ν    : kinematic viscosity (m²/s) of the unburned mixture.
+  //   Le   : effective Lewis number (deficient-reactant basis).
+  //   Ma   : Markstein number, Bechtold-Matalon simplified.
+  //   u'   : turbulence velocity = (u'/U) · V_ref, in m/s.
+  //   l_T  : integral length scale (m). Auto = 0.1·L_char (Tennekes-Lumley).
+  //   Re_T : turbulent Reynolds = u'·l_T / ν.
+  //   Ka   : Karlovitz number, from Bradley (0.157·(u'/SL)²·Re_T^-0.5).
+  //   Da   : Damköhler = (l_T/δ_F)·(SL/u') = τ_T/τ_chem.
+  //   S_T  : Bradley turbulent flame speed.
+  const delta_F = (accurate && bk.data && bk.data.delta_F)
+    ? bk.data.delta_F
+    : alphaTh / Math.max(SL_ms, 1e-9);
+  const nu_u = (accurate && bk.data && bk.data.nu_u)
+    ? bk.data.nu_u
+    : alphaTh / 0.71;     // Pr ≈ 0.71 fallback for hot air
+  const Le_eff = (accurate && bk.data && bk.data.Le_eff)
+    ? bk.data.Le_eff
+    : lewisNumberFreeMode(fuel);
+  const Ma_eff = (accurate && bk.data && Number.isFinite(bk.data.Ma))
+    ? bk.data.Ma
+    : 0;     // Free-mode placeholder — Phase 4 will fit this per fuel
+  const uPrime = uPrimeRatio * Math.max(velocity, 0);
+  const lT_auto = 0.1 * Math.max(Lchar, 1e-6);
+  const lT = (lTOverride && lTOverride > 0) ? lTOverride : lT_auto;
+  const bradley = bradleyST(SL_ms, Math.max(uPrime, 1e-9), lT, nu_u, Le_eff);
+  const ReT_diag = bradley.ReT;
+  const Ka_diag = bradley.Ka;
+  const Da_diag = (lT / Math.max(delta_F, 1e-12)) * (SL_ms / Math.max(uPrime, 1e-9));
+  const ST_bradley = bradley.ST;
+  const ST_damk    = damkohlerST(SL_ms, Math.max(uPrime, 1e-9));
+  // τ_chem (Williams) = α_th / S_L²; ms for display.
+  const tau_chem_ms = (alphaTh / Math.max(SL_ms*SL_ms, 1e-18)) * 1000;
+
+  // Borghi-Peters trail. Push a new operating point whenever the
+  // governing inputs change. Cap at 20 entries (FIFO). Reset on
+  // fuel/oxidizer change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setBorghiTrail([]); setBorghiHover(null); },
+    [JSON.stringify(fuel), JSON.stringify(ox)]);
+  useEffect(() => {
+    if (!flameActive || !Number.isFinite(SL_ms) || SL_ms <= 0) return;
+    if (!Number.isFinite(delta_F) || delta_F <= 0) return;
+    const x = lT / delta_F;
+    const y = uPrime / Math.max(SL_ms, 1e-9);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) return;
+    const pt = {
+      phi: +phi.toFixed(3),
+      T0: +T0.toFixed(1),
+      P:  +P.toFixed(3),
+      x, y,
+      Ka: Ka_diag, Da: Da_diag, ReT: ReT_diag,
+      ts: Date.now(),
+    };
+    setBorghiTrail(prev => {
+      // Skip if essentially the same as latest entry
+      const last = prev[prev.length - 1];
+      if (last
+          && Math.abs(last.phi - pt.phi) < 1e-4
+          && Math.abs(last.T0  - pt.T0)  < 1e-2
+          && Math.abs(last.P   - pt.P)   < 1e-4) return prev;
+      const next = [...prev, pt];
+      return next.length > 20 ? next.slice(next.length - 20) : next;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flameActive, phi, T0, P, SL_ms, delta_F, lT, uPrime]);
   // Autoignition delay (s).
   //   Accurate mode → Cantera 0D const-P reactor; if the run reaches its cutoff without ignition,
   //                   we report τ_ign > cutoff and use the cutoff as a conservative lower bound
@@ -2330,6 +2659,91 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
     </button>
     <KeepActivatedToggle on={!!keepActivated} onChange={setKeepActivated} panelLabel="Flame Speed"/>
     <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works"><p style={{margin:"0 0 6px"}}>This panel checks <span style={hs.em}>flame stability</span> at the operating point you've set — whether the flame can anchor, or whether it will blow off, flash back, or auto-ignite in the premixer.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>You change:</span> φ, T_air, T_fuel, P in the sidebar, plus the panel-local geometry inputs — reference velocity (V_ref), characteristic length (L_char), flame-holder diameter, and the premixer length and bulk velocity.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>You get:</span> laminar flame speed S_L, blowoff Damköhler number, blowoff velocity, autoignition delay vs premixer residence time, flashback margin, and a single <strong>PREMIXER SAFE / RISK</strong> badge that combines all four checks.</p><p style={{margin:0,fontSize:11,color:C.txtMuted}}>Correlations and stability criteria are documented in the <strong>Assumptions</strong> tab.</p></HelpBox>
+
+    {/* ═══════════ CARD 1 — FLAME SPEED & REGIME DIAGNOSTICS ═══════════ */}
+    {/* Phase 1 of the redesign. Houses the laminar core (S_L, δ_F, α_th,
+        ν, τ_chem), the dimensionless trio (u'/S_L, l_T/δ_F, Ka, Da), the
+        Lewis & Markstein chips, and the interactive Borghi-Peters regime
+        diagram. Inputs row gives the user u'/U (turbulence intensity)
+        and l_T (integral length scale, auto = 0.1·L_char). */}
+    <div style={S.card}>
+      <div style={S.cardT}>
+        Flame Speed &amp; Regime Diagnostics {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}
+      </div>
+
+      {/* ── Inputs row (u'/U slider, l_T) ─────────────────────────────── */}
+      <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",marginBottom:12,padding:"8px 10px",background:`${C.accent}08`,border:`1px solid ${C.accent}30`,borderRadius:6}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,flex:"1 1 240px"}}>
+          <Tip text="Turbulence intensity u'/U. 0.10 = smooth duct or flow-conditioned premixer; 0.20 = swirl-stabilized DLN; 0.30 = highly turbulated dump combustor. Drives Re_T, Ka, Da and the Bradley turbulent flame speed."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help",whiteSpace:"nowrap"}}>u'/U ⓘ</label></Tip>
+          <input type="range" min="0.05" max="0.30" step="0.01" value={uPrimeRatio} onChange={e=>setUPrimeRatio(+e.target.value)} style={{flex:1,accentColor:C.violet,minWidth:90}}/>
+          <NumField value={uPrimeRatio} decimals={2} onCommit={v=>setUPrimeRatio(Math.max(0.01,Math.min(0.5,+v)))} style={{width:54,padding:"3px 5px",fontFamily:"monospace",color:C.violet,fontSize:11.5,fontWeight:700,background:C.bg,border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+          <span style={{fontSize:10,color:C.txtDim,fontFamily:"monospace",whiteSpace:"nowrap"}}>u' = {uv(units,"vel",uPrime).toFixed(2)} {uu(units,"vel")}</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <Tip text="Integral turbulent length scale l_T. Default auto = 0.1·L_char (Tennekes-Lumley). Override for specific geometries: ~grid spacing × 0.2 for turbulence grids, ~0.1·D_swirl for swirl premixers."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help",whiteSpace:"nowrap"}}>l_T ({uu(units,"len")}) ⓘ</label></Tip>
+          <NumField value={uv(units,"len",lT)} decimals={5} onCommit={v=>{const lt=uvI(units,"len",+v);setLTOverride(lt>0?lt:null);}}
+            style={{...S.inp,width:90,fontSize:11.5}}/>
+          <button onClick={()=>setLTOverride(null)}
+            disabled={!lTOverride}
+            title="Reset to auto = 0.1·L_char"
+            style={{padding:"3px 8px",fontSize:10,fontWeight:600,fontFamily:"'Barlow Condensed',sans-serif",
+              color:lTOverride?C.accent:C.txtMuted,
+              background:"transparent",border:`1px solid ${lTOverride?C.accent:C.border}`,
+              borderRadius:4,cursor:lTOverride?"pointer":"default",letterSpacing:".4px"}}>auto</button>
+        </div>
+      </div>
+
+      {/* ── Row 1: laminar core ────────────────────────────────────────── */}
+      <div style={{...S.row,gap:8,marginBottom:8}}>
+        <M l="Laminar Flame Speed (S_L)" v={uv(units,"SL",SL).toFixed(2)} u={uu(units,"SL")} c={C.violet} tip="Laminar burning velocity from the Cantera 1D FreeFlame solve (mixture-averaged transport)."/>
+        <M l="Flame Thickness (δ_F)" v={(delta_F*1000).toFixed(3)} u="mm" c={C.accent} tip={`Zeldovich flame thickness δ_F = α_th / S_L. ${(accurate&&bk.data&&bk.data.delta_F)?"From Cantera transport.":"JS approximation (Cantera disabled)."} Drops with pressure (~1/P^0.5) — typical CH₄/air at 1 atm: 0.3 mm; at 20 atm: 0.05 mm. Used to non-dimensionalize l_T in the Borghi diagram.`}/>
+        <M l="Thermal Diffusivity (α_th)" v={(alphaTh*1e6).toFixed(2)} u="mm²/s" c={C.accent3} tip={`α_th = k/(ρ·c_p) at T_mixed, P, X_unburned. ${(accurate&&bk.data&&bk.data.alpha_th_u)?"From Cantera transport.":"Free-mode: 2.0e-5·(T/300)^1.7 / P[atm]."}`}/>
+        <M l="Kinematic Viscosity (ν)" v={(nu_u*1e6).toFixed(2)} u="mm²/s" c={C.accent3} tip={`ν = μ/ρ at T_mixed, P, X_unburned. ${(accurate&&bk.data&&bk.data.nu_u)?"From Cantera transport.":"Free-mode: α_th / Pr ≈ α_th / 0.71."}`}/>
+        <M l="Chemical Time (τ_chem)" v={tau_chem_ms.toFixed(4)} u="ms" c={C.violet} tip="τ_chem = α_th / S_L² = δ_F / S_L. Ratio τ_T/τ_chem is the Damköhler number."/>
+        <M l="Re_T" v={ReT_diag>=1e4?ReT_diag.toExponential(1):ReT_diag.toFixed(0)} u="—" c={C.accent2} tip="Turbulent Reynolds number Re_T = u'·l_T / ν. > 100 → fully turbulent regime."/>
+      </div>
+
+      {/* ── Row 2: dimensionless trio + regime ─────────────────────────── */}
+      <div style={{...S.row,gap:8,marginBottom:10}}>
+        <M l="u'/S_L" v={(uPrime/Math.max(SL_ms,1e-9)).toFixed(2)} u="—" c={C.violet} tip="Turbulence intensity ratio. <1: laminar wrinkling; ≫1: thin reaction zone."/>
+        <M l="l_T/δ_F" v={(lT/Math.max(delta_F,1e-12)).toFixed(0)} u="—" c={C.accent} tip="Length scale ratio. >>1: large eddies stretch a thin flame; ~1: small eddies penetrate."/>
+        <M l="Karlovitz (Ka)" v={Ka_diag<1?Ka_diag.toFixed(3):Ka_diag.toFixed(2)} u="—" c={Ka_diag<1?C.good:Ka_diag<100?C.warm:C.strong} tip={`Karlovitz number from Bradley correlation: Ka = 0.157·(u'/S_L)²·Re_T^-0.5. ${Ka_diag<1?"Ka<1: flamelet regime — every gas turbine at idle.":Ka_diag<100?"Ka>1: thin reaction zone — every gas turbine at full power.":"Ka>100: broken reaction zone — edge case."}`}/>
+        <M l="Damköhler (Da)" v={Da_diag<10?Da_diag.toFixed(2):Da_diag.toFixed(0)} u="—" c={Da_diag>1?C.good:C.warm} tip={`Da = (l_T/δ_F)·(S_L/u'). ${Da_diag>1?"Da>1: chemistry is fast relative to turbulent timescale.":"Da<1: turbulence outpaces chemistry — flame extinction risk."}`}/>
+        <M l="S_T (Bradley)" v={uv(units,"vel",ST_bradley).toFixed(2)} u={uu(units,"vel")} c={C.accent} tip={`Turbulent flame speed via Bradley/Lau/Lawes 1992: S_T = 0.88·u'·Ka^-0.3 / Le. Cross-check (Damköhler 1940): S_T_DK = ${uv(units,"vel",ST_damk).toFixed(2)} ${uu(units,"vel")}. Disagreement >2× means you're outside both calibration ranges — typically very high u'/S_L.`}/>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
+          <Tip text={`Combustion regime classification (Borghi-Peters). Ka and Da together place the operating point on the diagram below.\n• Ka<1, Da>1: laminar / corrugated flamelet (idle GTs).\n• Ka<1, Da<1: corrugated flamelet.\n• 1<Ka<100, Da>1: thin reaction zone (full-power GTs).\n• Ka>100: broken reaction zone (extinction).`}>
+            <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",background:`${C.accent}1F`,color:C.accent,border:`1px solid ${C.accent}44`,cursor:"help"}}>{Ka_diag<1?(Da_diag>1?"● FLAMELET":"● CORRUGATED"):Ka_diag<100?"● THIN RXN ZONE":"● BROKEN RXN"} ⓘ</span>
+          </Tip>
+        </div>
+      </div>
+
+      {/* ── Lewis & Markstein with stability indicator ────────────────── */}
+      <div style={{...S.row,gap:8,marginBottom:10}}>
+        <M l="Effective Lewis (Le)" v={Le_eff.toFixed(3)} u="—" c={Le_eff<0.9?C.warm:Le_eff>1.1?C.accent3:C.good} tip={`Le = α_th / D_def (deficient-reactant basis). ${(accurate&&bk.data&&bk.data.Le_eff)?"From Cantera mixture transport.":"Free-mode: composition-weighted lookup table."} Le<1 → thermo-diffusively unstable (H₂-rich GTs operate here, S_T can exceed predictions by 30–50%). Le≈1 → stable (typical hydrocarbon). Le>1 → diffusively stable (CO-rich, naphtha).`}/>
+        <M l="Markstein (Ma)" v={Ma_eff.toFixed(2)} u="—" c={Ma_eff>0.5?C.good:Ma_eff<-0.5?C.warm:C.accent2} tip={`Ma ≈ (Ze/2)·(Le−1) (Bechtold-Matalon simplified). ${(accurate&&bk.data&&Number.isFinite(bk.data.Ma))?"From Cantera flame analysis.":"Free-mode: 0 placeholder — refine in Phase 4 validation."} +Ma: stable to wrinkling. -Ma: cellular instability. |Ma|>0.5: notable thermo-diffusive deviation from Le=1 baseline.`}/>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
+          <Tip text={Ma_eff>0.5?"Ma > 0.5 — flame is thermo-diffusively stable. Standard turbulent-flamelet correlations apply.":Ma_eff<-0.5?"Ma < -0.5 — flame is thermo-diffusively unstable (cellular structure). S_T can exceed Bradley by 30-50%; treat correlations as conservative.":"|Ma| ≤ 0.5 — flame is near-neutral. Bradley S_T is a good baseline."}>
+            <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",cursor:"help",
+              background:Ma_eff>0.5?`${C.good}1F`:Ma_eff<-0.5?`${C.warm}1F`:`${C.accent2}1F`,
+              color:Ma_eff>0.5?C.good:Ma_eff<-0.5?C.warm:C.accent2,
+              border:`1px solid ${Ma_eff>0.5?C.good+"44":Ma_eff<-0.5?C.warm+"44":C.accent2+"44"}`}}>{Ma_eff>0.5?"● STABLE":Ma_eff<-0.5?"● CELLULAR-UNSTABLE":"● NEAR-NEUTRAL"} ⓘ</span>
+          </Tip>
+        </div>
+      </div>
+
+      {/* ── Borghi-Peters regime diagram ──────────────────────────────── */}
+      <BorghiPetersDiagram
+        currentX={lT/Math.max(delta_F,1e-12)}
+        currentY={uPrime/Math.max(SL_ms,1e-9)}
+        currentLabel={{phi:+phi.toFixed(3),T0:+T0.toFixed(1),P:+P.toFixed(3),Ka:Ka_diag,Da:Da_diag,ReT:ReT_diag}}
+        trail={borghiTrail}
+        hover={borghiHover}
+        setHover={setBorghiHover}
+        units={units}
+      />
+    </div>
+    {/* ═══════════ END CARD 1 ═══════════ */}
+
     <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}</div>
       <div style={{...S.row,gap:8,marginBottom:10}}>
         <M l="Laminar Flame Speed (S_L)" v={uv(units,"SL",SL).toFixed(2)} u={uu(units,"SL")} c={C.violet} tip="Laminar burning velocity — the speed at which a planar flame front propagates into the unburned mixture."/>
