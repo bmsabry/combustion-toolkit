@@ -10622,7 +10622,7 @@ const TABS_BASE=[
   {id:"aft",         label:"Flame Temp & Properties", icon:"🔥", modes:["free","ctk","advanced"]},
   {id:"exhaust",     label:"Exhaust Analysis",    icon:"🔬", modes:["free","ctk","advanced"]},
   {id:"combustor",   label:"Combustor PSR→PFR",   icon:"🏭", modes:["free","ctk","advanced"]},
-  {id:"flame",       label:"Flame Speed & Blowoff", icon:"⚡", modes:["free","ctk","advanced"]},
+  {id:"flame",       label:"Flame Speed & Blowoff", icon:"⚡", modes:["ctk","advanced"]},
   {id:"automate",    label:"Automate",            icon:"🧪", modes:["ctk","advanced"]},
   {id:"nomenclature",label:"Nomenclature",        icon:"📚"},  // always visible (reference)
   {id:"assumptions", label:"Assumptions",         icon:"📘"},  // always visible (reference)
@@ -10843,12 +10843,19 @@ export default function App(){
   // Fifth linkage: Fuel Flow ← cycle ṁ_fuel. Same mode-derivation as the
   // others (forced ON in GTS, user-controlled in Advanced, hidden in Free/CTK).
   const[linkFuelFlowRaw,setLinkFuelFlow]=useState(true);
-  const[velocity,setVelocity]=useState(30);const[Lchar,setLchar]=useState(0.01);
+  // Flame Speed & Blowoff panel sidebar/panel-local defaults.
+  // Set to industrial-gas-turbine premixer values (per Phase 0 of the
+  // Flame Speed redesign plan): 50 m/s reference velocity, 25 mm L_char,
+  // 20 mm flame-holder, 80 mm premixer length, 60 m/s premixer bulk
+  // velocity. These are the conditions where S_L and Da read "industrial"
+  // out of the box (rather than a 30 cm lab burner at 3 m/s).
+  const[velocity,setVelocity]=useState(50);   // 50 m/s — typical premixer ref velocity
+  const[Lchar,setLchar]=useState(0.025);      // 25 mm — bluff-body / liner-scale flame anchor
   // Premixer stability inputs. D_fh = flameholder diameter (Zukoski τ_BO).
   // L_premix / V_premix = premixer geometry (autoignition safety: τ_res < τ_ign).
-  const[Dfh,setDfh]=useState(0.02);       // 20 mm — typical bluff-body / burner rod
-  const[Lpremix,setLpremix]=useState(0.10); // 100 mm
-  const[Vpremix,setVpremix]=useState(60);   // 60 m/s
+  const[Dfh,setDfh]=useState(0.020);          // 20 mm — typical bluff-body / burner rod
+  const[Lpremix,setLpremix]=useState(0.080);  // 80 mm — fuel-injection point to flame anchor
+  const[Vpremix,setVpremix]=useState(60);     // 60 m/s — premixer bulk velocity
   const[tau_psr,setTauPsr]=useState(0.5);const[L_pfr,setLpfr]=useState(0.21336);const[V_pfr,setVpfr]=useState(30.48);
   // Fuel-stream inlet temperature (K). Air inlet T = T0 (sidebar). When T_fuel != T0
   // the combustor mixes them adiabatically before the PSR.
