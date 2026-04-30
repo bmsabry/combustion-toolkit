@@ -6,6 +6,30 @@ import * as api from "./api";
 
 const AuthCtx = createContext(null);
 
+// ─────────────────────────────────────────────────────────────────────────
+// FRONTEND ADMIN-EMAIL WHITELIST
+// Final defense layer for full / unconditional access. If the signed-in
+// user's email is on this list, every gated capability (online accurate
+// mode, download tier, mode picker without lock) opens up regardless of
+// what the backend says about their subscription state.
+//
+// This fires even if:
+//   - the backend's _self_heal_admin failed
+//   - GET /billing/subscription returned 5xx (Render restart, cold start)
+//   - GET /billing/subscription returned tier="free" (DB drift)
+// As long as the user is authenticated (a valid JWT loaded /auth/me), the
+// email match alone unlocks everything client-side. Subscription gating
+// for non-admin users is unaffected.
+//
+// Keep this list in lockstep with the backend's ADMIN_EMAILS env var.
+// Lowercase only — comparison is case-insensitive.
+const FRONTEND_ADMIN_EMAILS = new Set([
+  "bmsabry@gmail.com",
+]);
+function _isAdminEmail(email) {
+  return !!(email && FRONTEND_ADMIN_EMAILS.has(String(email).toLowerCase()));
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => api.getCachedUser());
   const [subscription, setSubscription] = useState(null);
@@ -59,12 +83,19 @@ export function AuthProvider({ children }) {
     setSubscription(null);
   };
 
+  // Admin override: if the signed-in user's email is on the frontend
+  // ADMIN whitelist, every gated capability flips on regardless of what
+  // the backend reports for their subscription. Backend self-heal is the
+  // primary path; this is the belt-and-suspenders client-side guarantee
+  // requested for full unconditional access.
+  const _adminOverride = _isAdminEmail(user?.email);
   const value = {
     user, subscription, loading, error,
     signin, signup, signout, refresh,
     isAuthenticated: !!user,
-    hasOnlineAccess: !!(subscription && subscription.has_online_access),
-    hasDownloadAccess: !!(subscription && subscription.has_download_access),
+    isAdminEmail: _adminOverride,
+    hasOnlineAccess:   _adminOverride || !!(subscription && subscription.has_online_access),
+    hasDownloadAccess: _adminOverride || !!(subscription && subscription.has_download_access),
   };
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
