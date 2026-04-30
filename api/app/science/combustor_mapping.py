@@ -69,7 +69,7 @@ _DERIV = {
     "DT_Main": {"NOx15": 0.0375, "CO15":  0.424, "PX36_SEL": -0.004,  "PX36_SEL_HI": -0.0004},
     "N2":      {"NOx15": -0.25,  "CO15":  2.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "C3":      {"NOx15":  0.75,  "CO15": -12.0,  "PX36_SEL":  0.04,   "PX36_SEL_HI":  0.0266},
-    "Phi_OP":  {"NOx15":  17.5,  "CO15": -100.0, "PX36_SEL": -1.5,    "PX36_SEL_HI": -0.15},
+    "Phi_OP":  {"NOx15":  17.5,  "CO15":  -70.0, "PX36_SEL": -1.5,    "PX36_SEL_HI": -0.15},
     "Phi_IP":  {"NOx15":  15.0,  "CO15": -100.0, "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     # NOx15 ∂/∂Tflame is piecewise in Tflame and handled by
     # _nox15_tflame_contribution() below — the entry here is 0 to avoid
