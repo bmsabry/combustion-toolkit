@@ -575,6 +575,25 @@ const PREMIXER_TYPES = {
   },
 };
 
+// Autoignition mechanism catalog — exposed in the Card 3 dropdown.
+// `bundled` flag gates whether the choice is selectable on the UI;
+// non-bundled entries appear disabled with a "coming" badge until
+// their YAML lands in api/app/science/mechanisms/.
+const IG_MECHANISMS = [
+  { id:"gri30",    label:"GRI-Mech 3.0",  ref:"Cantera built-in",
+    bundled:true,
+    note:"53 species, 325 reactions. Default for natural gas. Validated T = 800–2500 K, P = 1–30 atm." },
+  { id:"glarborg", label:"Glarborg 2018", ref:"Glarborg et al. 2018",
+    bundled:true,
+    note:"151 species, 1395 reactions. More detailed H₂ / NOx / NH₃ chemistry — recommended for H₂-rich fuels." },
+  { id:"ffcm2",    label:"FFCM-2",        ref:"Wang et al. 2020",
+    bundled:false,
+    note:"Foundational Fuel Chemistry Model, 96 species. Best for NG with H₂ ≤ 50%. Mechanism file not bundled yet — pending YAML add to api/app/science/mechanisms/." },
+  { id:"aramco",   label:"Aramco 3.0",    ref:"Zhou et al. 2018",
+    bundled:false,
+    note:"Comprehensive C0–C5 + H₂ / NOx mechanism. Mechanism file not bundled yet." },
+];
+
 function lewisNumberFreeMode(fuelComp){
   // Composition is in mol % (matches the sidebar editor).
   const xH2  = (fuelComp.H2  || 0) / 100;
@@ -2564,10 +2583,34 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // refit when plant data lands. Editable on the panel for users with
   // their own data.
   const [K_LBO, setKLBO] = useState(0.025);
+
+  // ── Card 3 (Premixer Flashback & Autoignition) panel-local state ────
+  // D_h: premixer hydraulic diameter. Default 0.040 m (40 mm) — typical
+  // DLN swirl premixer. Used by both boundary-layer (g_actual) and CIVB
+  // (Π_CIVB) gates. Range loosely bounded to 5 mm (micromixer) – 200 mm
+  // (large can combustor).
+  const [D_h_premix, setDhPremix] = useState(0.040);
+  // RTD multiplier: ratio τ_res,99 / τ_res,mean. Default 1.5 (1D plug
+  // flow with realistic axial dispersion). Slider 1.0–3.0 — higher
+  // values represent strong recirculation / poorly-distributed mixing.
+  const [RTD_multiplier, setRTDMultiplier] = useState(1.5);
+  // Autoignition mechanism. Decoupled from the App-level Combustor PSR
+  // mechanism so the user can run FFCM-2 / Glarborg here without
+  // perturbing the Combustor panel. Choices wired to the bundled YAMLs:
+  //   gri30        — GRI-Mech 3.0 (Cantera built-in; default)
+  //   glarborg     — Glarborg 2018 (bundled, more H₂/NOx detail)
+  //   ffcm2        — FFCM-2 (planned; YAML not bundled yet)
+  //   aramco       — Aramco 3.0 (planned)
+  const [igMechanism, setIgMechanism] = useState("gri30");
+  // Wall-shear amplification factor ε_turb for boundary-layer flashback
+  // (Lewis-von Elbe). g_actual = (8·V_premix/D_h)·(1+ε_turb). Default
+  // 0.7 (≈ 1.7× turbulent BL multiplier on the laminar gradient
+  // estimate). Range 0–2.
+  const [eps_turb, setEpsTurb] = useState(0.7);
   // useMemo / useBackendCalc — short-circuit when !flameActive
   const Tmix=useMemo(()=>flameActive?mixT(fuel,ox,phi,Tfuel,Tair):0,[flameActive,fuel,ox,phi,Tfuel,Tair]);
   const bk=useBackendCalc("flame",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate&&flameActive);
-  const bkIgn=useBackendCalc("autoignition",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),max_time_s:10.0,T_fuel_K:Tfuel,T_air_K:Tair,mechanism:"gri30",WFR,water_mode:waterMode},accurate&&flameActive);
+  const bkIgn=useBackendCalc("autoignition",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),max_time_s:10.0,T_fuel_K:Tfuel,T_air_K:Tair,mechanism:igMechanism,WFR,water_mode:waterMode},accurate&&flameActive);
   // sweepHash and sweepIsFresh are cheap; safe to compute always.
   const sweepHash=useMemo(()=>JSON.stringify({fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),Tfuel,Tair}),[fuel,ox,phi,T0,P,Tfuel,Tair]);
   const sweepIsFresh=flameActive&&accurate&&canteraSweeps&&canteraSweeps.hash===sweepHash;
@@ -2843,6 +2886,74 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
     return r;
   })();
 
+  // ── Card 3: Premixer Flashback & Autoignition — three flashback gates
+  //  + autoignition gate.
+  //
+  //  Card 3's u' uses V_premix EXCLUSIVELY (not the Card 1 toggle), since
+  //  the question is intrinsically about the premixer-channel turbulence
+  //  upstream of the flame. The Card 1 toggle exists for the regime
+  //  diagnostic (where the answer depends on whether you're characterizing
+  //  the anchor region or the upstream channel); Gate C of Card 3 has a
+  //  definite physical answer.
+  const uPrime_premix = uPrimeRatio * Math.max(Vpremix, 0);
+  const lT_premix = 0.10 * Math.max(D_h_premix, 1e-6);    // l_T = 0.1·D_h
+
+  // ── Gate A: boundary-layer flashback (Lewis-von Elbe extended) ──────
+  // g_c is already computed above (S_L² / α_th).
+  // g_actual = (8 · V_premix / D_h) · (1 + ε_turb)
+  // Pass: g_actual > g_c (wall flow fast enough to push the flame back).
+  const g_actual = (8 * Vpremix / Math.max(D_h_premix, 1e-6)) * (1 + eps_turb);
+  const gateA_pass = g_actual > g_c;
+  const gateA_margin = g_actual / Math.max(g_c, 1e-9);
+
+  // ── Gate B: CIVB (Combustion-Induced Vortex Breakdown, Sattelmayer 2004)
+  // Π_CIVB = S_L · D_h / Γ_swirl, with Γ_swirl = S_n · V_premix · D_h · π
+  //        ⇒ Π_CIVB = S_L / (S_n · V_premix · π)
+  // Threshold: 0.05 for natural gas, 0.03 for H₂ blends (>30% H₂).
+  // Only meaningful when the premixer type is "swirl" — for non-swirl
+  // architectures CIVB doesn't apply (gate is auto-pass with N/A label).
+  const civb_applicable = (premixerType === "swirl");
+  const civb_threshold = (H2_frac > 0.30) ? 0.03 : 0.05;
+  const piCIVB = civb_applicable
+    ? SL_ms / Math.max(swirlNumber * Math.max(Vpremix, 1e-9) * Math.PI, 1e-12)
+    : 0;
+  const gateB_pass = !civb_applicable || piCIVB < civb_threshold;
+
+  // ── Gate C: turbulent core flashback (Bradley 1992) ─────────────────
+  // S_T from Bradley using V_premix-based u' and 0.1·D_h length scale.
+  // Margin = V_premix / S_T. Pass: > 1.43 (≈ 1/0.7, 30% margin).
+  const bradley_premix = bradleyST(SL_ms,
+                                    Math.max(uPrime_premix, 1e-9),
+                                    lT_premix, nu_u, Le_eff);
+  const ST_premix = bradley_premix.ST;
+  const ST_premix_dk = damkohlerST(SL_ms, Math.max(uPrime_premix, 1e-9));
+  const v_st_margin = Vpremix / Math.max(ST_premix, 1e-9);
+  const gateC_pass = v_st_margin > 1.43;
+
+  // ── Gate D: autoignition (RTD-corrected) ───────────────────────────
+  // τ_res,99 = RTD_multiplier · (L_premix / V_premix). Pass: τ_ign /
+  // τ_res,99 ≥ 3. Reuses the existing tau_ign (bk-fed in accurate mode)
+  // and tau_ign_is_lower_bound flag.
+  const tau_res_mean = Lpremix / Math.max(Vpremix, 1e-20);
+  const tau_res_99 = RTD_multiplier * tau_res_mean;
+  const ign_margin_card3 = isFinite(tau_ign) ? tau_ign / Math.max(tau_res_99, 1e-20) : NaN;
+  const gateD_pass = isFinite(tau_ign) && ign_margin_card3 >= 3;
+
+  // Combined PASS / FAIL for the whole Card 3 status chip.
+  // FAIL if any one of the four gates fails. WARN if all pass but at
+  // least one is "marginal" (within 20% of its threshold). PASS otherwise.
+  const gateA_marginal = gateA_pass && gateA_margin < 1.2;
+  const gateC_marginal = gateC_pass && v_st_margin < 1.43 * 1.2;
+  const gateD_marginal = gateD_pass && ign_margin_card3 < 3.6;
+  const gateB_marginal = gateB_pass && civb_applicable && piCIVB > civb_threshold * 0.8;
+  const all_pass = gateA_pass && gateB_pass && gateC_pass && gateD_pass;
+  const any_marginal = gateA_marginal || gateB_marginal || gateC_marginal || gateD_marginal;
+  const card3_status = !all_pass ? "FAIL" : (any_marginal ? "WARN" : "PASS");
+
+  // H₂-mechanism advisory: warn when fuel has > 30 % H₂ AND user is
+  // still on GRI-Mech 3.0 (validated only for NG-like fuels).
+  const ig_mech_warn = (H2_frac > 0.30) && (igMechanism === "gri30");
+
   // (Trail effects moved above the early return — see ABOVE the
   // `if(!flameActive)` block in this same component. Hooks rules require
   // identical hook call order on every render, so the trail-reset and
@@ -2901,7 +3012,19 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       ACTIVATED — Cantera Flame Speed + Autoignition running on every change
     </button>
     <KeepActivatedToggle on={!!keepActivated} onChange={setKeepActivated} panelLabel="Flame Speed"/>
-    <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works"><p style={{margin:"0 0 6px"}}>This panel checks <span style={hs.em}>flame stability</span> at the operating point you've set — whether the flame can anchor, or whether it will blow off, flash back, or auto-ignite in the premixer.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>You change:</span> φ, T_air, T_fuel, P in the sidebar, plus the panel-local geometry inputs — reference velocity (V_ref), characteristic length (L_char), flame-holder diameter, and the premixer length and bulk velocity.</p><p style={{margin:"0 0 6px"}}><span style={hs.em}>You get:</span> laminar flame speed S_L, blowoff Damköhler number, blowoff velocity, autoignition delay vs premixer residence time, flashback margin, and a single <strong>PREMIXER SAFE / RISK</strong> badge that combines all four checks.</p><p style={{margin:0,fontSize:11,color:C.txtMuted}}>Correlations and stability criteria are documented in the <strong>Assumptions</strong> tab.</p></HelpBox>
+    <HelpBox title="ℹ️ Flame Speed & Blowoff — How It Works">
+      <p style={{margin:"0 0 6px"}}>Three vertically-stacked cards diagnose <span style={hs.em}>flame stability</span> at the current operating point. Each answers a distinct question with its own bold gate criterion:</p>
+      <p style={{margin:"0 0 6px"}}>
+        <strong style={{color:C.violet}}>Card 1 · Flame Speed &amp; Regime Diagnostics</strong> — what combustion regime is the flame in? The Borghi-Peters diagram places the operating point relative to the Ka=1 / Ka=100 / Da=1 / Re_T=1 reference lines. Lewis &amp; Markstein chips flag thermo-diffusive stability.
+      </p>
+      <p style={{margin:"0 0 6px"}}>
+        <strong style={{color:C.accent2}}>Card 2 · Stabilization &amp; Blowoff</strong> — will the flame anchor, or be swept downstream? Pick the premixer type to load the right Da_crit; the headline gate is <strong>Da/Da_crit &gt; 1</strong> (with &gt; 3 design margin) and Lefebvre's <strong>φ &gt; φ_LBO + 0.05</strong> margin.
+      </p>
+      <p style={{margin:"0 0 6px"}}>
+        <strong style={{color:C.accent}}>Card 3 · Premixer Flashback &amp; Autoignition</strong> — will the flame propagate upstream, or auto-ignite in the premixer? Three flashback gates (boundary-layer, CIVB, turbulent core via Bradley) plus the Cantera 0D τ_ign gate. Single <strong>PREMIXER STATUS: PASS / WARN / FAIL</strong> chip combines all four.
+      </p>
+      <p style={{margin:0,fontSize:11,color:C.txtMuted}}>Vocabulary: <strong>blow-off</strong> = flame swept downstream (Card 2); <strong>flashback</strong> = flame propagates upstream (Card 3); <strong>autoignition</strong> = mixture spontaneously ignites with no external flame (Card 3, separate gate). Underlying correlations: Bradley/Lau/Lawes 1992, Sattelmayer 2004 (CIVB), Lefebvre 1985 (LBO), Lewis-von Elbe 1943 (boundary-layer), Cantera 1D FreeFlame + 0D const-P. Full assumptions in the <strong>Assumptions</strong> tab.</p>
+    </HelpBox>
 
     {/* ═══════════ CARD 1 — FLAME SPEED & REGIME DIAGNOSTICS ═══════════ */}
     {/* Phase 1 of the redesign. Houses the laminar core (S_L, δ_F, α_th,
@@ -3128,44 +3251,141 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Characteristic recirculation length — typically the flameholder diameter, bluff body width, or step height."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_char ({uu(units,"len")}) ⓘ:</label></Tip>
           <NumField value={uv(units,"len",Lchar)} decimals={4} onCommit={v=>setLchar(uvI(units,"len",v))} style={{...S.inp,width:75}}/></div>
       </div></div>
-    <div style={S.card}><div style={S.cardT}>Premixer Stability — Flashback & Autoignition {accurate&&(bkIgn.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA 0D…</span>:bkIgn.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bkIgn.err}</span>:bkIgn.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (0D const-P reactor)</span>:null)}</div>
-      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:12,padding:"8px 10px",background:`${C.accent}08`,border:`1px solid ${C.accent}30`,borderRadius:6}}>
+    {/* ═══════════ CARD 3 — PREMIXER FLASHBACK & AUTOIGNITION ═══════════ */}
+    {/* Phase 3 of the redesign. Replaces the legacy "Premixer Stability"
+        card. Three flashback gates + autoignition gate, each with its
+        own pass/fail indicator and an aggregate PASS / WARN / FAIL chip.
+        Gate C (turbulent core) uses V_premix EXCLUSIVELY for u' —
+        the Card 1 toggle deliberately doesn't apply here because the
+        flashback question is intrinsically about premixer-channel
+        turbulence. */}
+    <div style={S.card}>
+      <div style={S.cardT}>Premixer Flashback &amp; Autoignition <span style={{fontSize:10,color:C.txtMuted,marginLeft:8,fontFamily:"monospace"}}>·  3 flashback gates + autoignition</span> {accurate&&(bkIgn.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA 0D…</span>:bkIgn.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bkIgn.err}</span>:bkIgn.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (0D const-P reactor)</span>:null)}</div>
+
+      {/* ── Inputs row ────────────────────────────────────────────── */}
+      <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",marginBottom:10,padding:"8px 10px",background:`${C.accent}08`,border:`1px solid ${C.accent}30`,borderRadius:6}}>
         <span style={{fontSize:10,fontWeight:700,color:C.accent,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".8px",textTransform:"uppercase",marginRight:4}}>Inputs:</span>
-        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Flameholder diameter (bluff body, burner rod, or swirler hub diameter). Used for Zukoski τ_BO."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>D_flameholder ({uu(units,"len")}) ⓘ:</label></Tip>
-          <NumField value={uv(units,"len",Dfh)} decimals={4} onCommit={v=>setDfh(uvI(units,"len",v))} style={{...S.inp,width:75}}/></div>
-        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Premixer channel length from fuel injection point to flame front. Determines residence time of unburnt mixture."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_premix ({uu(units,"len")}) ⓘ:</label></Tip>
-          <NumField value={uv(units,"len",Lpremix)} decimals={4} onCommit={v=>setLpremix(uvI(units,"len",v))} style={{...S.inp,width:75}}/></div>
-        <div style={{display:"flex",alignItems:"center",gap:5}}><Tip text="Bulk velocity of the premixed mixture through the premixer channel."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>V_premix ({uu(units,"vel")}) ⓘ:</label></Tip>
-          <NumField value={uv(units,"vel",Vpremix)} decimals={2} onCommit={v=>setVpremix(uvI(units,"vel",v))} style={{...S.inp,width:65}}/></div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <Tip text="Premixer hydraulic diameter D_h = 4·A/P (round duct: tube ID; non-round: 4·area/wetted-perimeter). Drives boundary-layer flashback (g_actual ∝ V_premix/D_h) and the integral-scale used by the turbulent core gate (l_T = 0.10·D_h). Range 5 mm (micromixer) – 200 mm (large can)."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>D_h ({uu(units,"len")}) ⓘ:</label></Tip>
+          <NumField value={uv(units,"len",D_h_premix)} decimals={4} onCommit={v=>setDhPremix(uvI(units,"len",v))} style={{...S.inp,width:80}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <Tip text="Premixer channel length from fuel injection point to flame anchor. Drives τ_res = L_premix / V_premix."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>L_premix ({uu(units,"len")}) ⓘ:</label></Tip>
+          <NumField value={uv(units,"len",Lpremix)} decimals={4} onCommit={v=>setLpremix(uvI(units,"len",v))} style={{...S.inp,width:80}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <Tip text="Bulk velocity of the premixed mixture through the premixer channel."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>V_premix ({uu(units,"vel")}) ⓘ:</label></Tip>
+          <NumField value={uv(units,"vel",Vpremix)} decimals={2} onCommit={v=>setVpremix(uvI(units,"vel",v))} style={{...S.inp,width:65}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <Tip text="Wall-shear amplification factor ε_turb. Default 0.7 (≈1.7× turbulent boundary-layer multiplier on the laminar wall-gradient estimate). Range 0 (laminar) – 2.0 (highly disturbed)."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>ε_turb ⓘ:</label></Tip>
+          <NumField value={eps_turb} decimals={2} onCommit={v=>setEpsTurb(Math.max(0,Math.min(2,+v)))} style={{...S.inp,width:55}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5,minWidth:170,flex:"1 1 200px"}}>
+          <Tip text="Residence-time-distribution multiplier. τ_res,99 = RTD · (L_premix/V_premix). Default 1.5 (1D plug flow with axial dispersion). Range 1.0 (perfect plug flow) – 3.0 (strong recirculation)."><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help",whiteSpace:"nowrap"}}>RTD mult ⓘ</label></Tip>
+          <input type="range" min="1.0" max="3.0" step="0.1" value={RTD_multiplier} onChange={e=>setRTDMultiplier(+e.target.value)} style={{flex:1,accentColor:C.accent3}}/>
+          <NumField value={RTD_multiplier} decimals={1} onCommit={v=>setRTDMultiplier(Math.max(1,Math.min(3,+v)))} style={{width:48,padding:"3px 5px",fontFamily:"monospace",color:C.accent3,fontSize:11.5,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <Tip text={`Autoignition kinetics mechanism. ${IG_MECHANISMS.find(m=>m.id===igMechanism)?.note||""}\n\nWhen H₂ > 30%, GRI-Mech 3.0 is outside its calibration range — switch to Glarborg 2018 (or FFCM-2 / Aramco when those YAMLs land).`}><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>Mechanism ⓘ:</label></Tip>
+          <select value={igMechanism} onChange={e=>setIgMechanism(e.target.value)}
+            style={{padding:"4px 8px",fontSize:10.5,fontWeight:600,fontFamily:"monospace",
+              color:ig_mech_warn?C.warm:C.accent,
+              background:C.bg,
+              border:`1px solid ${ig_mech_warn?C.warm:C.accent}50`,borderRadius:4,outline:"none"}}>
+            {IG_MECHANISMS.map(m =>
+              <option key={m.id} value={m.id} disabled={!m.bundled}>{m.label}{m.bundled?"":" (coming)"}</option>
+            )}
+          </select>
+        </div>
       </div>
-      <div style={{...S.row,gap:8,marginBottom:10}}>
-        <M l="Zukoski Blow-off Time (τ_BO)" v={(tau_BO*1000).toFixed(3)} u="ms" c={C.accent3} tip="Time for the flame to detach from the bluff body: τ_BO = D_flameholder / (1.5·S_L). Longer τ_BO ⇒ flame anchor is more stable against BLOW-OFF (flame swept downstream). This is NOT a flashback metric — flashback (flame propagating upstream) is gated by separate criteria (Lewis-von Elbe g_c, CIVB, turbulent core S_T) shown below."/>
-        <M l="Thermal Diffusivity (α_th)" v={(alphaTh*1e6).toFixed(2)} u="mm²/s" c={C.violet} tip={`Thermal diffusivity of unburnt mixture at T_mixed. α_th = k/(ρ·c_p). ${accurate&&bk.data&&bk.data.alpha_th_u?"Value from Cantera transport model.":"Free-mode approximation: α_th = 2.0e-5·(T/300)^1.7/P[atm]."}`}/>
-        <M l="Lewis-von Elbe g_c" v={g_c.toFixed(0)} u="1/s" c={C.accent} tip="Lewis–von Elbe critical boundary velocity gradient: g_c = S_L² / α_th. Flame flashes back if actual near-wall velocity gradient falls below g_c. Higher g_c = more flashback-resistant."/>
-        <M l="Autoignition Delay (τ_ign)" v={tau_ign_source==="none"?"N/A":(tau_ign_is_lower_bound?">":"")+(tau_ign*1000).toFixed(tau_ign<1?3:tau_ign<10?2:1)} u={tau_ign_source==="none"?"—":"ms"} c={tau_ign_source==="none"?C.txtMuted:C.accent2} tip={tau_ign_source==="cantera"?(bkIgn.data.ignited?"Ignition delay time from Cantera 0D const-P reactor (max dT/dt criterion) — first-principles kinetics from GRI-Mech 3.0.":`Mixture did not ignite within the ${(bkIgn.data.tau_ign_s).toFixed(1)} s integration window — τ_ign is at least this value, and the displayed margin is a lower bound.`):tau_ign_source==="spad_colk"?"Free-mode Spadaccini–Colket NG correlation: τ_ign = 3.09e-5·P^-1.12·exp(20130/T). Valid for natural-gas-like fuels only.":`Free-mode τ_ign correlation is disabled — this fuel contains ${(H2_frac*100).toFixed(0)}% H₂ or CO/NH₃ components. The Spadaccini-Colket correlation is calibrated for pure NG and is unreliable here. Switch to Accurate mode for Cantera 0D.`}/>
-        <M l="Premixer Residence (τ_res)" v={(tau_res*1000).toFixed(3)} u="ms" c={C.accent3} tip="Premixer residence time: τ_res = L_premix / V_premix. Must be shorter than τ_ign to avoid autoignition inside the premixer."/>
-        <M l="Safety Margin (τ_ign/τ_res)" v={!isFinite(ignition_margin)?"N/A":(tau_ign_is_lower_bound?">":"")+(ignition_margin>=1e4?ignition_margin.toExponential(1):ignition_margin.toFixed(1))} u="—" c={tau_ign_source==="none"?C.txtMuted:(ignition_safe?C.good:C.warm)} tip={tau_ign_is_lower_bound?"Lower bound on the safety margin — Cantera did not observe ignition within the integration window, so τ_ign (and therefore the margin) is at least this value.":"Ratio τ_ign / τ_res. Values > 3 indicate a robust margin against premixer autoignition. Values < 1 indicate the mixture can autoignite before leaving the premixer."}/>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
-          <Tip text={`PREMIXER SAFE requires BOTH criteria:\n  1) Autoignition margin τ_ign/τ_res ≥ 3 (robust; 1–3 marginal; <1 fails).\n  2) Core-flashback margin V_premix / S_T > 1/0.7 ≈ 1.43, where S_T ≈ S_L·${turb_factor.toFixed(1)} (${H2_frac>0.30?"H₂>30% — includes turbulent wrinkling + Le<1 thermodiffusive":"Le≈1 — turbulent wrinkling only"}).\nFor detailed design replace S_T with measured / CFD values.`}>
-            <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",cursor:"help",background:tau_ign_source==="none"?`${C.txtMuted}1F`:(premixer_safe?`${C.good}1F`:`${C.warm}1F`),color:tau_ign_source==="none"?C.txtMuted:(premixer_safe?C.good:C.warm),border:`1px solid ${tau_ign_source==="none"?C.txtMuted+"44":(premixer_safe?C.good+"44":C.warm+"44")}`}}>{tau_ign_source==="none"?"● NEEDS BACKEND MODE":"● "+risk_label} ⓘ</span></Tip></div>
+
+      {/* ── H₂ + GRI advisory banner ─────────────────────────────────── */}
+      {ig_mech_warn && <div style={{marginBottom:10,background:`${C.warm}12`,border:`1px solid ${C.warm}55`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.warm,fontFamily:"monospace",lineHeight:1.45}}>
+        ⚠ <strong>Mechanism advisory:</strong> Fuel contains {(H2_frac*100).toFixed(0)}% H₂. GRI-Mech 3.0 is calibrated for natural gas and is not validated above ~30% H₂ blends — switch to <strong>Glarborg 2018</strong> for accurate H₂ kinetics.
+      </div>}
+
+      {/* ── Four gates row ───────────────────────────────────────────── */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:10}}>
+        {/* Gate A — Boundary-layer flashback */}
+        <div style={{background:gateA_pass?`${C.good}10`:`${C.warm}10`,border:`1.5px solid ${gateA_pass?C.good:C.warm}55`,borderRadius:6,padding:"8px 10px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:gateA_pass?C.good:C.warm,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>{gateA_pass?"✓":"✗"} Gate A — Boundary-Layer Flashback</div>
+          <div style={{fontSize:11,fontFamily:"monospace",color:C.txt,lineHeight:1.5}}>
+            <span title="g_c = S_L² / α_th (Lewis-von Elbe critical gradient).">g_c = <strong>{g_c.toFixed(0)}</strong> 1/s</span><br/>
+            <span title={`g_actual = (8·V_premix/D_h)·(1+ε_turb) — wall shear amplification factor ε_turb=${eps_turb.toFixed(2)}.`}>g_actual = <strong style={{color:gateA_pass?C.good:C.warm}}>{g_actual.toFixed(0)}</strong> 1/s</span><br/>
+            <span style={{fontSize:10,color:C.txtMuted}}>margin = {gateA_margin.toFixed(2)}× (need &gt; 1)</span>
+          </div>
+          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Dominant for tube burners and micromixers (D_h &lt; 5 mm); secondary for swirl DLN.</div>
+        </div>
+
+        {/* Gate B — CIVB */}
+        <div style={{background:gateB_pass?`${C.good}10`:`${C.warm}10`,border:`1.5px solid ${civb_applicable?(gateB_pass?C.good:C.warm)+"55":C.txtMuted+"55"}`,borderRadius:6,padding:"8px 10px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:civb_applicable?(gateB_pass?C.good:C.warm):C.txtMuted,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>{civb_applicable?(gateB_pass?"✓":"✗"):"–"} Gate B — CIVB</div>
+          {civb_applicable ? (
+            <div style={{fontSize:11,fontFamily:"monospace",color:C.txt,lineHeight:1.5}}>
+              <span title="Π_CIVB = S_L / (S_n · V_premix · π) — Sattelmayer 2004 simplified.">Π_CIVB = <strong style={{color:gateB_pass?C.good:C.warm}}>{piCIVB.toFixed(4)}</strong></span><br/>
+              <span title={`Threshold ${civb_threshold} ${H2_frac>0.30?"(tightened for H₂ > 30%)":"(natural-gas value)"}.`}>threshold &lt; <strong>{civb_threshold.toFixed(2)}</strong></span><br/>
+              <span style={{fontSize:10,color:C.txtMuted}}>S_n = {swirlNumber.toFixed(2)}</span>
+            </div>
+          ) : (
+            <div style={{fontSize:11,fontFamily:"monospace",color:C.txtMuted,lineHeight:1.5}}>
+              <em>N/A</em> — Card 2 premixer type is "{_typeEntry.label}". CIVB applies only to swirl burners.
+            </div>
+          )}
+          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Dominant flashback mode for swirl DLN.</div>
+        </div>
+
+        {/* Gate C — Turbulent core (Bradley) */}
+        <div style={{background:gateC_pass?`${C.good}10`:`${C.warm}10`,border:`1.5px solid ${gateC_pass?C.good:C.warm}55`,borderRadius:6,padding:"8px 10px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:gateC_pass?C.good:C.warm,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>{gateC_pass?"✓":"✗"} Gate C — Turbulent Core (Bradley)</div>
+          <div style={{fontSize:11,fontFamily:"monospace",color:C.txt,lineHeight:1.5}}>
+            <span title={`Bradley S_T = ${ST_premix.toFixed(2)} m/s. Damköhler cross-check: ${ST_premix_dk.toFixed(2)} m/s.`}>S_T = <strong>{uv(units,"vel",ST_premix).toFixed(2)}</strong> {uu(units,"vel")}</span><br/>
+            <span title="V_premix / S_T — must exceed 1.43 for a 30% margin.">V/S_T = <strong style={{color:gateC_pass?C.good:C.warm}}>{v_st_margin.toFixed(2)}</strong></span><br/>
+            <span style={{fontSize:10,color:C.txtMuted}}>need &gt; 1.43 (30% margin)</span>
+          </div>
+          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Uses V_premix-based u'; Bradley/Lau/Lawes 1992.</div>
+        </div>
+
+        {/* Gate D — Autoignition */}
+        <div style={{background:gateD_pass?`${C.good}10`:`${C.warm}10`,border:`1.5px solid ${gateD_pass?C.good:C.warm}55`,borderRadius:6,padding:"8px 10px"}}>
+          <div style={{fontSize:10,fontWeight:700,color:gateD_pass?C.good:C.warm,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>{gateD_pass?"✓":isFinite(tau_ign)?"✗":"–"} Gate D — Autoignition</div>
+          {isFinite(tau_ign) ? (
+            <div style={{fontSize:11,fontFamily:"monospace",color:C.txt,lineHeight:1.5}}>
+              <span title={`τ_ign = ${(tau_ign*1000).toFixed(3)} ms. ${tau_ign_is_lower_bound?"Cantera did not observe ignition within window — lower bound.":"Cantera 0D const-P, "+IG_MECHANISMS.find(m=>m.id===igMechanism)?.label}.`}>τ_ign = <strong>{tau_ign_is_lower_bound?">":""}{(tau_ign*1000).toFixed(tau_ign<1?3:tau_ign<10?2:1)}</strong> ms</span><br/>
+              <span title={`τ_res,99 = RTD·(L_premix/V_premix) = ${RTD_multiplier.toFixed(1)}·${(tau_res_mean*1000).toFixed(3)} ms.`}>τ_res,99 = <strong>{(tau_res_99*1000).toFixed(3)}</strong> ms</span><br/>
+              <span style={{fontSize:10,color:gateD_pass?C.good:C.warm}}>margin = {tau_ign_is_lower_bound?">":""}{ign_margin_card3.toFixed(1)} (need ≥ 3)</span>
+            </div>
+          ) : (
+            <div style={{fontSize:11,fontFamily:"monospace",color:C.txtMuted,lineHeight:1.5}}>
+              <em>Cantera not running</em> — activate panel above to fire 0D const-P kinetics.
+            </div>
+          )}
+          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>{IG_MECHANISMS.find(m=>m.id===igMechanism)?.label} · RTD = {RTD_multiplier.toFixed(1)}.</div>
+        </div>
       </div>
-      <div style={{...S.row,gap:8,marginBottom:10}}>
-        <M l="Turbulent S_T Estimate" v={uv(units,"vel",S_T_est).toFixed(2)} u={uu(units,"vel")} c={C.violet} tip={`Screening estimate of turbulent flame speed: S_T ≈ S_L · ${turb_factor.toFixed(1)}. Factor ${turb_factor.toFixed(1)} accounts for ${H2_frac>0.30?"turbulent wrinkling AND Le<1 thermodiffusive acceleration (H₂ > 30%)":"turbulent wrinkling only (Le ≈ 1 hydrocarbons)"}. Replace with measured / CFD S_T for detailed design.`}/>
-        <M l="V_premix (for flashback)" v={uv(units,"vel",Vpremix).toFixed(2)} u={uu(units,"vel")} c={C.accent3} tip="Bulk velocity of the premixed mixture through the premixer channel. For the flame to not travel upstream, V_premix must exceed the turbulent flame speed S_T with margin."/>
-        <M l="Flashback Margin (V/S_T)" v={!isFinite(flashback_margin)?"N/A":flashback_margin.toFixed(2)} u="—" c={core_flashback_safe?C.good:C.warm} tip="Core flashback margin: V_premix / S_T. Must exceed 1/0.7 ≈ 1.43 for a 30% speed margin over the turbulent flame. Values < 1 mean the flame will propagate upstream into the premixer."/>
-        <M l="S_T Model" v={H2_frac>0.30?"H₂ Le<1":"Le≈1"} u="—" c={h2_thermodiffusive_warn?C.warm:C.txtDim} tip={h2_thermodiffusive_warn?"Fuel is H₂-rich (>30%). Lewis number Le < 1 → thermodiffusive instability accelerates the turbulent flame (wrinkled cellular structure). The 2.5× factor is a conservative screening value; actual S_T/S_L can exceed 3 for very lean H₂.":"Fuel Lewis number ≈ 1 (hydrocarbon-like). S_T ≈ 1.8·S_L reflects standard turbulent-wrinkling enhancement."}/>
+
+      {/* ── Combined PREMIXER STATUS ─────────────────────────────────── */}
+      <div style={{padding:"10px 14px",background:card3_status==="PASS"?`${C.good}12`:card3_status==="WARN"?`${C.warm}12`:`${C.strong}12`,
+                  border:`1.5px solid ${card3_status==="PASS"?C.good:card3_status==="WARN"?C.warm:C.strong}55`,
+                  borderRadius:6,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+          <span style={{fontSize:13,fontWeight:700,color:card3_status==="PASS"?C.good:card3_status==="WARN"?C.warm:C.strong,textTransform:"uppercase"}}>● PREMIXER STATUS: {card3_status}</span>
+          <span style={{fontSize:10,color:C.txtMuted,fontFamily:"monospace",letterSpacing:0}}>
+            {card3_status==="PASS"?"all four gates pass with margin":card3_status==="WARN"?"all gates pass but at least one is within 20% of its threshold":"at least one gate fails"}
+          </span>
+        </div>
+        <div style={{fontSize:10.5,fontFamily:"monospace",color:C.txt,lineHeight:1.55,letterSpacing:0}}>
+          {gateA_pass?"✓":"✗"} Boundary-layer flashback&nbsp;&nbsp;<span style={{color:C.txtMuted}}>g_actual={g_actual.toFixed(0)} {gateA_pass?">":"<"} g_c={g_c.toFixed(0)}</span><br/>
+          {civb_applicable?(gateB_pass?"✓":"✗"):"–"} CIVB&nbsp;&nbsp;<span style={{color:C.txtMuted}}>{civb_applicable?`Π=${piCIVB.toFixed(4)} ${gateB_pass?"<":">"} ${civb_threshold}`:"N/A (non-swirl premixer)"}</span><br/>
+          {gateC_pass?"✓":"✗"} Turbulent core flashback&nbsp;&nbsp;<span style={{color:C.txtMuted}}>V/S_T = {v_st_margin.toFixed(2)} {gateC_pass?">":"<"} 1.43</span><br/>
+          {isFinite(tau_ign)?(gateD_pass?"✓":"✗"):"–"} Autoignition margin&nbsp;&nbsp;<span style={{color:C.txtMuted}}>{isFinite(tau_ign)?`τ_ign/τ_res,99 = ${ign_margin_card3.toFixed(1)} ${gateD_pass?"≥":"<"} 3`:"Cantera off"}</span>
+        </div>
       </div>
-      <div style={{marginTop:-4,background:`${C.accent}0A`,border:`1px solid ${C.border}`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.5}}>
-        <strong style={{color:C.accent}}>ℹ PREMIXER SAFE — what it checks &amp; assumes:</strong><br/>
-        &nbsp;&nbsp;• <strong>Autoignition (0D kinetics):</strong> Cantera const-P reactor on the perfectly mixed fuel+air stream at P, φ, T_mixed from the sidebar. Gate: τ_ign/τ_res ≥ 3.<br/>
-        &nbsp;&nbsp;• <strong>Core flashback (1D laminar + turbulence factor):</strong> Cantera 1D FreeFlame gives S_L; S_T = S_L · {turb_factor.toFixed(1)} ({H2_frac>0.30?"H₂-rich: turb-wrinkling + Le<1 thermodiffusive":"hydrocarbon: turb-wrinkling only"}). Gate: V_premix / S_T &gt; 1/0.7 ≈ 1.43.<br/>
-        &nbsp;&nbsp;• <strong>Not checked here:</strong> boundary-layer flashback (see g_c above), combustion-induced-vortex-breakdown (CIVB), acoustic-driven flashback, or wall-temperature/quenching effects. Use CFD + rig data for detailed design.
-      </div>
-      {!accurate&&freeCorrValid&&<div style={{marginTop:8,background:`${C.txtMuted}10`,border:`1px solid ${C.border}`,borderRadius:5,padding:"6px 10px",fontSize:10,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.45}}>ℹ τ_ign uses the Spadaccini–Colket NG correlation — order-of-magnitude only, valid for NG-like fuels. Switch to <strong>Accurate</strong> mode for Cantera 0D constant-pressure reactor integration.</div>}
-      {!accurate&&!freeCorrValid&&<div style={{marginTop:8,background:`${C.warm}12`,border:`1px solid ${C.warm}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.warm,fontFamily:"monospace",lineHeight:1.45}}>⚠ This fuel contains {(H2_frac*100).toFixed(0)}% H₂ (or CO / NH₃). The free-mode Spadaccini–Colket τ_ign correlation is calibrated for pure natural gas and gives unreliable values for H₂ blends — it has been suppressed. Switch to <strong>Accurate</strong> mode for first-principles Cantera 0D kinetics.</div>}
-      {accurate&&bkIgn.data&&!bkIgn.data.ignited&&<div style={{marginTop:8,background:`${C.accent}10`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.45}}>ℹ Cantera 0D integrated for {bkIgn.data.tau_ign_s.toFixed(1)} s without the mixture igniting (T_peak rose from {bkIgn.data.T_mixed_inlet_K.toFixed(0)} to {bkIgn.data.T_peak.toFixed(0)} K). τ_ign is therefore at least {bkIgn.data.tau_ign_s.toFixed(1)} s — the premixer margin shown is a <em>lower bound</em>. Very long τ_ign indicates the mixture is thermo-kinetically stable at T_mixed and cannot autoignite within the premixer.</div>}
-      {h2_thermodiffusive_warn&&<div style={{marginTop:8,background:`${C.warm}12`,border:`1px solid ${C.warm}55`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.warm,fontFamily:"monospace",lineHeight:1.45}}>⚠ <strong>H₂-rich fuel ({(H2_frac*100).toFixed(0)}%) — Lewis-number advisory:</strong> Le &lt; 1 drives thermodiffusive instability and cellular flame structure, which can increase real S_T/S_L well beyond the 2.5× screening factor used here (measured values up to 3–4× for very lean H₂). The flashback margin shown is a <em>best-case</em> estimate; verify with rig data or CFD before committing to a premixer geometry.</div>}
+
+      {/* ── Cantera no-ignition diagnostic banner ─────────────────────── */}
+      {accurate&&bkIgn.data&&!bkIgn.data.ignited&&<div style={{marginTop:8,background:`${C.accent}10`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.45}}>ℹ Cantera 0D integrated for {bkIgn.data.tau_ign_s.toFixed(1)} s without the mixture igniting (T_peak rose from {bkIgn.data.T_mixed_inlet_K.toFixed(0)} to {bkIgn.data.T_peak.toFixed(0)} K). τ_ign is therefore at least {bkIgn.data.tau_ign_s.toFixed(1)} s — the autoignition margin shown is a <em>lower bound</em>. The mixture is thermo-kinetically stable at T_mixed and cannot autoignite within the premixer.</div>}
     </div>
+    {/* ═══════════ END CARD 3 ═══════════ */}
     {/* Sweep curves — banner + button. In accurate mode the charts below show correlation-based
         TRENDS unless the user clicks "Run" to fetch first-principles Cantera sweeps (slow, ~2-3 min).
         Fresh Cantera results are used automatically and marked green. */}
