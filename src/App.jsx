@@ -475,22 +475,48 @@ function damkohlerST(SL, uPrime){
   const SLs = Math.max(SL, 1e-9);
   return SLs * Math.sqrt(1 + Math.pow(uPrime/SLs, 2));
 }
-// Lefebvre 1985 / Lefebvre & Ballal 2010 LBO correlation. Returns the
-// lean blow-out equivalence ratio φ_LBO. Operates in SI throughout:
-//   K           — empirical calibration constant (default 0.025; "provisional"
-//                 until plant data lands)
-//   m_air_kg_s  — combustor air flow at the primary zone (W36 from cycle)
-//   T3_K        — combustor inlet temperature
-//   V_pz_m3     — primary-zone volume (panel-local input)
-//   P3_kPa      — combustor inlet pressure (kPa, NOT bar)
-//   LCV_MJ_kg   — lower calorific value (mass basis), MJ/kg
-// Formula: φ_LBO = K · [ m_air · exp(T_3/300) / (V_pz · P_3^1.3 · LCV) ]^0.5
-function lefebvreLBO(K, m_air_kg_s, T3_K, V_pz_m3, P3_kPa, LCV_MJ_kg){
-  const num = Math.max(m_air_kg_s, 1e-9) * Math.exp(Math.max(T3_K, 1) / 300);
-  const den = Math.max(V_pz_m3, 1e-9)
-            * Math.pow(Math.max(P3_kPa, 1), 1.3)
-            * Math.max(LCV_MJ_kg, 1e-6);
-  return K * Math.sqrt(Math.max(num / den, 0));
+// Lefebvre & Ballal, Gas Turbine Combustion (3rd ed., 2010), Eq. 5.27 (p. 185).
+// Original ref: Lefebvre 1985, J. Eng. Gas Turbines Power 107, 24-37.
+//
+//   q_LBO = (A / V_pz) · [m_A / (P_3^1.3 · exp(T_3/300))] · [D_r² / (λ_r · H_r)]
+//
+// where q_LBO is the LEAN BLOWOUT fuel/air MASS RATIO (kg/kg). For gaseous
+// fuel (no spray): D_r → 1, λ_r → 1, so the spray-evaporation term reduces
+// to 1/H_r where H_r = LCV / LCV_JP4 with LCV_JP4 = 43.5 MJ/kg.
+//
+// Equivalence-ratio form: φ_LBO = q_LBO / FAR_stoich.
+//
+// Earlier transcription errors corrected against the book on 2026-04-30:
+//   • NO square root (was using ^0.5 — wrong)
+//   • exp(T_3/300) in DENOMINATOR (was in numerator — wrong)
+//   • output is q_LBO not φ_LBO (must be divided by FAR_stoich)
+//   • LCV enters as H_r normalized to JP4 (was using LCV_MJ_kg directly)
+//
+// SI units throughout (per Lefebvre's data, fitted to real engines):
+//   A           dimensionless calibration constant (Table 5.1, p. 186)
+//   m_air_kg_s  combustor air flow into primary zone (kg/s)
+//   T3_K        combustor inlet temperature (K)
+//   V_pz_m3     primary-zone volume (m³)
+//   P3_kPa      combustor inlet pressure (kPa, NOT bar / MPa)
+//   LCV_MJ_kg   fuel lower heating value, mass basis (MJ/kg)
+//   FAR_stoich  fuel/air stoichiometric ratio (mass basis)
+//
+// Lefebvre Table 5.1 — A values from 8 production aero-engines:
+//   J 79-17A  0.042   J 79-17C  0.031   F 101  0.032   TF 41  0.013
+//   TF 39     0.037   J 85      0.064   TF 33  0.025   F 100  0.023
+// Default 0.025 matches TF 33; near the population median (0.025-0.032).
+// Provisional until plant data fits A for the specific combustor.
+function lefebvreLBO(A, m_air_kg_s, T3_K, V_pz_m3, P3_kPa, LCV_MJ_kg, FAR_stoich){
+  const H_r = Math.max(LCV_MJ_kg, 1e-6) / 43.5;        // LCV / JP4 LCV
+  const denom = Math.max(V_pz_m3, 1e-12)
+              * Math.pow(Math.max(P3_kPa, 1e-3), 1.3)
+              * Math.exp(Math.max(T3_K, 1) / 300)
+              * Math.max(H_r, 1e-6);
+  // D_r²/λ_r = 1 for gaseous fuels (no spray). Spray combustors should
+  // multiply numerator by D_r² / λ_r per Lefebvre's heterogeneous-mix
+  // extension — out of scope for the current panel.
+  const q_LBO = Math.max(A, 0) * Math.max(m_air_kg_s, 0) / denom;
+  return q_LBO / Math.max(FAR_stoich, 1e-12);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -2856,8 +2882,11 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const P3_lbo_kPa = (cycleResult && cycleResult.P3_bar)
     ? cycleResult.P3_bar * 100
     : P * 101.325;             // sidebar P is in atm internally
+  // FAR_stoich from fuel-properties helper (1/AFR_stoich, mass basis).
+  const _FAR_stoich_lbo = 1 / Math.max(_fp_card2.AFR_mass, 1e-12);
   const phi_LBO = lefebvreLBO(K_LBO, m_air_lbo, T3_lbo_K, V_pz_m3,
-                               P3_lbo_kPa, _fp_card2.LHV_mass);
+                               P3_lbo_kPa, _fp_card2.LHV_mass,
+                               _FAR_stoich_lbo);
   const phi_LBO_margin = phi - phi_LBO;
   const phi_LBO_safe = phi_LBO_margin >= 0.05;
 
@@ -2867,7 +2896,8 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
     const r = [];
     for (let T3 = 500; T3 <= 900; T3 += 25) {
       const phi_lbo_at_T = lefebvreLBO(K_LBO, m_air_lbo, T3, V_pz_m3,
-                                        P3_lbo_kPa, _fp_card2.LHV_mass);
+                                        P3_lbo_kPa, _fp_card2.LHV_mass,
+                                        _FAR_stoich_lbo);
       r.push({ T: uv(units, "T", T3), phiLBO: phi_lbo_at_T });
     }
     return r;
@@ -3190,11 +3220,11 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
             style={{width:74,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5}}>
-          <Tip text="Lefebvre calibration constant K. Default 0.025 SI is provisional — refit against measured plant φ_LBO at known T_3, P_3, m_air, V_pz when data lands. Edit here for users with their own calibration."><label style={{color:C.txtDim,cursor:"help"}}>K ⓘ</label></Tip>
+          <Tip text={`Lefebvre constant A — empirical per-engine calibration in Eq. 5.27 (Lefebvre & Ballal 2010, p. 185).\n\nReference values from production aero-engines (Lefebvre Table 5.1, p. 186):\n  J 79-17A 0.042   J 79-17C 0.031\n  F 101    0.032   TF 41    0.013\n  TF 39    0.037   J 85     0.064\n  TF 33    0.025   F 100    0.023\n\nDefault 0.025 sits at the median (TF 33). Provisional — refit from measured plant φ_LBO at known T_3, P_3, m_air, V_pz."}><label style={{color:C.txtDim,cursor:"help"}}>A ⓘ</label></Tip>
           <NumField value={K_LBO} decimals={4}
             onCommit={v=>setKLBO(Math.max(1e-5, Math.min(1, +v)))}
             style={{width:64,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-          <span style={{fontSize:9,color:C.txtMuted,fontStyle:"italic"}}>(provisional)</span>
+          <span style={{fontSize:9,color:C.txtMuted,fontStyle:"italic"}}>(provisional · Lefebvre Eq. 5.27)</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,marginLeft:"auto"}}>
           <span style={{color:C.txtDim}}>ṁ_air = {m_air_lbo.toFixed(2)} kg/s</span>
