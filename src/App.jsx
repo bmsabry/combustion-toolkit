@@ -475,6 +475,106 @@ function damkohlerST(SL, uPrime){
   const SLs = Math.max(SL, 1e-9);
   return SLs * Math.sqrt(1 + Math.pow(uPrime/SLs, 2));
 }
+// Lefebvre 1985 / Lefebvre & Ballal 2010 LBO correlation. Returns the
+// lean blow-out equivalence ratio φ_LBO. Operates in SI throughout:
+//   K           — empirical calibration constant (default 0.025; "provisional"
+//                 until plant data lands)
+//   m_air_kg_s  — combustor air flow at the primary zone (W36 from cycle)
+//   T3_K        — combustor inlet temperature
+//   V_pz_m3     — primary-zone volume (panel-local input)
+//   P3_kPa      — combustor inlet pressure (kPa, NOT bar)
+//   LCV_MJ_kg   — lower calorific value (mass basis), MJ/kg
+// Formula: φ_LBO = K · [ m_air · exp(T_3/300) / (V_pz · P_3^1.3 · LCV) ]^0.5
+function lefebvreLBO(K, m_air_kg_s, T3_K, V_pz_m3, P3_kPa, LCV_MJ_kg){
+  const num = Math.max(m_air_kg_s, 1e-9) * Math.exp(Math.max(T3_K, 1) / 300);
+  const den = Math.max(V_pz_m3, 1e-9)
+            * Math.pow(Math.max(P3_kPa, 1), 1.3)
+            * Math.max(LCV_MJ_kg, 1e-6);
+  return K * Math.sqrt(Math.max(num / den, 0));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Premixer type catalog. Each entry:
+//    label    — UI label
+//    daCrit   — function(params) → Da_crit (dimensionless)
+//    inputs   — [{ id, label, min, max, step, default, decimals, tooltip,
+//                  ref }] — secondary slider(s) shown when type is picked
+//    ref      — citation
+//    note     — short prose for the inputs row
+//  Generic enough to cover most gas-turbine premixer designs. Per-type
+//  defaults are LMS100 / GE LSI flavor; user can override on the slider.
+// ─────────────────────────────────────────────────────────────────────────
+const PREMIXER_TYPES = {
+  swirl: {
+    label: "Swirl burner",
+    ref:   "Lieuwen 2021",
+    note:  "Geometric swirl S_n governs Da_crit. Most DLN combustors land here.",
+    inputs: [
+      { id:"swirlNumber", label:"Swirl number S_n", min:0.4, max:1.2,
+        step:0.05, default:0.6, decimals:2,
+        tooltip:"Geometric swirl S_n = G_θ/(G_x·R). 0.4-0.6 weak; 0.6-1.0 typical DLN; >1.0 high-swirl. Da_crit grows ~linearly: 0.5 at S_n=0.6, 1.0 at S_n=1.0." },
+    ],
+    // Lieuwen Table 7.1: 0.5 at S_n=0.6, 1.0 at S_n=1.0; piecewise linear.
+    daCrit: (p) => {
+      const sn = +p.swirlNumber || 0.6;
+      if (sn <= 0.4) return 0.30;
+      if (sn <= 0.6) return 0.30 + (0.50 - 0.30) * (sn - 0.4) / 0.2;
+      if (sn <= 1.0) return 0.50 + (1.00 - 0.50) * (sn - 0.6) / 0.4;
+      return 1.00;
+    },
+  },
+  bluff_cylinder: {
+    label: "Cylindrical bluff body",
+    ref:   "Williams 1985",
+    note:  "Single bluff cylinder transverse to flow. D_flameholder = bluff diameter.",
+    inputs: [],
+    daCrit: () => 0.045,
+  },
+  vgutter: {
+    label: "V-gutter",
+    ref:   "Sturgess 1985",
+    note:  "Wedge-shaped flame holder. Da_crit grows with included angle.",
+    inputs: [
+      { id:"gutterAngleDeg", label:"Gutter angle (°)", min:30, max:120,
+        step:5, default:90, decimals:0,
+        tooltip:"Included angle of the V-gutter. Sturgess data: 60° → Da_crit 0.07, 90° → 0.10. Linear interp outside, capped at 30° / 120°." },
+    ],
+    daCrit: (p) => {
+      const a = +p.gutterAngleDeg || 90;
+      return 0.07 + (0.10 - 0.07) * Math.max(0, Math.min(1, (a - 60) / 30));
+    },
+  },
+  dump: {
+    label: "Sudden expansion (dump)",
+    ref:   "Lefebvre Ch.5",
+    note:  "Annular or can dump combustor. Mild Da_crit dependence on expansion ratio.",
+    inputs: [
+      { id:"expansionRatio", label:"Expansion ratio E_R", min:1.5, max:5.0,
+        step:0.1, default:2.5, decimals:1,
+        tooltip:"Area ratio A_dump / A_inlet. Typical DLN: 2-4. Da_crit ≈ 0.05 with weak (E_R/2.5)^0.1 scaling." },
+    ],
+    daCrit: (p) => 0.05 * Math.pow(Math.max(+p.expansionRatio || 2.5, 0.5) / 2.5, 0.1),
+  },
+  backstep: {
+    label: "Backward-facing step",
+    ref:   "Plee-Mellor 1979",
+    note:  "2D step flame holder. L_char = step height.",
+    inputs: [],
+    daCrit: () => 0.08,
+  },
+  perforated: {
+    label: "Perforated plate / micromixer",
+    ref:   "various",
+    note:  "Many small jets — H₂-tolerant micromixer architectures.",
+    inputs: [
+      { id:"holeDiamMm", label:"Hole diameter (mm)", min:0.5, max:5.0,
+        step:0.1, default:1.5, decimals:1,
+        tooltip:"Per-jet hole diameter. Typical micromixer: 0.5-2 mm. Da_crit ≈ 0.045 (similar to bluff body)." },
+    ],
+    daCrit: () => 0.045,
+  },
+};
+
 function lewisNumberFreeMode(fuelComp){
   // Composition is in mol % (matches the sidebar editor).
   const xH2  = (fuelComp.H2  || 0) / 100;
@@ -2393,7 +2493,7 @@ function BorghiPetersDiagram({ currentX, currentY, currentLabel, trail, hover, s
   );
 }
 
-function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",velocity,setVelocity,Lchar,setLchar,Dfh,setDfh,Lpremix,setLpremix,Vpremix,setVpremix,
+function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",velocity,setVelocity,Lchar,setLchar,Dfh,setDfh,Lpremix,setLpremix,Vpremix,setVpremix,cycleResult=null,
   // Activation state is lifted to App so it survives tab nav when the user
   // enables `keepActivated`. Both default to App-level useState(false), so
   // a browser restart always opens the panel deactivated.
@@ -2446,6 +2546,24 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // Current hover-target on the Borghi SVG. {idx} where idx=-1 means the
   // current operating point, else the trail index. null = no hover.
   const [borghiHover, setBorghiHover] = useState(null);
+
+  // ── Card 2 (Stabilization & Blowoff) panel-local state ──────────────
+  // premixerType drives the Da_crit table + secondary inputs shown.
+  const [premixerType, setPremixerType] = useState("swirl");
+  // Type-specific secondary inputs. We carry one slot per parameter so
+  // the value persists if the user switches types and switches back.
+  const [swirlNumber, setSwirlNumber] = useState(0.6);
+  const [gutterAngleDeg, setGutterAngleDeg] = useState(90);
+  const [expansionRatio, setExpansionRatio] = useState(2.5);
+  const [holeDiamMm, setHoleDiamMm] = useState(1.5);
+  // Lefebvre LBO inputs.
+  // V_pz: primary-zone volume (m³). Default 0.025 m³ — middle of the
+  // frame-GT (~0.05 m³) / aero-derivative (~0.005 m³) range.
+  const [V_pz_m3, setVpzM3] = useState(0.025);
+  // K: Lefebvre calibration constant. Default 0.025 SI — provisional;
+  // refit when plant data lands. Editable on the panel for users with
+  // their own data.
+  const [K_LBO, setKLBO] = useState(0.025);
   // useMemo / useBackendCalc — short-circuit when !flameActive
   const Tmix=useMemo(()=>flameActive?mixT(fuel,ox,phi,Tfuel,Tair):0,[flameActive,fuel,ox,phi,Tfuel,Tair]);
   const bk=useBackendCalc("flame",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate&&flameActive);
@@ -2656,6 +2774,75 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // τ_chem (Williams) = α_th / S_L²; ms for display.
   const tau_chem_ms = (alphaTh / Math.max(SL_ms*SL_ms, 1e-18)) * 1000;
 
+  // ── Card 2: Stabilization & Blowoff — derived quantities ─────────────
+  // Da_crit from the premixer-type catalog given the user's secondary
+  // input(s). Falls back to 0.05 if catalog lookup fails (defensive).
+  const _typeEntry = PREMIXER_TYPES[premixerType] || PREMIXER_TYPES.swirl;
+  const _typeParams = { swirlNumber, gutterAngleDeg, expansionRatio, holeDiamMm };
+  const Da_crit = (() => {
+    try { return Math.max(0.001, +_typeEntry.daCrit(_typeParams) || 0.05); }
+    catch { return 0.05; }
+  })();
+  // Headline ratio Da_actual / Da_crit.
+  //   > 3 : robust margin (green)
+  //   1–3 : marginal     (yellow)
+  //   ≤ 1 : blow-off     (red)
+  // Note: bo.Da reuses the existing Damköhler from the lower card (it's
+  // computed via useMemo above, so available here).
+  const Da_actual = bo.Da;
+  const Da_ratio = Da_actual / Math.max(Da_crit, 1e-9);
+  const Da_status = Da_ratio > 3 ? "green" : Da_ratio > 1 ? "yellow" : "red";
+  // V_BO_card2: the reference velocity at which Da would equal Da_crit
+  // (linear in V_ref since τ_flow ∝ 1/V).
+  const V_BO_card2 = velocity * Math.max(Da_ratio, 1e-9);
+
+  // Lefebvre LBO. Uses cycle outputs when available; falls back to
+  // sidebar T0/P + a 50 kg/s m_air placeholder otherwise.
+  const _fp_card2 = calcFuelProps(fuel, ox);                                   // {LHV_mass:MJ/kg, ...}
+  const m_air_lbo = (cycleResult && cycleResult.W36_kg_s)
+    ? cycleResult.W36_kg_s
+    : (cycleResult && cycleResult.mdot_air_kg_s)
+      ? cycleResult.mdot_air_kg_s
+      : 50.0;                  // placeholder — flag in UI when no cycle
+  const m_air_source = (cycleResult && cycleResult.W36_kg_s)
+    ? "W36 (cycle)"
+    : (cycleResult && cycleResult.mdot_air_kg_s)
+      ? "ṁ_air (cycle)"
+      : "default 50 kg/s — run Cycle for plant value";
+  const T3_lbo_K = (cycleResult && cycleResult.T3_K) ? cycleResult.T3_K : T0;
+  const P3_lbo_kPa = (cycleResult && cycleResult.P3_bar)
+    ? cycleResult.P3_bar * 100
+    : P * 101.325;             // sidebar P is in atm internally
+  const phi_LBO = lefebvreLBO(K_LBO, m_air_lbo, T3_lbo_K, V_pz_m3,
+                               P3_lbo_kPa, _fp_card2.LHV_mass);
+  const phi_LBO_margin = phi - phi_LBO;
+  const phi_LBO_safe = phi_LBO_margin >= 0.05;
+
+  // Sweep arrays for the two small charts under Card 2.
+  // φ_LBO vs T_3: T_3 from 500 to 900 K, hold m_air, V_pz, P_3, LCV fixed.
+  const lbo_T3_sweep = (() => {
+    const r = [];
+    for (let T3 = 500; T3 <= 900; T3 += 25) {
+      const phi_lbo_at_T = lefebvreLBO(K_LBO, m_air_lbo, T3, V_pz_m3,
+                                        P3_lbo_kPa, _fp_card2.LHV_mass);
+      r.push({ T: uv(units, "T", T3), phiLBO: phi_lbo_at_T });
+    }
+    return r;
+  })();
+  // V_BO vs L_char: L_char from 5 mm to 100 mm at fixed V_ref. V_BO
+  // scales linearly with L_char (since Da ∝ L_char / V_ref).
+  const vbo_Lchar_sweep = (() => {
+    const r = [];
+    for (let Lc_mm = 5; Lc_mm <= 100; Lc_mm += 5) {
+      const Lc = Lc_mm / 1000;       // m
+      // At V=V_ref, Da scales as Lc / Lchar. V_BO = V_ref * (Da_at_Lc / Da_crit).
+      const Da_at_Lc = Da_actual * (Lc / Math.max(Lchar, 1e-9));
+      const V_BO_at_Lc = velocity * Math.max(Da_at_Lc / Math.max(Da_crit, 1e-9), 1e-6);
+      r.push({ L: uv(units, "len", Lc), VBO: uv(units, "vel", V_BO_at_Lc) });
+    }
+    return r;
+  })();
+
   // (Trail effects moved above the early return — see ABOVE the
   // `if(!flameActive)` block in this same component. Hooks rules require
   // identical hook call order on every render, so the trail-reset and
@@ -2817,6 +3004,113 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       />
     </div>
     {/* ═══════════ END CARD 1 ═══════════ */}
+
+    {/* ═══════════ CARD 2 — STABILIZATION & BLOWOFF ═══════════ */}
+    {/* Phase 2 of the redesign. Generic premixer-type selector loads
+        type-aware secondary inputs; Da_crit comes from the per-type
+        function in PREMIXER_TYPES. Headline metrics: Da, Da_crit,
+        Da/Da_crit (3-state badge), V_BO, φ_LBO + margin, τ_BO (also
+        shown on the legacy Premixer card below — duplicated until
+        Step E retires the old card). Two sweep charts close out
+        the card. */}
+    <div style={S.card}>
+      <div style={S.cardT}>Stabilization &amp; Blowoff <span style={{fontSize:10,color:C.txtMuted,marginLeft:8,fontFamily:"monospace"}}>·  flame anchor stability + lean blow-out</span></div>
+
+      {/* ── Premixer-type selector ─────────────────────────────────── */}
+      <div style={{marginBottom:10,padding:"8px 10px",background:`${C.accent2}08`,border:`1px solid ${C.accent2}30`,borderRadius:6}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:_typeEntry.inputs.length?6:0}}>
+          <span style={{fontSize:10,fontWeight:700,color:C.accent2,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".8px",textTransform:"uppercase"}}>Premixer type:</span>
+          <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+            {Object.entries(PREMIXER_TYPES).map(([id, t]) => (
+              <button key={id} onClick={()=>setPremixerType(id)}
+                title={`${t.label} — Da_crit reference: ${t.ref}. ${t.note}`}
+                style={{padding:"3px 9px",fontSize:10,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px",
+                  color:premixerType===id?C.bg:C.accent2,
+                  background:premixerType===id?C.accent2:"transparent",
+                  border:`1px solid ${C.accent2}`,borderRadius:4,cursor:"pointer"}}>{t.label}</button>
+            ))}
+          </div>
+          <span style={{marginLeft:"auto",fontSize:10,color:C.txtMuted,fontFamily:"monospace"}}>{_typeEntry.note}</span>
+        </div>
+
+        {/* Type-specific secondary input(s) */}
+        {_typeEntry.inputs.map(inp => {
+          const val = _typeParams[inp.id];
+          const setter = inp.id==="swirlNumber"   ? setSwirlNumber
+                       : inp.id==="gutterAngleDeg" ? setGutterAngleDeg
+                       : inp.id==="expansionRatio" ? setExpansionRatio
+                       : inp.id==="holeDiamMm"     ? setHoleDiamMm
+                       : null;
+          if (!setter) return null;
+          return (
+            <div key={inp.id} style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
+              <Tip text={inp.tooltip}><label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help",whiteSpace:"nowrap",minWidth:130}}>{inp.label} ⓘ</label></Tip>
+              <input type="range" min={inp.min} max={inp.max} step={inp.step} value={val}
+                onChange={e=>setter(+e.target.value)}
+                style={{flex:1,accentColor:C.accent2,minWidth:120}}/>
+              <NumField value={val} decimals={inp.decimals}
+                onCommit={v=>setter(Math.max(inp.min, Math.min(inp.max, +v)))}
+                style={{width:64,padding:"3px 6px",fontFamily:"monospace",color:C.accent2,fontSize:11.5,fontWeight:700,background:C.bg,border:`1px solid ${C.accent2}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+              <span style={{fontSize:10,color:C.txtMuted,fontFamily:"monospace",whiteSpace:"nowrap"}}>{inp.ref}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── LBO calibration row (V_pz, K, m_air source) ─────────────── */}
+      <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:10,padding:"8px 10px",background:`${C.accent3}08`,border:`1px solid ${C.accent3}30`,borderRadius:6,fontSize:10.5,fontFamily:"monospace"}}>
+        <span style={{fontSize:10,fontWeight:700,color:C.accent3,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".8px",textTransform:"uppercase"}}>LBO inputs:</span>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <Tip text="Primary-zone volume V_pz (m³). Default 0.025 m³ — middle of the frame-GT (~0.05) / aero-derivative (~0.005) range. Drives the Lefebvre φ_LBO scale: smaller V_pz → higher φ_LBO."><label style={{color:C.txtDim,cursor:"help"}}>V_pz (m³) ⓘ</label></Tip>
+          <NumField value={V_pz_m3} decimals={4}
+            onCommit={v=>setVpzM3(Math.max(1e-5, Math.min(1, +v)))}
+            style={{width:74,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <Tip text="Lefebvre calibration constant K. Default 0.025 SI is provisional — refit against measured plant φ_LBO at known T_3, P_3, m_air, V_pz when data lands. Edit here for users with their own calibration."><label style={{color:C.txtDim,cursor:"help"}}>K ⓘ</label></Tip>
+          <NumField value={K_LBO} decimals={4}
+            onCommit={v=>setKLBO(Math.max(1e-5, Math.min(1, +v)))}
+            style={{width:64,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
+          <span style={{fontSize:9,color:C.txtMuted,fontStyle:"italic"}}>(provisional)</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:5,marginLeft:"auto"}}>
+          <span style={{color:C.txtDim}}>ṁ_air = {m_air_lbo.toFixed(2)} kg/s</span>
+          <span style={{fontSize:9,color:cycleResult?C.good:C.warm,fontStyle:"italic"}}>({m_air_source})</span>
+        </div>
+      </div>
+
+      {/* ── Headline metrics ────────────────────────────────────────── */}
+      <div style={{...S.row,gap:8,marginBottom:8}}>
+        <M l={`Da_crit (${_typeEntry.label})`} v={Da_crit.toFixed(3)} u="—" c={C.accent2} tip={`Critical Damköhler for ${_typeEntry.label} (ref: ${_typeEntry.ref}). Below this Da, the recirculation can no longer compensate for chemistry timescale and the flame blows off.`}/>
+        <M l="Da (actual)" v={Da_actual.toFixed(2)} u="—" c={C.accent} tip="Damköhler at the current operating point: τ_flow / τ_chem with τ_flow = L_char / V_ref. Identical formula to the lower card."/>
+        <M l="Da / Da_crit" v={Da_ratio.toFixed(2)} u="—" c={Da_status==="green"?C.good:Da_status==="yellow"?C.warm:C.strong} tip={`Margin to flame anchor blow-off. > 3 robust, 1–3 marginal, ≤ 1 imminent blow-off. Currently ${Da_status==="green"?"ROBUST":Da_status==="yellow"?"MARGINAL":"BLOW-OFF IMMINENT"}.`}/>
+        <M l="V_BO (this geometry)" v={uv(units,"vel",V_BO_card2).toFixed(1)} u={uu(units,"vel")} c={C.accent2} tip={`Reference velocity at which Da would equal Da_crit for the selected ${_typeEntry.label} geometry. V_ref = ${uv(units,"vel",velocity).toFixed(1)} ${uu(units,"vel")} → V_BO = V_ref · (Da/Da_crit).`}/>
+        <M l="φ_LBO (Lefebvre)" v={Number.isFinite(phi_LBO)?phi_LBO.toFixed(3):"N/A"} u="—" c={phi_LBO_safe?C.good:C.warm} tip="Lefebvre 1985 lean blow-out equivalence ratio: φ_LBO = K · √[ ṁ_air · exp(T_3/300) / (V_pz · P_3^1.3 · LCV) ] (SI: kPa, kg/s, m³, MJ/kg). Operate at φ ≥ φ_LBO + 0.05 for design margin."/>
+        <M l="margin = φ − φ_LBO" v={Number.isFinite(phi_LBO)?(phi-phi_LBO).toFixed(3):"N/A"} u="—" c={phi_LBO_safe?C.good:C.warm} tip="Lean-blow-out margin. ≥ 0.05 robust; < 0.05 risk of LBO at the current operating point. Does not include transient excursions — derate by another 0.05 for fast load drops."/>
+        <M l="Zukoski Blow-off (τ_BO)" v={(tau_BO*1000).toFixed(3)} u="ms" c={C.accent3} tip="Time for the flame to detach from the bluff body: τ_BO = D_flameholder / (1.5·S_L). Same value as on the legacy Premixer card below — also lives here because it characterises blow-off, not flashback."/>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
+          <Tip text={`Blow-off status combines Da margin AND φ_LBO margin.\nDa/Da_crit: ${Da_ratio.toFixed(2)} (${Da_status==="green"?"robust":Da_status==="yellow"?"marginal":"imminent"})\nφ−φ_LBO: ${(phi-phi_LBO).toFixed(3)} (${phi_LBO_safe?"≥0.05 robust":"<0.05 risk"})`}>
+            <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",cursor:"help",
+              background:(Da_status==="green"&&phi_LBO_safe)?`${C.good}1F`:(Da_status==="red"||!phi_LBO_safe)?`${C.strong}1F`:`${C.warm}1F`,
+              color:(Da_status==="green"&&phi_LBO_safe)?C.good:(Da_status==="red"||!phi_LBO_safe)?C.strong:C.warm,
+              border:`1px solid ${(Da_status==="green"&&phi_LBO_safe)?C.good+"44":(Da_status==="red"||!phi_LBO_safe)?C.strong+"44":C.warm+"44"}`}}>{(Da_status==="green"&&phi_LBO_safe)?"● ROBUST":(Da_status==="red"||!phi_LBO_safe)?"● BLOW-OFF RISK":"● MARGINAL"} ⓘ</span>
+          </Tip>
+        </div>
+      </div>
+
+      {/* ── Sweep charts ───────────────────────────────────────────── */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:8}}>
+        <div style={{background:`${C.bg2}88`,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 6px"}}>
+          <div style={{fontSize:10.5,fontWeight:700,color:C.txtDim,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase",margin:"0 4px 4px 6px"}}>φ_LBO vs T_3 (sweep 500–900 K)</div>
+          <Chart data={lbo_T3_sweep} xK="T" yK="phiLBO" xL={`T_3 (${uu(units,"T")})`} yL="φ_LBO" color={C.accent3}/>
+        </div>
+        <div style={{background:`${C.bg2}88`,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 6px"}}>
+          <div style={{fontSize:10.5,fontWeight:700,color:C.txtDim,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase",margin:"0 4px 4px 6px"}}>V_BO vs L_char (sweep 5–100 mm)</div>
+          <Chart data={vbo_Lchar_sweep} xK="L" yK="VBO" xL={`L_char (${uu(units,"len")})`} yL={`V_BO (${uu(units,"vel")})`} color={C.accent2}/>
+        </div>
+      </div>
+    </div>
+    {/* ═══════════ END CARD 2 ═══════════ */}
 
     <div style={S.card}><div style={S.cardT}>Flame Speed & Stability Analysis {accurate&&(bk.loading?<span style={{fontSize:10,color:C.accent2,marginLeft:8,fontFamily:"monospace"}}>⟳ CANTERA…</span>:bk.err?<span style={{fontSize:10,color:C.warm,marginLeft:8,fontFamily:"monospace"}}>⚠ {bk.err}</span>:bk.data?<span style={{fontSize:10,color:C.accent,marginLeft:8,fontFamily:"monospace",fontWeight:700}}>✓ CANTERA (1D FreeFlame)</span>:null)}</div>
       <div style={{...S.row,gap:8,marginBottom:10}}>
@@ -12300,6 +12594,7 @@ export default function App(){
             />}
             {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} combMode={combMode} setCombMode={setCombMode} T4_K={cycleResult?.T4_K}/>}
             {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar} Dfh={Dfh} setDfh={setDfh} Lpremix={Lpremix} setLpremix={setLpremix} Vpremix={Vpremix} setVpremix={setVpremix}
+              cycleResult={cycleResult}
               flameActive={flameActive} setFlameActive={setFlameActive}
               keepActivated={keepFlameActivated} setKeepActivated={setKeepFlameActivated}/>}
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}
