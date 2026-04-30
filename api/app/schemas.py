@@ -714,6 +714,15 @@ class CombustorMapDerived(BaseModel):
     DT_Main_F: float
     Tflame_K: float
     Tflame_F: float
+    # Single-zone bulk-flame T (alias of Tflame after the 4e28a2f refactor —
+    # mapping module now computes Tflame as Cantera HP-equilibrium at φ_Bulk).
+    # Surfaced under both names for clarity: Tflame_* preserves the legacy
+    # naming the correlation chain reads, T_Bulk_* gives the snapshot-bar UI
+    # a self-documenting key that lines up with the Cycle panel's T_Bulk.
+    T_Bulk_K: float
+    T_Bulk_F: float
+    phi_Bulk: float
+    FAR_Bulk: float
     T3_F: float
     P3_psia: float
     C3_effective_pct: float
