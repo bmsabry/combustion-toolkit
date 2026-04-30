@@ -137,18 +137,19 @@ def test_Sattelmayer_swirl_NG_H2():
     pi_civb = SL / (S_n * V_premix * math.pi)
     civb_threshold = 0.03  # tightened for H₂ > 30%
 
-    # Smoke checks only — Le picks the "dominant fuel species" diffusivity,
-    # which for 50/50 NG/H₂ defaults to CH₄ since both species tie. Strict
-    # H₂-driven Le<1 needs a mole-weighted blend that's a Phase-4 refinement.
+    # With Hawkes-Chen 2004 mole-weighted Le_fuel, a 50/50 NG/H₂ blend
+    # at lean φ has Le_eff substantially below unity (H₂ pulls it down).
+    # This is the Bechtold-Matalon thermodiffusively-unstable regime that
+    # explains H₂-rich flashback risk.
     assert SL > 0 and pi_civb > 0
     assert math.isfinite(Le) and Le > 0
+    assert Le < 1.0, f"50/50 NG/H₂ should give Le_eff < 1 (got {Le:.3f}); Hawkes-Chen mole-weighted Le_fuel must drag this below unity"
 
     above_threshold = pi_civb > civb_threshold
     print(f"\nSattelmayer 50/50: SL={SL*100:.1f} cm/s, Le={Le:.3f}")
     print(f"  Π_CIVB = {pi_civb:.4f}  (threshold for H₂-rich = {civb_threshold})")
     print(f"  → {'ABOVE threshold (flashback expected)' if above_threshold else 'BELOW threshold (safe)'}")
     print(f"  (Doc target ~0.08 above threshold; mechanism file calibration may shift this.)")
-    print(f"  (Le_eff > 1 here: backend picks CH₄ as dominant deficient species; mole-weighted blend is Phase-4 work.)")
 
 
 def test_LM6000PB_idle_blowoff():
@@ -179,3 +180,46 @@ def test_LM6000PB_idle_blowoff():
     assert ratio > 0.1, f"Da/Da_crit = {ratio:.2f}, looks unphysically low"
 
     print(f"\nLM6000 idle: SL={SL*100:.2f} cm/s, Da={Da:.3f}, Da/Da_crit={ratio:.2f}")
+
+
+def test_HawkesChen_2004_H2_enrichment_speeds_up():
+    """Hawkes & Chen, Combust Flame 138:242-258 (2004), Table 2.
+    Two flames at φ=0.52, T_u=300 K, P=101 kPa:
+        Case A: pure CH₄    → s_L = 5.27 cm/s
+        Case B: 71% CH₄ + 29% H₂ (mole) → s_L = 7.58 cm/s
+    H₂ enrichment by 29% gives ~44% increase in laminar speed.
+    Also: Case B Le_eff must be lower than Case A (B-M Eq. 6 with
+    Hawkes-Chen mole-weighted fuel diffusivity).
+    """
+    ox = {"O2": 21.0, "N2": 79.0}
+    phi = 0.52
+    T_K = 300.0
+    P_bar = 1.01
+
+    # Case A — pure CH₄
+    rA = flame_speed_run({"CH4": 100.0}, ox, phi, T_K, P_bar)
+    SL_A = rA["SL"]
+    Le_A = rA["Le_eff"]
+    LeD_A = rA["Le_D"]
+
+    # Case B — 71/29 CH₄/H₂ (Hawkes-Chen Case B)
+    rB = flame_speed_run({"CH4": 71.0, "H2": 29.0}, ox, phi, T_K, P_bar)
+    SL_B = rB["SL"]
+    Le_B = rB["Le_eff"]
+    LeD_B = rB["Le_D"]
+
+    # Headline: H₂ enrichment must speed the flame up
+    assert SL_B > SL_A, f"Case B (H₂-enriched) SL={SL_B*100:.2f} should exceed Case A SL={SL_A*100:.2f}"
+
+    # Magnitudes within ±50% of paper Table 2
+    assert _within(SL_A, 0.0527, 0.50), f"Case A SL = {SL_A*100:.2f} cm/s (paper: 5.27 cm/s ±50%)"
+    assert _within(SL_B, 0.0758, 0.50), f"Case B SL = {SL_B*100:.2f} cm/s (paper: 7.58 cm/s ±50%)"
+
+    # Le_eff must drop with H₂ enrichment (Hawkes-Chen mole-weighted Le_fuel)
+    assert Le_B < Le_A, f"Case B Le_eff={Le_B:.3f} must be < Case A Le_eff={Le_A:.3f} (H₂ pulls Le down)"
+    assert LeD_B < LeD_A, f"Case B Le_D={LeD_B:.3f} must be < Case A Le_D={LeD_A:.3f}"
+
+    print(f"\nHawkes-Chen 2004 Table 2:")
+    print(f"  Case A (pure CH₄):    SL={SL_A*100:.2f} cm/s (paper 5.27), Le_eff={Le_A:.3f}, Le_D={LeD_A:.3f}")
+    print(f"  Case B (29% H₂ mole): SL={SL_B*100:.2f} cm/s (paper 7.58), Le_eff={Le_B:.3f}, Le_D={LeD_B:.3f}")
+    print(f"  ΔSL = +{(SL_B/SL_A - 1)*100:.0f}% (paper: +44%)")

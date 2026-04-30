@@ -32,21 +32,32 @@ _EA_KCAL_PER_MOL = {
     "C8H18": 41.394,
     "CO":   47.435,
 }
+# Inert / diluent species in the fuel stream — must be excluded from
+# both the Le_fuel mole-weight and the E_a mole-weight (they do not
+# react and do not contribute a reactive Lewis number to the flame).
+_INERT_FUEL_SPECIES = {"N2", "CO2", "H2O", "AR", "HE"}
 _R_J_PER_MOL_K = 8.31446
 _KCAL_TO_J = 4184.0
 
 
 def _mole_weighted_EaR(fuel_pct: Dict[str, float]) -> float:
-    """Mole-weighted E_a/R (in K) across the fuel composition.
+    """Mole-weighted E_a/R (in K) across the *reactive* fuel composition.
 
-    Falls back to CH4 value for any species not in _EA_KCAL_PER_MOL.
+    Inerts (N₂, CO₂, H₂O, Ar) are excluded from the mean.
+    Reactive species not in the table are mapped to CH₄ as a proxy.
     """
-    total = sum(max(float(v), 0.0) for v in fuel_pct.values())
-    if total <= 0:
+    reactive_total = sum(
+        max(float(v), 0.0)
+        for k, v in fuel_pct.items()
+        if k.upper() not in _INERT_FUEL_SPECIES
+    )
+    if reactive_total <= 0:
         return _EA_KCAL_PER_MOL["CH4"] * _KCAL_TO_J / _R_J_PER_MOL_K
     Ea_kcal = 0.0
     for k, v in fuel_pct.items():
-        x = max(float(v), 0.0) / total
+        if k.upper() in _INERT_FUEL_SPECIES:
+            continue
+        x = max(float(v), 0.0) / reactive_total
         Ea_kcal += _EA_KCAL_PER_MOL.get(k, _EA_KCAL_PER_MOL["CH4"]) * x
     return Ea_kcal * _KCAL_TO_J / _R_J_PER_MOL_K
 
@@ -101,25 +112,38 @@ def run(
     # Compute BOTH fuel and O₂ Lewis numbers; Bechtold-Matalon Eq. 6
     # weights them via the activation-energy parameter A = 1 + β(Φ−1).
     # Φ ≥ 1 is the excess-to-deficient mass-ratio (Φ=1/φ for lean, φ for rich).
+    #
+    # Le_fuel for blends (e.g. NG + H₂) uses a mole-weighted aggregate
+    # diffusivity over reactive fuel species, per Hawkes & Chen 2004
+    # (Combust Flame 138:242-258). Equivalent to harmonic-mean-weighting Le_i
+    # by mole fraction. Inerts (N₂, CO₂, H₂O, Ar) in the fuel stream are
+    # excluded — they do not transport a reactive Lewis number to the flame.
     try:
         D_mix = gas.mix_diff_coeffs                       # m²/s, length n_species
-        # Dominant fuel species by mole fraction
-        fuel_keys = [k for k, v in fuel_pct.items() if v > 0]
-        if fuel_keys:
-            dominant = max(fuel_keys, key=lambda k: float(fuel_pct.get(k, 0)))
-            idx_fuel = (
-                gas.species_index(dominant)
-                if dominant in gas.species_names
-                else gas.species_index("CH4")
-            )
-        else:
-            idx_fuel = gas.species_index("CH4")
         idx_O2 = gas.species_index("O2") if "O2" in gas.species_names else 0
+        D_O2 = float(D_mix[idx_O2]) if idx_O2 < len(D_mix) else alpha_th_u
+        if not (D_O2 > 0): D_O2 = alpha_th_u
 
-        D_fuel = float(D_mix[idx_fuel]) if idx_fuel < len(D_mix) else alpha_th_u
-        D_O2   = float(D_mix[idx_O2])   if idx_O2   < len(D_mix) else alpha_th_u
-        if not (D_fuel > 0): D_fuel = alpha_th_u
-        if not (D_O2   > 0): D_O2   = alpha_th_u
+        # Mole-weighted aggregate fuel diffusivity (reactive species only)
+        x_fuel_total = 0.0
+        D_fuel_weighted = 0.0
+        for sp_name, raw_x in fuel_pct.items():
+            x = max(float(raw_x), 0.0)
+            if x <= 0:
+                continue
+            if sp_name.upper() in _INERT_FUEL_SPECIES:
+                continue
+            if sp_name not in gas.species_names:
+                continue
+            idx = gas.species_index(sp_name)
+            D_i = float(D_mix[idx]) if idx < len(D_mix) else alpha_th_u
+            if not (D_i > 0):
+                D_i = alpha_th_u
+            D_fuel_weighted += x * D_i
+            x_fuel_total    += x
+        D_fuel = (D_fuel_weighted / x_fuel_total) if x_fuel_total > 0 else alpha_th_u
+        if not (D_fuel > 0):
+            D_fuel = alpha_th_u
     except Exception:
         D_fuel = D_O2 = alpha_th_u
 
