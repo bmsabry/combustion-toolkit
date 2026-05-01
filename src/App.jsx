@@ -902,7 +902,9 @@ function _buildExportWorkbook(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.boo
   emissionsMode=true,mapW36w3=0.75,mapFracIP=2.3,mapFracOP=2.2,mapFracIM=39.9,mapFracOM=55.6,
   mapPhiIP=0.25,mapPhiOP=0.65,mapPhiIM=0.50,mapResult=null,emTfMults=null,
   linkT3=true,linkP3=true,linkFAR=true,linkFuelFlow=true,loadStepPct=5,bleedStepPct=15,
-  appMode="advanced"
+  appMode="advanced",
+  // Lifted Cantera flame results (null in free mode or before activation).
+  flameBk=null,flameBkIgn=null,flameCanteraSweeps=null
 }=ps||{};
   // ── MODE-BASED SHEET VISIBILITY ─────────────────────────────────────
   // Mirrors the panel-visibility filter on TABS_BASE so the workbook only
@@ -971,24 +973,47 @@ const s1=[["COMBUSTION ENGINEERING TOOLKIT — ProReadyEngineer LLC"],["Generate
     ...Object.entries(dryBasis(aft.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],
   ]),
   ["═══ AFT vs φ SWEEP ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed_inlet ("+uu(u,"T")+")","Adiabatic Flame Temperature ("+uu(u,"T")+")"],...Array.from({length:18},(_,i)=>{const p=0.3+i*0.04;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);const a=calcAFTx(fuel,ox,p,Tm,P,combMode);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"T",a.T_ad).toFixed(1)];})];const ws1=XLSX.utils.aoa_to_sheet(s1);ws1["!cols"]=[{wch:42},{wch:20},{wch:18}];if(_showCombustion)XLSX.utils.book_append_sheet(wb,ws1,"Flame Temp & Props");
-const SL=calcSL(fuel,phi,T_mix_phi,P)*100;const bo=calcBlowoff(fuel,phi,T_mix_phi,P,velocity,Lchar);
-// Premixer stability derived quantities (SL_ms = m/s, SL export is in user units; internal calcs use m/s).
-const _SLms=SL/100;
-const _alphaTh=alphaThU(T_mix_phi,P);
+// ── Source-of-truth selection for the Flame Speed sheet ────────────────
+// When the user is in Combustion Toolkit / Advanced mode AND the live
+// FlameSpeedPanel has a finished Cantera 1D-FreeFlame result in `flameBk`,
+// we publish the REAL Cantera S_L, T_mixed, α_th, ν_u, Le_eff, Le_E, Le_D,
+// Ma, Ze, δ_F. Otherwise we fall back to the JS Gülder correlation. This
+// fixes the long-standing bug where Combustion Toolkit users got
+// free-mode S_L in their Excel reports — sometimes off by 50–150 % vs
+// the true Cantera value at industrial DLN conditions (high-T, high-P,
+// lean φ, H₂-rich blends). The `_useCanteraFlame` flag also controls the
+// downstream Bradley S_T, Karlovitz, Borghi regime, and the φ/T/P sweeps
+// at the bottom of the sheet — they all need to use the same SL value
+// the user saw on screen, otherwise Card 2/3 outputs would be poisoned.
+const _useCanteraFlame = !!(accurate && flameBk && Number.isFinite(flameBk.SL) && flameBk.SL > 0);
+const _T_mix_used = _useCanteraFlame ? flameBk.T_mixed_inlet_K : T_mix_phi;
+const _SLms = _useCanteraFlame ? flameBk.SL : calcSL(fuel,phi,_T_mix_used,P);
+const SL    = _SLms * 100;                          // cm/s for the Excel cell
+const bo    = _useCanteraFlame
+  ? (()=>{const tau_chem=(flameBk.alpha_th_u||alphaThU(_T_mix_used,P))/Math.max(_SLms*_SLms,1e-20);const tau_flow=Lchar/Math.max(velocity,1e-20);return{SL:_SLms,tau_chem:tau_chem*1000,tau_flow:tau_flow*1000,Da:tau_flow/Math.max(tau_chem,1e-20),blowoff_velocity:Lchar/Math.max(tau_chem,1e-20),stable:(tau_flow/Math.max(tau_chem,1e-20))>1};})()
+  : calcBlowoff(fuel,phi,_T_mix_used,P,velocity,Lchar);
+const _alphaTh = _useCanteraFlame && Number.isFinite(flameBk.alpha_th_u) ? flameBk.alpha_th_u : alphaThU(_T_mix_used,P);
 const _tauBO=Dfh/Math.max(1.5*_SLms,1e-20);
 const _gc=(_SLms*_SLms)/Math.max(_alphaTh,1e-20);
-const _tauIgn=calcTauIgnFree(T_mix_phi,P);
+// τ_ign: prefer Cantera 0D autoignition reactor when available (flameBkIgn);
+// otherwise fall back to Spadaccini-Colket NG correlation (free-mode).
+const _tauIgn = (accurate && flameBkIgn && Number.isFinite(flameBkIgn.tau_ign_s) && flameBkIgn.tau_ign_s > 0)
+  ? flameBkIgn.tau_ign_s
+  : calcTauIgnFree(_T_mix_used,P);
 const _tauRes=Lpremix/Math.max(Vpremix,1e-20);
 const _ignSafe=_tauRes<_tauIgn;
 // ── Card 1 (Flame Speed & Regime Diagnostics) — derived quantities ────
-// Free-mode mirrors of the panel's calculations. Cantera-backed Le_eff /
-// Le_E / Le_D / Ma / Ze are not available here (the App-level export
-// can't trigger a 1D FreeFlame solve), so we use the panel's free-mode
-// helpers; the user can re-export from inside the app's accurate mode
-// for Cantera-backed numbers in the live UI.
-const _Le_free   = lewisNumberFreeMode(fuel);
-const _nu_free   = _alphaTh / 0.71;                              // Pr ≈ 0.71 fallback for hot air
-const _delta_F   = _alphaTh / Math.max(_SLms, 1e-9);             // Zeldovich δ_F
+// All transport / Lewis / Markstein quantities prefer the live Cantera
+// result when present. Free-mode fallback only when not in accurate mode
+// or before the panel has been activated.
+const _Le_free   = _useCanteraFlame && Number.isFinite(flameBk.Le_eff) ? flameBk.Le_eff : lewisNumberFreeMode(fuel);
+const _Le_E_used = _useCanteraFlame && Number.isFinite(flameBk.Le_E)   ? flameBk.Le_E   : _Le_free;
+const _Le_D_used = _useCanteraFlame && Number.isFinite(flameBk.Le_D)   ? flameBk.Le_D   : _Le_free;
+const _Ma_used   = _useCanteraFlame && Number.isFinite(flameBk.Ma)     ? flameBk.Ma     : null;
+const _Ze_used   = _useCanteraFlame && Number.isFinite(flameBk.Ze)     ? flameBk.Ze     : null;
+const _Tmax_used = _useCanteraFlame && Number.isFinite(flameBk.T_max)  ? flameBk.T_max  : null;
+const _nu_free   = _useCanteraFlame && Number.isFinite(flameBk.nu_u)   ? flameBk.nu_u   : (_alphaTh / 0.71);
+const _delta_F   = _useCanteraFlame && Number.isFinite(flameBk.delta_F) ? flameBk.delta_F : (_alphaTh / Math.max(_SLms, 1e-9));
 const _uPrimeRatio_x = 0.20;                                      // panel default (u'/U)
 const _uPrime_x  = _uPrimeRatio_x * Math.max(velocity, 0);
 const _lT_x      = 0.10 * Math.max(Lchar, 1e-6);
@@ -1066,7 +1091,7 @@ const s2=[
   ["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],
   ["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],
   ["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],
-  ["Unburned Temperature (T_mixed @ φ)",+uv(u,"T",T_mix_phi).toFixed(2),uu(u,"T")],
+  ["Unburned Temperature (T_mixed @ φ)",+uv(u,"T",_T_mix_used).toFixed(2),uu(u,"T")],
   ["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],
   ["Reference Velocity",+uv(u,"vel",velocity).toFixed(2),uu(u,"vel")],
   ["Characteristic Length (L_char)",+uv(u,"len",Lchar).toFixed(4),uu(u,"len")],
@@ -1085,12 +1110,14 @@ const s2=[
   [],
   ["═══ CARD 1 — Flame Speed & Regime Diagnostics ═══"],
   ["Parameter","Value","Unit"],
+  ["Source",_useCanteraFlame?"Cantera 1D FreeFlame (mixture-averaged transport, GRI-Mech 3.0)":"Free-mode JS Gülder correlation (S_L) + Bechtold-Matalon Eq. 6 fallback (Le_eff)","—"],
   ["Effective Lewis Number (Le_eff)",+_Le_free.toFixed(3),"—"],
-  ["Le_E (excess reactant)",+_Le_free.toFixed(3),"—"],
-  ["Le_D (deficient reactant)",+_Le_free.toFixed(3),"—"],
-  ["Markstein Number (Ma)","N/A","—"],
-  ["Zeldovich Number (Ze)","N/A","—"],
-  ["Note","Le_E/Le_D/Ma/Ze require Cantera. Activate Accurate mode in the live panel for distinct values per Bechtold-Matalon Eq. 6 + Hawkes-Chen 2004 fuel weighting.",""],
+  ["Le_E (excess reactant)",+_Le_E_used.toFixed(3),"—"],
+  ["Le_D (deficient reactant)",+_Le_D_used.toFixed(3),"—"],
+  ["Markstein Number (Ma)",_Ma_used==null?"N/A":+_Ma_used.toFixed(3),"—"],
+  ["Zeldovich Number (Ze)",_Ze_used==null?"N/A":+_Ze_used.toFixed(2),"—"],
+  ["Flame Temperature T_max (Cantera burnt-side)",_Tmax_used==null?"N/A":+uv(u,"T",_Tmax_used).toFixed(1),uu(u,"T")],
+  ...(_useCanteraFlame?[]:[["Note","Le_E/Le_D/Ma/Ze/T_max require Cantera. Activate the Flame Speed panel in Combustion Toolkit / Advanced mode and re-export.",""]]),
   ["Thermal Diffusivity (α_th, unburnt)",+(_alphaTh*1e6).toFixed(4),"mm²/s"],
   ["Kinematic Viscosity (ν, unburnt)",+(_nu_free*1e6).toFixed(4),"mm²/s"],
   ["Zeldovich Flame Thickness (δ_F)",+(_delta_F*1e6).toFixed(2),"μm"],
@@ -1177,16 +1204,25 @@ const s2=[
   ["Note","Card 1/2/3 outputs above use panel default geometry (D_h=40 mm, V_pz=0.025 m³, S_n=0.6, swirl-type, ε_turb=0.7, RTD=1.5, K_LBO=6.29 — premixed-gas calibration). Customise these in the live panel and re-export for site-specific values.",""],
   [],
   ["═══ S_L vs Equivalence Ratio ═══"],
+  [`Source: ${(_useCanteraFlame && flameCanteraSweeps && flameCanteraSweeps.phi && flameCanteraSweeps.phi.length)?"Cantera 1D FreeFlame sweep (run from the Flame Speed panel)":"Free-mode JS Gülder correlation"}`],
   ["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],
-  ...Array.from({length:13},(_,i)=>{const p=0.4+i*0.05;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"SL",calcSL(fuel,p,Tm,P)*100).toFixed(4)]}),
+  ...((_useCanteraFlame && flameCanteraSweeps && Array.isArray(flameCanteraSweeps.phi) && flameCanteraSweeps.phi.length>0)
+    ? flameCanteraSweeps.phi.filter(pt=>pt && pt.converged!==false).map(pt=>{const p=+pt.x;const Tm=Number.isFinite(pt.T_mixed_inlet_K)&&pt.T_mixed_inlet_K>0?pt.T_mixed_inlet_K:mixT(fuel,ox,p,T_fuel??T0,T_air??T0);const SLcmps=(+pt.SL)*100;return[+p.toFixed(3),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"SL",SLcmps).toFixed(4)];})
+    : Array.from({length:13},(_,i)=>{const p=0.4+i*0.05;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"SL",calcSL(fuel,p,Tm,P)*100).toFixed(4)]})),
   [],
   ["═══ S_L vs Pressure (@T_mixed) ═══"],
+  [`Source: ${(_useCanteraFlame && flameCanteraSweeps && flameCanteraSweeps.P && flameCanteraSweeps.P.length)?"Cantera 1D FreeFlame sweep":"Free-mode JS Gülder correlation"}`],
   ["Pressure ("+uu(u,"P")+")","Flame Speed ("+uu(u,"SL")+")"],
-  ...[0.5,1,2,5,10,20,40].map(p=>[+uv(u,"P",p).toFixed(2),+uv(u,"SL",calcSL(fuel,phi,T_mix_phi,p)*100).toFixed(4)]),
+  ...((_useCanteraFlame && flameCanteraSweeps && Array.isArray(flameCanteraSweeps.P) && flameCanteraSweeps.P.length>0)
+    ? flameCanteraSweeps.P.filter(pt=>pt && pt.converged!==false).map(pt=>{const Pa_atm=(+pt.x)/1.01325;return[+uv(u,"P",Pa_atm).toFixed(2),+uv(u,"SL",(+pt.SL)*100).toFixed(4)];})
+    : [0.5,1,2,5,10,20,40].map(p=>[+uv(u,"P",p).toFixed(2),+uv(u,"SL",calcSL(fuel,phi,T_mix_phi,p)*100).toFixed(4)])),
   [],
   ["═══ S_L vs Unburned Temperature (user sweep) ═══"],
+  [`Source: ${(_useCanteraFlame && flameCanteraSweeps && flameCanteraSweeps.T && flameCanteraSweeps.T.length)?"Cantera 1D FreeFlame sweep":"Free-mode JS Gülder correlation"}`],
   ["Temperature ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],
-  ...Array.from({length:23},(_,i)=>{const t=250+i*25;return[+uv(u,"T",t).toFixed(1),+uv(u,"SL",calcSL(fuel,phi,t,P)*100).toFixed(4)]}),
+  ...((_useCanteraFlame && flameCanteraSweeps && Array.isArray(flameCanteraSweeps.T) && flameCanteraSweeps.T.length>0)
+    ? flameCanteraSweeps.T.filter(pt=>pt && pt.converged!==false).map(pt=>[+uv(u,"T",+pt.x).toFixed(1),+uv(u,"SL",(+pt.SL)*100).toFixed(4)])
+    : Array.from({length:23},(_,i)=>{const t=250+i*25;return[+uv(u,"T",t).toFixed(1),+uv(u,"SL",calcSL(fuel,phi,t,P)*100).toFixed(4)]})),
   [],
   ["═══ Damköhler vs Velocity ═══"],
   ["Velocity ("+uu(u,"vel")+")","Damköhler (Da)","Status"],
@@ -2878,7 +2914,10 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // Activation state is lifted to App so it survives tab nav when the user
   // enables `keepActivated`. Both default to App-level useState(false), so
   // a browser restart always opens the panel deactivated.
-  flameActive,setFlameActive,keepActivated,setKeepActivated}){
+  flameActive,setFlameActive,keepActivated,setKeepActivated,
+  // Lift Cantera results to App so the Excel export can publish them
+  // instead of falling back to the free-mode JS Gülder correlation.
+  onBkUpdate,onBkIgnUpdate,onSweepsUpdate}){
   // ─── HOOKS ─────────────────────────────────────────────────────────────
   // ALL hooks live above the activate-guard early return. Each does a
   // FULL no-op (returns a safe default, fires no backend call) when
@@ -2895,6 +2934,9 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // (flameActive/setFlameActive now arrive as props from App so the state
   //  survives tab nav when the user enables the keep-activated preference.)
   const [canteraSweeps,setCanteraSweeps]=useState(null);  // {hash, phi:[...], T:[...], P:[...]}
+  // Lift Cantera sweeps to App so the Excel export can use the real
+  // 1D-FreeFlame phi/T/P sweeps instead of the calcSL JS approximation.
+  useEffect(()=>{onSweepsUpdate&&onSweepsUpdate(canteraSweeps);},[canteraSweeps,onSweepsUpdate]);
   const [sweepErr,setSweepErr]=useState(null);
   const [sweepRunning,setSweepRunning]=useState(false);
   // ── Card 1 (Flame Speed & Regime Diagnostics) panel-local state ──────
@@ -2974,6 +3016,11 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const Tmix=useMemo(()=>flameActive?mixT(fuel,ox,phi,Tfuel,Tair):0,[flameActive,fuel,ox,phi,Tfuel,Tair]);
   const bk=useBackendCalc("flame",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),domain_length_m:0.03,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate&&flameActive);
   const bkIgn=useBackendCalc("autoignition",{fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),max_time_s:10.0,T_fuel_K:Tfuel,T_air_K:Tair,mechanism:igMechanism,WFR,water_mode:waterMode},accurate&&flameActive);
+  // Push the Cantera result up to App so exportToExcel can use it instead
+  // of the free-mode JS correlation. Setter is stable; effect re-fires when
+  // the data object identity changes.
+  useEffect(()=>{onBkUpdate&&onBkUpdate(bk.data||null);},[bk.data,onBkUpdate]);
+  useEffect(()=>{onBkIgnUpdate&&onBkIgnUpdate(bkIgn.data||null);},[bkIgn.data,onBkIgnUpdate]);
   // sweepHash and sweepIsFresh are cheap; safe to compute always.
   const sweepHash=useMemo(()=>JSON.stringify({fuel:nonzero(fuel),oxidizer:nonzero(ox),phi,T0,P:atmToBar(P),Tfuel,Tair}),[fuel,ox,phi,T0,P,Tfuel,Tair]);
   const sweepIsFresh=flameActive&&accurate&&canteraSweeps&&canteraSweeps.hash===sweepHash;
@@ -12589,6 +12636,14 @@ export default function App(){
   // flag when the user navigates AWAY from the owning panel UNLESS the
   // matching keep* preference is on.
   const[flameActive,setFlameActive]=useState(false);
+  // Cantera flame results lifted from FlameSpeedPanel so the Excel exporter
+  // can write the LIVE Cantera S_L / Le_eff / Le_E / Le_D / Ma / Ze / δ_F
+  // / α_th / ν_u / T_max instead of falling back to the free-mode JS Gülder
+  // correlation. Without this lift, the Excel sheet shipped low-fidelity
+  // numbers even when the user was in Combustion Toolkit / Cantera mode.
+  const[flameBk,setFlameBk]=useState(null);
+  const[flameBkIgn,setFlameBkIgn]=useState(null);
+  const[flameCanteraSweeps,setFlameCanteraSweeps]=useState(null);
   const[psrActive,setPsrActive]=useState(false);
   const[keepFlameActivated,setKeepFlameActivated]=useState(()=>{
     try{return localStorage.getItem("ctk.keepFlameActivated.v1")==="1";}catch(e){return false;}
@@ -12985,6 +13040,9 @@ export default function App(){
   // panelState is built AFTER cycleResult to avoid temporal-dead-zone reference.
   // Consumed by exportToExcel button further below; safe to declare here.
   const panelState={velocity,Lchar,Dfh,Lpremix,Vpremix,tau_psr,L_pfr,V_pfr,T_fuel,T_air:T0,measO2,measCO2,combMode,psrSeed,eqConstraint,integration,heatLossFrac,mechanism,WFR,waterMode,T_water,accurate:accurate&&!!auth.hasOnlineAccess,
+    // Cantera flame results lifted from FlameSpeedPanel — the export now
+    // publishes real 1D-FreeFlame numbers when these are present.
+    flameBk,flameBkIgn,flameCanteraSweeps,
     // ── Exhaust slip measurements + fuel/money (used by ExhaustPanel η_c block) ──
     measCO,measUHC,measH2,fuelFlowKgs,fuelCostUsdPerMmbtuLhv,costPeriod,
     cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,cycleResult,
@@ -13493,7 +13551,8 @@ export default function App(){
             {tab==="flame"&&<FlameSpeedPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} velocity={velocity} setVelocity={setVelocity} Lchar={Lchar} setLchar={setLchar} Dfh={Dfh} setDfh={setDfh} Lpremix={Lpremix} setLpremix={setLpremix} Vpremix={Vpremix} setVpremix={setVpremix}
               cycleResult={cycleResult}
               flameActive={flameActive} setFlameActive={setFlameActive}
-              keepActivated={keepFlameActivated} setKeepActivated={setKeepFlameActivated}/>}
+              keepActivated={keepFlameActivated} setKeepActivated={setKeepFlameActivated}
+              onBkUpdate={setFlameBk} onBkIgnUpdate={setFlameBkIgn} onSweepsUpdate={setFlameCanteraSweeps}/>}
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}
               psrActive={psrActive} setPsrActive={setPsrActive}
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
