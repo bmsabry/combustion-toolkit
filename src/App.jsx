@@ -2790,8 +2790,8 @@ function BorghiPetersDiagram({ currentX, currentY, currentLabel, trail, hover, s
   // visual center in log-log space. Sized to read at the export resolution
   // and the on-screen viewBox (720×440). All paths use stroke from the
   // region's accent color so they stay legible on the tinted background.
-  const FlameIcon = ({type, cx, cy, color}) => {
-    const t = `translate(${cx} ${cy})`;
+  const FlameIcon = ({type, cx, cy, color, scale=1}) => {
+    const t = `translate(${cx} ${cy})${scale!==1?` scale(${scale})`:""}`;
     if (type === "laminar") {
       // Smooth, stable single-peak flame — a teardrop with base line.
       return (
@@ -2881,13 +2881,19 @@ function BorghiPetersDiagram({ currentX, currentY, currentLabel, trail, hover, s
         <text x={xToPx(3.2)} y={yToPx(1.55)} fill={C.strong} fontSize="11" fontFamily="monospace" fontWeight="700">Ka = 1</text>
         <text x={xToPx(2.7)} y={yToPx(2.75)} fill={C.strong} fontSize="11" fontFamily="monospace" fontWeight="700">Ka = 100</text>
         <text x={xToPx(0.3)} y={yToPx(1.0)} fill={C.warm} fontSize="11" fontFamily="monospace" fontWeight="700">Da = 1</text>
-        <text x={xToPx(0.2)} y={yToPx(-0.7)} fill={C.accent3} fontSize="11" fontFamily="monospace" fontWeight="700">Re_T = 1</text>
+        {/* Re_T=1 label — pushed against the LEFT edge so it doesn't crash
+            the LAMINAR flame glyph that lives in the wedge corner. */}
+        <text x={xToPx(0.03)} y={yToPx(-0.40)} fill={C.accent3} fontSize="11" fontFamily="monospace" fontWeight="700">Re_T = 1</text>
 
         {/* ── Regime labels with flame visualizations ── */}
-        {/* LAMINAR — bottom-left corner */}
-        <FlameIcon type="laminar" cx={xToPx(0.55)} cy={yToPx(-0.55)} color={C.accent3}/>
-        <text x={xToPx(0.55)} y={yToPx(-0.55)+30} fill={C.accent3} fontSize="11.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="800" letterSpacing=".6px" textAnchor="middle">LAMINAR</text>
-        <text x={xToPx(0.55)} y={yToPx(-0.55)+42} fill={C.txtMuted} fontSize="9.5" fontStyle="italic" textAnchor="middle">smooth, stable flame</text>
+        {/* LAMINAR — pushed deep into the wedge corner (well BELOW the
+            Re_T=1 diagonal which at log_x≈0.45 sits at log_y≈-0.45) and
+            scaled down so the icon + label + descriptor fit inside the
+            ~1-decade-by-1-decade wedge without clipping the chart bottom
+            or being crossed by the Re_T=1 line. */}
+        <FlameIcon type="laminar" cx={xToPx(0.45)} cy={yToPx(-0.78)} color={C.accent3} scale={0.65}/>
+        <text x={xToPx(0.45)} y={yToPx(-0.78)+18} fill={C.accent3} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="800" letterSpacing=".5px" textAnchor="middle">LAMINAR</text>
+        <text x={xToPx(0.45)} y={yToPx(-0.78)+29} fill={C.txtMuted} fontSize="9" fontStyle="italic" textAnchor="middle">smooth, stable flame</text>
 
         {/* FLAMELET — bottom-right area */}
         <FlameIcon type="flamelet" cx={xToPx(3.0)} cy={yToPx(-0.25)} color={C.good}/>
