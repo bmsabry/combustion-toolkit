@@ -2935,6 +2935,15 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const uPrime_premix = uPrimeRatio * Math.max(Vpremix, 0);
   const lT_premix = 0.10 * Math.max(D_h_premix, 1e-6);    // l_T = 0.1·D_h
 
+  // H₂ fraction in the fuel — needed by every Card 3 gate that has an
+  // H₂-rich branch (confined-flame √σ_ρ correction in Gate A, tightened
+  // CIVB threshold in Gate B, GRI-3.0 mechanism advisory in Gate D, the
+  // turbulent-flame-speed multiplier in the core flashback gate, and
+  // the thermodiffusive Le<1 advisory). Declared HERE — before any of
+  // those references — to avoid a Temporal Dead Zone error that turned
+  // the whole panel into a black screen on the live site.
+  const H2_frac = (fuel.H2 || 0) / Math.max(Object.values(fuel).reduce((a,b)=>a+b,0), 1e-9);
+
   // ── Gate A: boundary-layer flashback (Lewis-von Elbe / Lieuwen 2021) ──
   // Per Lieuwen, "Unsteady Combustor Physics" 2nd ed., Ch. 10 §10.1.2.1
   // (pp. 382-385). Flashback condition (Eq. 10.4):
@@ -3045,7 +3054,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   //                   for the margin (never fall through to the NG-only correlation).
   //   Free mode     → Spadaccini–Colket NG correlation. Suppressed for fuels with H2>5% or
   //                   non-hydrocarbon species, where the correlation is outside its calibration.
-  const H2_frac=(fuel.H2||0)/Math.max(Object.values(fuel).reduce((a,b)=>a+b,0),1e-9);
+  // (H2_frac already declared at the top of Card 3 — see TDZ-fix comment above.)
   const nonNGFuel=H2_frac>0.05||(fuel.CO||0)>0.01||(fuel.NH3||0)>0;
   const freeCorrValid=!nonNGFuel;
   const accurateIgn=accurate&&bkIgn.data;
