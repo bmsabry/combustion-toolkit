@@ -50,8 +50,8 @@ const BUSY_LABELS = {
   load_sweep:        "Running load sweep…",
 };
 const UC = {
-  SI: { T:{u:"K",from:v=>v,to:v=>v}, P:{u:"atm",from:v=>v,to:v=>v}, vel:{u:"m/s",from:v=>v,to:v=>v}, len:{u:"m",from:v=>v,to:v=>v}, lenSmall:{u:"cm",from:v=>v,to:v=>v}, SL:{u:"cm/s",from:v=>v,to:v=>v}, mass:{u:"kg",from:v=>v,to:v=>v}, energy_mass:{u:"MJ/kg",from:v=>v,to:v=>v}, energy_vol:{u:"MJ/m³",from:v=>v,to:v=>v}, cp:{u:"J/(mol·K)",from:v=>v,to:v=>v}, h_mol:{u:"kJ/mol",from:v=>v,to:v=>v}, s_mol:{u:"J/(mol·K)",from:v=>v,to:v=>v}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"kg/kg",from:v=>v,to:v=>v} },
-  ENG: { T:{u:"°F",from:K=>(K-273.15)*9/5+32,to:F=>(F-32)*5/9+273.15}, P:{u:"psia",from:a=>a*14.696,to:p=>p/14.696}, vel:{u:"ft/s",from:m=>m*3.28084,to:f=>f/3.28084}, len:{u:"ft",from:m=>m*3.28084,to:f=>f/3.28084}, lenSmall:{u:"in",from:c=>c/2.54,to:i=>i*2.54}, SL:{u:"ft/s",from:c=>c/30.48,to:f=>f*30.48}, mass:{u:"lb",from:k=>k*2.20462,to:l=>l/2.20462}, energy_mass:{u:"BTU/lb",from:v=>v*429.923,to:v=>v/429.923}, energy_vol:{u:"BTU/scf",from:v=>v*26.839,to:v=>v/26.839}, cp:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, h_mol:{u:"BTU/lbmol",from:v=>v*429.923,to:v=>v/429.923}, s_mol:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"lb/lb",from:v=>v,to:v=>v} }
+  SI: { T:{u:"K",from:v=>v,to:v=>v}, P:{u:"atm",from:v=>v,to:v=>v}, vel:{u:"m/s",from:v=>v,to:v=>v}, len:{u:"m",from:v=>v,to:v=>v}, lenSmall:{u:"cm",from:v=>v,to:v=>v}, SL:{u:"cm/s",from:v=>v,to:v=>v}, mass:{u:"kg",from:v=>v,to:v=>v}, vol:{u:"m³",from:v=>v,to:v=>v}, mass_flow:{u:"kg/s",from:v=>v,to:v=>v}, energy_mass:{u:"MJ/kg",from:v=>v,to:v=>v}, energy_vol:{u:"MJ/m³",from:v=>v,to:v=>v}, cp:{u:"J/(mol·K)",from:v=>v,to:v=>v}, h_mol:{u:"kJ/mol",from:v=>v,to:v=>v}, s_mol:{u:"J/(mol·K)",from:v=>v,to:v=>v}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"kg/kg",from:v=>v,to:v=>v} },
+  ENG: { T:{u:"°F",from:K=>(K-273.15)*9/5+32,to:F=>(F-32)*5/9+273.15}, P:{u:"psia",from:a=>a*14.696,to:p=>p/14.696}, vel:{u:"ft/s",from:m=>m*3.28084,to:f=>f/3.28084}, len:{u:"ft",from:m=>m*3.28084,to:f=>f/3.28084}, lenSmall:{u:"in",from:c=>c/2.54,to:i=>i*2.54}, SL:{u:"ft/s",from:c=>c/30.48,to:f=>f*30.48}, mass:{u:"lb",from:k=>k*2.20462,to:l=>l/2.20462}, vol:{u:"ft³",from:m3=>m3*35.3147,to:f3=>f3/35.3147}, mass_flow:{u:"lb/s",from:k=>k*2.20462,to:l=>l/2.20462}, energy_mass:{u:"BTU/lb",from:v=>v*429.923,to:v=>v/429.923}, energy_vol:{u:"BTU/scf",from:v=>v*26.839,to:v=>v/26.839}, cp:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, h_mol:{u:"BTU/lbmol",from:v=>v*429.923,to:v=>v/429.923}, s_mol:{u:"BTU/(lbmol·°F)",from:v=>v*0.000238846*453.592*5/9,to:v=>v/(0.000238846*453.592*5/9)}, time:{u:"ms",from:v=>v,to:v=>v}, afr_mass:{u:"lb/lb",from:v=>v,to:v=>v} }
 };
 function uv(units,key,val){return UC[units][key].from(val);}
 function uvI(units,key,disp){return UC[units][key].to(disp);}  // display units -> SI
@@ -1022,8 +1022,8 @@ const s2=[
   ["V_BO (this geometry)",+uv(u,"vel",_V_BO_x).toFixed(2),uu(u,"vel")],
   ["─── Lefebvre LBO (Lefebvre & Ballal 2010 Eq. 5.27) ───","",""],
   ["Lefebvre A constant (premixed-gas calibration)",+_K_LBO_x.toFixed(4),"—"],
-  ["Primary-zone volume V_pz (default)",+_Vpz_m3_x.toFixed(4),"m³"],
-  ["Combustor air ṁ_air (from cycle if available)",+_m_air_lbo.toFixed(2),"kg/s"],
+  ["Primary-zone volume V_pz (default)",+uv(u,"vol",_Vpz_m3_x).toFixed(4),uu(u,"vol")],
+  ["Combustor air ṁ_air (from cycle if available)",+uv(u,"mass_flow",_m_air_lbo).toFixed(2),uu(u,"mass_flow")],
   ["T_3 (combustor inlet T)",+uv(u,"T",_T3_lbo_K).toFixed(1),uu(u,"T")],
   ["P_3 (combustor inlet P)",+(_P3_lbo_kPa).toFixed(1),"kPa"],
   ["q_LBO (fuel/air mass ratio at LBO)",+_q_LBO_x.toExponential(3),"kg/kg"],
@@ -1056,7 +1056,7 @@ const s2=[
   ["g_actual (Poiseuille × turb)",+_g_u_actual_x.toFixed(1),"1/s"],
   ["Flashback Karlovitz Ka_fb",isFinite(_Ka_fb_x)?+_Ka_fb_x.toFixed(2):"N/A","—"],
   ["margin = g_actual / g_c_eff",+_gateA_marg.toFixed(2),"×"],
-  ["Shaffer 2013 burner-tip T (Eq. 4)",+_shaffer_T_tip.toFixed(0),"K"],
+  ["Shaffer 2013 burner-tip T (Eq. 4)",+uv(u,"T",_shaffer_T_tip).toFixed(0),uu(u,"T")],
   ["Gate A Status",_gateA_pass?"PASS":"FAIL","—"],
   ["─── Gate B: CIVB (Sattelmayer 2004) ───","",""],
   ["Π_CIVB = S_L / (S_n·V_premix·π)",+_piCIVB_x.toFixed(4),"—"],
@@ -3580,7 +3580,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
           <span style={{fontSize:9,color:C.txtMuted,fontStyle:"italic"}}>(provisional · Lefebvre Eq. 5.27)</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,marginLeft:"auto"}}>
-          <span style={{color:C.txtDim}}>ṁ_air = {m_air_lbo.toFixed(2)} kg/s</span>
+          <span style={{color:C.txtDim}}>ṁ_air = {uv(units,"mass_flow",m_air_lbo).toFixed(2)} {uu(units,"mass_flow")}</span>
           <span style={{fontSize:9,color:cycleResult?C.good:C.warm,fontStyle:"italic"}}>({m_air_source})</span>
         </div>
       </div>
@@ -3721,7 +3721,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
             <span title={`Actual wall gradient: 8·V_premix/D_h Poiseuille estimate × (1+ε_turb)=${(1+eps_turb).toFixed(2)}. Lieuwen p. 385 reports g_u,turbulent ≈ 3·g_u,laminar (Eichler-Sattelmayer).`}>g_actual = <strong style={{color:gateA_pass?C.good:C.warm}}>{g_actual.toFixed(0)}</strong> 1/s</span><br/>
             <span title={`Flashback Karlovitz Ka_fb = g_u·δ_F/s_d^u (Lieuwen Eq. 10.5). Pass: Ka_fb ≥ 1.`}>Ka_fb = <strong>{Number.isFinite(Ka_flashback)?Ka_flashback.toFixed(2):"—"}</strong> <span style={{color:C.txtMuted}}>(need ≥ 1)</span></span><br/>
             <span style={{fontSize:10,color:C.txtMuted}}>margin = {gateA_margin.toFixed(2)}×</span><br/>
-            <span title={`Shaffer-Duan-McDonell 2013 (J Eng GT 135:011502) Eq. 4 — predicted burner-tip temperature at flashback as a linear function of fuel composition + AFT:\n  T_tip = -1.58·H₂% - 3.63·CO% - 4.28·CH₄% + 0.38·AFT [K]\nPer Shaffer §4.5, this is what physically drives BLF runaway in H₂-rich blends — heat transfer to the burner rim raises local Tu, raises S_L, reduces δ_q, all of which lower g_c. Using AFT = ${_AFT_card3.toFixed(0)} K (${(accurate&&bk.data&&bk.data.T_max)?"Cantera flame T_max":"1800 K placeholder"}). Active cooling typically caps T_tip ≤ 600 K.`} style={{fontSize:10,color:shaffer_tip_T_K>500?C.warm:C.txtMuted}}>T_tip (Shaffer) = <strong>{shaffer_tip_T_K.toFixed(0)}</strong> K{shaffer_tip_T_K>500?<span style={{marginLeft:6,color:C.warm,fontWeight:600}}>⚠ &gt;500 K</span>:""}</span>
+            <span title={`Shaffer-Duan-McDonell 2013 (J Eng GT 135:011502) Eq. 4 — predicted burner-tip temperature at flashback as a linear function of fuel composition + AFT:\n  T_tip = -1.58·H₂% - 3.63·CO% - 4.28·CH₄% + 0.38·AFT [K, internally]\nPer Shaffer §4.5, this is what physically drives BLF runaway in H₂-rich blends — heat transfer to the burner rim raises local Tu, raises S_L, reduces δ_q, all of which lower g_c. Using AFT = ${uv(units,"T",_AFT_card3).toFixed(0)} ${uu(units,"T")} (${(accurate&&bk.data&&bk.data.T_max)?"Cantera flame T_max":"1800 K placeholder"}). Active cooling typically caps T_tip ≤ ${uv(units,"T",600).toFixed(0)} ${uu(units,"T")} (≈600 K).`} style={{fontSize:10,color:shaffer_tip_T_K>500?C.warm:C.txtMuted}}>T_tip (Shaffer) = <strong>{uv(units,"T",shaffer_tip_T_K).toFixed(0)}</strong> {uu(units,"T")}{shaffer_tip_T_K>500?<span style={{marginLeft:6,color:C.warm,fontWeight:600}}>⚠ &gt;{uv(units,"T",500).toFixed(0)} {uu(units,"T")}</span>:""}</span>
           </div>
           <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Lieuwen Eq. 10.4-10.6 + Shaffer 2013 Eq. 4 tip-T predictor. Dominant for tube burners and micromixers; H₂ flames {H2_frac>0.30?"(>30% — √σ_ρ confinement applied)":"hit this gate hardest"}.</div>
         </div>
@@ -3747,7 +3747,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         <div style={{background:gateC_pass?`${C.good}10`:`${C.warm}10`,border:`1.5px solid ${gateC_pass?C.good:C.warm}55`,borderRadius:6,padding:"8px 10px"}}>
           <div style={{fontSize:10,fontWeight:700,color:gateC_pass?C.good:C.warm,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>{gateC_pass?"✓":"✗"} Gate C — Turbulent Core (Bradley)</div>
           <div style={{fontSize:11,fontFamily:"monospace",color:C.txt,lineHeight:1.5}}>
-            <span title={`Bradley S_T = ${ST_premix.toFixed(2)} m/s. Damköhler cross-check: ${ST_premix_dk.toFixed(2)} m/s.`}>S_T = <strong>{uv(units,"vel",ST_premix).toFixed(2)}</strong> {uu(units,"vel")}</span><br/>
+            <span title={`Bradley S_T = ${uv(units,"vel",ST_premix).toFixed(2)} ${uu(units,"vel")}. Damköhler cross-check: ${uv(units,"vel",ST_premix_dk).toFixed(2)} ${uu(units,"vel")}.`}>S_T = <strong>{uv(units,"vel",ST_premix).toFixed(2)}</strong> {uu(units,"vel")}</span><br/>
             <span title="V_premix / S_T — must exceed 1.43 for a 30% margin.">V/S_T = <strong style={{color:gateC_pass?C.good:C.warm}}>{v_st_margin.toFixed(2)}</strong></span><br/>
             <span style={{fontSize:10,color:C.txtMuted}}>need &gt; 1.43 (30% margin)</span>
           </div>
@@ -3791,7 +3791,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       </div>
 
       {/* ── Cantera no-ignition diagnostic banner ─────────────────────── */}
-      {accurate&&bkIgn.data&&!bkIgn.data.ignited&&<div style={{marginTop:8,background:`${C.accent}10`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.45}}>ℹ Cantera 0D integrated for {bkIgn.data.tau_ign_s.toFixed(1)} s without the mixture igniting (T_peak rose from {bkIgn.data.T_mixed_inlet_K.toFixed(0)} to {bkIgn.data.T_peak.toFixed(0)} K). τ_ign is therefore at least {bkIgn.data.tau_ign_s.toFixed(1)} s — the autoignition margin shown is a <em>lower bound</em>. The mixture is thermo-kinetically stable at T_mixed and cannot autoignite within the premixer.</div>}
+      {accurate&&bkIgn.data&&!bkIgn.data.ignited&&<div style={{marginTop:8,background:`${C.accent}10`,border:`1px solid ${C.accent}44`,borderRadius:5,padding:"7px 11px",fontSize:10.5,color:C.txtDim,fontFamily:"monospace",lineHeight:1.45}}>ℹ Cantera 0D integrated for {bkIgn.data.tau_ign_s.toFixed(1)} s without the mixture igniting (T_peak rose from {uv(units,"T",bkIgn.data.T_mixed_inlet_K).toFixed(0)} to {uv(units,"T",bkIgn.data.T_peak).toFixed(0)} {uu(units,"T")}). τ_ign is therefore at least {bkIgn.data.tau_ign_s.toFixed(1)} s — the autoignition margin shown is a <em>lower bound</em>. The mixture is thermo-kinetically stable at T_mixed and cannot autoignite within the premixer.</div>}
     </div>
     {/* ═══════════ END CARD 3 ═══════════ */}
     {/* Sweep curves — banner + button. In accurate mode the charts below show correlation-based
