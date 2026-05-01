@@ -501,11 +501,25 @@ function damkohlerST(SL, uPrime){
 //   LCV_MJ_kg   fuel lower heating value, mass basis (MJ/kg)
 //   FAR_stoich  fuel/air stoichiometric ratio (mass basis)
 //
-// Lefebvre Table 5.1 — A values from 8 production aero-engines:
+// Lefebvre Table 5.1 — A values from 8 production aero-engines (KEROSENE SPRAY):
 //   J 79-17A  0.042   J 79-17C  0.031   F 101  0.032   TF 41  0.013
 //   TF 39     0.037   J 85      0.064   TF 33  0.025   F 100  0.023
-// Default 0.025 matches TF 33; near the population median (0.025-0.032).
-// Provisional until plant data fits A for the specific combustor.
+// Those values were calibrated for HETEROGENEOUS spray combustion (kerosene
+// droplets evaporating in the primary zone). They are NOT appropriate for
+// premixed-GAS DLN combustors. With D_r²/λ_r set to 1 for gas (no spray
+// evaporation), the kerosene A values under-predict φ_LBO by ~250× because
+// they implicitly bake in the slow droplet-evaporation timescale.
+//
+// PREMIXED-GAS CALIBRATION (this codebase):
+//   A_LBO ≈ 6.3 — back-fit so that at the LMS100 NG-DLN industrial baseline
+//   (ṁ_a = 30 kg/s, V_pz = 0.025 m³, P_3 = 2000 kPa, T_3 = 800 K, NG LCV
+//   50 MJ/kg) the formula returns φ_LBO ≈ 0.40 — the canonical industrial
+//   NG-DLN lean-blowout value. Default in this codebase: 6.3. Verified
+//   2026-04-30 by hand at the LMS100 anchor.
+//
+// Provisional — refit A from measured plant φ_LBO when site data lands.
+// Users with kerosene-spray combustors should revert to Lefebvre's Table
+// 5.1 values (0.013–0.064).
 function lefebvreLBO(A, m_air_kg_s, T3_K, V_pz_m3, P3_kPa, LCV_MJ_kg, FAR_stoich){
   const H_r = Math.max(LCV_MJ_kg, 1e-6) / 43.5;        // LCV / JP4 LCV
   const denom = Math.max(V_pz_m3, 1e-12)
@@ -888,7 +902,7 @@ const _Borghi_regime = _Ka_diag<1?(_Da_diag>1?"Flamelet":"Corrugated"):_Ka_diag<
 // ── Card 2 (Stabilization & Blowoff) — Lefebvre + Plee-Mellor ─────────
 // Defaults match the panel's industrial-default values (Phase 0).
 const _Vpz_m3_x  = 0.025;     // primary-zone volume default
-const _K_LBO_x   = 0.025;     // Lefebvre A constant default (TF 33 / median)
+const _K_LBO_x   = 6.29;      // Lefebvre A — premixed-gas calibration (φ_LBO=0.40 @ LMS100 anchor)
 const _m_air_lbo = (cycleResult && cycleResult.W36_kg_s)
   ? cycleResult.W36_kg_s
   : (cycleResult && cycleResult.mdot_air_kg_s) ? cycleResult.mdot_air_kg_s : 1.0;
@@ -992,7 +1006,7 @@ const s2=[
   ["Note","Da_BO (Card 2 / blowoff) and Da_regime (Card 1 / Borghi) are different Damköhler quantities sharing the same name — combustion convention. Da_regime places the point on the Borghi diagram; Da_BO measures flame-anchor stability.",""],
   ["V_BO (this geometry)",+uv(u,"vel",_V_BO_x).toFixed(2),uu(u,"vel")],
   ["─── Lefebvre LBO (Lefebvre & Ballal 2010 Eq. 5.27) ───","",""],
-  ["Lefebvre A constant (default TF 33)",+_K_LBO_x.toFixed(4),"—"],
+  ["Lefebvre A constant (premixed-gas calibration)",+_K_LBO_x.toFixed(4),"—"],
   ["Primary-zone volume V_pz (default)",+_Vpz_m3_x.toFixed(4),"m³"],
   ["Combustor air ṁ_air (from cycle if available)",+_m_air_lbo.toFixed(2),"kg/s"],
   ["T_3 (combustor inlet T)",+uv(u,"T",_T3_lbo_K).toFixed(1),uu(u,"T")],
@@ -1045,7 +1059,7 @@ const s2=[
   ["Gate D Status",_gateD_pass?"PASS":"FAIL","—"],
   ["─── Card 3 Combined ───","",""],
   ["Card 3 Overall Status",_card3_status,"—"],
-  ["Note","Card 1/2/3 outputs above use panel default geometry (D_h=40 mm, V_pz=0.025 m³, S_n=0.6, swirl-type, ε_turb=0.7, RTD=1.5, K_LBO=0.025). Customise these in the live panel and re-export for site-specific values.",""],
+  ["Note","Card 1/2/3 outputs above use panel default geometry (D_h=40 mm, V_pz=0.025 m³, S_n=0.6, swirl-type, ε_turb=0.7, RTD=1.5, K_LBO=6.29 — premixed-gas calibration). Customise these in the live panel and re-export for site-specific values.",""],
   [],
   ["═══ S_L vs Equivalence Ratio ═══"],
   ["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],
@@ -2812,10 +2826,11 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // V_pz: primary-zone volume (m³). Default 0.025 m³ — middle of the
   // frame-GT (~0.05 m³) / aero-derivative (~0.005 m³) range.
   const [V_pz_m3, setVpzM3] = useState(0.025);
-  // K: Lefebvre calibration constant. Default 0.025 SI — provisional;
-  // refit when plant data lands. Editable on the panel for users with
-  // their own data.
-  const [K_LBO, setKLBO] = useState(0.025);
+  // K: Lefebvre A constant. Default 6.29 — premixed-gas calibration
+  // (back-fit to φ_LBO≈0.40 at LMS100 NG-DLN baseline). Lefebvre Table 5.1
+  // 0.013–0.064 values are for kerosene-spray aero engines and are not
+  // appropriate for premixed gas. Editable for site-specific recalibration.
+  const [K_LBO, setKLBO] = useState(6.29);
 
   // ── Card 3 (Premixer Flashback & Autoignition) panel-local state ────
   // D_h: premixer hydraulic diameter. Default 0.040 m (40 mm) — typical
@@ -3536,9 +3551,9 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
             style={{width:74,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5}}>
-          <Tip text={`Lefebvre constant A — empirical per-engine calibration in Eq. 5.27 (Lefebvre & Ballal 2010, p. 185).\n\nReference values from production aero-engines (Lefebvre Table 5.1, p. 186):\n  J 79-17A 0.042   J 79-17C 0.031\n  F 101    0.032   TF 41    0.013\n  TF 39    0.037   J 85     0.064\n  TF 33    0.025   F 100    0.023\n\nDefault 0.025 sits at the median (TF 33). Provisional — refit from measured plant φ_LBO at known T_3, P_3, m_air, V_pz.`}><label style={{color:C.txtDim,cursor:"help"}}>A ⓘ</label></Tip>
+          <Tip text={`Lefebvre constant A — calibration in Eq. 5.27 (Lefebvre & Ballal 2010, p. 185).\n\nDefault 6.29 — premixed-gas DLN calibration. Back-fit so that at the LMS100 NG-DLN baseline (ṁ_a=30 kg/s, V_pz=0.025 m³, P_3=2000 kPa, T_3=800 K, NG) the formula returns the canonical industrial φ_LBO ≈ 0.40.\n\nLefebvre Table 5.1 published values 0.013–0.064 (J79, F101, TF33, etc.) were fit for KEROSENE-SPRAY aero engines — those baked in the droplet-evaporation timescale that doesn't apply to premixed gas. Using them here would under-predict φ_LBO by ~250×.\n\nFor your specific combustor: refit A from one observed-LBO operating point (φ_LBO measured at known T_3, P_3, m_air, V_pz).`}><label style={{color:C.txtDim,cursor:"help"}}>A ⓘ</label></Tip>
           <NumField value={K_LBO} decimals={4}
-            onCommit={v=>setKLBO(Math.max(1e-5, Math.min(1, +v)))}
+            onCommit={v=>setKLBO(Math.max(1e-5, Math.min(50, +v)))}
             style={{width:64,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
           <span style={{fontSize:9,color:C.txtMuted,fontStyle:"italic"}}>(provisional · Lefebvre Eq. 5.27)</span>
         </div>
@@ -7933,7 +7948,7 @@ function _adaptPanelResponse(slot, r, inp){
     const borghi_regime = Ka_diag<1 ? (Da_diag>1?"Flamelet":"Corrugated") : Ka_diag<100?"Thin reaction zone":"Broken reaction zone";
     // ── Card 2 (Stabilization & Blowoff) — Lefebvre + Plee-Mellor (defaults) ──
     const _fp_a = (typeof calcFuelProps==="function") ? calcFuelProps(inp.fuel, inp.ox) : null;
-    const _Vpz_x=0.025, _K_LBO_x=0.025, _Da_crit_x=0.50, _Sn_x=0.6;
+    const _Vpz_x=0.025, _K_LBO_x=6.29, _Da_crit_x=0.50, _Sn_x=0.6;
     const _m_air_lbo = inp.cycle?.W36_kg_s ?? inp.cycle?.mdot_air_kg_s ?? 1.0;
     const _T3_lbo_K = inp.cycle?.T3_K ?? inp.T_air ?? 700.0;
     const _P3_lbo_kPa = (inp.cycle?.P3_bar ?? inp.P) * 100;
@@ -8493,7 +8508,7 @@ async function runFlameForAutomation(inp, accurate){
   const borghi_regime = Ka_diag<1 ? (Da_diag>1?"Flamelet":"Corrugated") : Ka_diag<100?"Thin reaction zone":"Broken reaction zone";
   // ── Card 2 (Stabilization & Blowoff) — Lefebvre + Plee-Mellor (defaults) ──
   const _fp_a = (typeof calcFuelProps==="function") ? calcFuelProps(inp.fuel, inp.ox) : null;
-  const _Vpz_x=0.025, _K_LBO_x=0.025, _Da_crit_x=0.50, _Sn_x=0.6;
+  const _Vpz_x=0.025, _K_LBO_x=6.29, _Da_crit_x=0.50, _Sn_x=0.6;
   const _m_air_lbo = inp.cycle?.W36_kg_s ?? inp.cycle?.mdot_air_kg_s ?? 1.0;
   const _T3_lbo_K = inp.cycle?.T3_K ?? inp.T_air ?? 700.0;
   const _P3_lbo_kPa = (inp.cycle?.P3_bar ?? inp.P) * 100;
