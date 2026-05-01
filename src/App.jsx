@@ -866,7 +866,203 @@ const _gc=(_SLms*_SLms)/Math.max(_alphaTh,1e-20);
 const _tauIgn=calcTauIgnFree(T_mix_phi,P);
 const _tauRes=Lpremix/Math.max(Vpremix,1e-20);
 const _ignSafe=_tauRes<_tauIgn;
-const s2=[["═══ FLAME SPEED & BLOWOFF — INPUTS ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["Unburned Temperature (T_mixed @ φ)",+uv(u,"T",T_mix_phi).toFixed(2),uu(u,"T")],["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],["Reference Velocity",+uv(u,"vel",velocity).toFixed(2),uu(u,"vel")],["Characteristic Length (L_char)",+uv(u,"len",Lchar).toFixed(4),uu(u,"len")],["Flameholder Diameter (D_fh)",+uv(u,"len",Dfh).toFixed(4),uu(u,"len")],["Premixer Length (L_premix)",+uv(u,"len",Lpremix).toFixed(4),uu(u,"len")],["Premixer Velocity (V_premix)",+uv(u,"vel",Vpremix).toFixed(2),uu(u,"vel")],[],["═══ OUTPUTS ═══"],[],["Parameter","Value","Unit"],["Laminar Flame Speed (S_L)",+uv(u,"SL",SL).toFixed(4),uu(u,"SL")],["Chemical Timescale (τ_chem)",+bo.tau_chem.toFixed(6),"ms"],["Flow Timescale (τ_flow)",+bo.tau_flow.toFixed(6),"ms"],["Damköhler Number (Da)",+bo.Da.toFixed(4),"—"],["Blowoff Velocity",+uv(u,"vel",bo.blowoff_velocity).toFixed(2),uu(u,"vel")],["Flame Stability",bo.stable?"STABLE":"BLOWOFF RISK","—"],[],["═══ PREMIXER STABILITY — FLASHBACK & AUTOIGNITION ═══"],["Parameter","Value","Unit"],["Zukoski Blow-off Time (τ_BO)",+(_tauBO*1000).toFixed(4),"ms"],["Thermal Diffusivity (α_th, unburnt)",+(_alphaTh*1e6).toFixed(4),"mm²/s"],["Lewis-von Elbe Gradient (g_c)",+_gc.toFixed(1),"1/s"],["Autoignition Delay (τ_ign, Spadaccini-Colket)",+(_tauIgn*1000).toFixed(4),"ms"],["Premixer Residence Time (τ_res)",+(_tauRes*1000).toFixed(4),"ms"],["Safety Margin (τ_ign / τ_res)",+(_tauIgn/_tauRes).toFixed(3),"—"],["Premixer Status",_ignSafe?"SAFE":"AUTOIGNITION RISK","—"],["Note","τ_ign uses Spadaccini-Colket NG correlation (order-of-magnitude). Use Accurate mode for Cantera 0D values.",""],[],["═══ S_L vs Equivalence Ratio ═══"],["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],...Array.from({length:13},(_,i)=>{const p=0.4+i*0.05;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"SL",calcSL(fuel,p,Tm,P)*100).toFixed(4)]}),[],["═══ S_L vs Pressure (@T_mixed) ═══"],["Pressure ("+uu(u,"P")+")","Flame Speed ("+uu(u,"SL")+")"],...[0.5,1,2,5,10,20,40].map(p=>[+uv(u,"P",p).toFixed(2),+uv(u,"SL",calcSL(fuel,phi,T_mix_phi,p)*100).toFixed(4)]),[],["═══ S_L vs Unburned Temperature (user sweep) ═══"],["Temperature ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],...Array.from({length:23},(_,i)=>{const t=250+i*25;return[+uv(u,"T",t).toFixed(1),+uv(u,"SL",calcSL(fuel,phi,t,P)*100).toFixed(4)]}),[],["═══ Damköhler vs Velocity ═══"],["Velocity ("+uu(u,"vel")+")","Damköhler (Da)","Status"],...Array.from({length:40},(_,i)=>{const v=1+i*5;const b=calcBlowoff(fuel,phi,T_mix_phi,P,v,Lchar);return[+uv(u,"vel",v).toFixed(1),+b.Da.toFixed(4),b.stable?"Stable":"Blowoff"]})];const ws2=XLSX.utils.aoa_to_sheet(s2);ws2["!cols"]=[{wch:32},{wch:18},{wch:14}];if(_showCombustion)XLSX.utils.book_append_sheet(wb,ws2,"Flame Speed & Blowoff");
+// ── Card 1 (Flame Speed & Regime Diagnostics) — derived quantities ────
+// Free-mode mirrors of the panel's calculations. Cantera-backed Le_eff /
+// Le_E / Le_D / Ma / Ze are not available here (the App-level export
+// can't trigger a 1D FreeFlame solve), so we use the panel's free-mode
+// helpers; the user can re-export from inside the app's accurate mode
+// for Cantera-backed numbers in the live UI.
+const _Le_free   = lewisNumberFreeMode(fuel);
+const _nu_free   = _alphaTh / 0.71;                              // Pr ≈ 0.71 fallback for hot air
+const _delta_F   = _alphaTh / Math.max(_SLms, 1e-9);             // Zeldovich δ_F
+const _uPrimeRatio_x = 0.10;                                      // panel default (u'/U)
+const _uPrime_x  = _uPrimeRatio_x * Math.max(velocity, 0);
+const _lT_x      = 0.10 * Math.max(Lchar, 1e-6);
+const _bradley   = bradleyST(_SLms, Math.max(_uPrime_x, 1e-9), _lT_x, _nu_free, _Le_free);
+const _ST_brad   = _bradley.ST;
+const _ST_dam    = damkohlerST(_SLms, Math.max(_uPrime_x, 1e-9));
+const _Ka_diag   = _bradley.Ka;
+const _ReT_diag  = _bradley.ReT;
+const _Da_diag   = (_lT_x / Math.max(_delta_F, 1e-12)) * (_SLms / Math.max(_uPrime_x, 1e-9));
+const _Borghi_regime = _Ka_diag<1?(_Da_diag>1?"Flamelet":"Corrugated"):_Ka_diag<100?"Thin reaction zone":"Broken reaction zone";
+// ── Card 2 (Stabilization & Blowoff) — Lefebvre + Plee-Mellor ─────────
+// Defaults match the panel's industrial-default values (Phase 0).
+const _Vpz_m3_x  = 0.025;     // primary-zone volume default
+const _K_LBO_x   = 0.025;     // Lefebvre A constant default (TF 33 / median)
+const _m_air_lbo = (cycleResult && cycleResult.W36_kg_s)
+  ? cycleResult.W36_kg_s
+  : (cycleResult && cycleResult.mdot_air_kg_s) ? cycleResult.mdot_air_kg_s : 50.0;
+const _T3_lbo_K  = (cycleResult && cycleResult.T3_K) ? cycleResult.T3_K : T0;
+const _P3_lbo_kPa= (cycleResult && cycleResult.P3_bar) ? cycleResult.P3_bar*100 : P*101.325;
+const _FAR_st    = 1 / Math.max(fp.AFR_mass, 1e-12);
+const _phi_LBO_x = lefebvreLBO(_K_LBO_x, _m_air_lbo, _T3_lbo_K, _Vpz_m3_x, _P3_lbo_kPa, fp.LHV_mass, _FAR_st);
+const _q_LBO_x   = _phi_LBO_x * _FAR_st;
+const _phi_LBO_margin_x = phi - _phi_LBO_x;
+// Plee-Mellor 1979 cross-check (same formula as panel, T_φ uses 1800 K placeholder when no Cantera data)
+const _PM_T_phi_x  = 1800;                          // export-time placeholder (no Cantera here)
+const _PM_T_in_x   = Math.max(_T3_lbo_K, 1);
+const _PM_EaR_K    = 21000.0 / 1.987;
+const _PM_tau_hc_ms = 1e-4 * (_PM_T_phi_x / _PM_T_in_x) * Math.exp(_PM_EaR_K / Math.max(_PM_T_phi_x, 1));
+const _PM_tau_sl_ms = (Math.max(Lchar, 1e-9) / Math.max(velocity, 1e-9)) * 1000;
+const _PM_ratio    = _PM_tau_sl_ms / Math.max(_PM_tau_hc_ms, 1e-12);
+const _PM_safe     = _PM_ratio > 2.11;
+// Da_crit for default premixer = swirl @ S_n=0.6 → 0.50 per the panel's interpolation
+const _Da_crit_x = 0.50;
+const _Da_actual_x = bo.Da;
+const _V_BO_x    = velocity * Math.max(_Da_actual_x / Math.max(_Da_crit_x, 1e-9), 1e-6);
+// ── Card 3 (Premixer Flashback & Autoignition) — gates A/B/C/D ────────
+const _H2_pct_x  = ((fuel.H2  || 0) / Math.max(Object.values(fuel).reduce((a,b)=>a+b,0), 1e-9)) * 100;
+const _CO_pct_x  = ((fuel.CO  || 0) / Math.max(Object.values(fuel).reduce((a,b)=>a+b,0), 1e-9)) * 100;
+const _CH4_pct_x = ((fuel.CH4 || 0) / Math.max(Object.values(fuel).reduce((a,b)=>a+b,0), 1e-9)) * 100;
+const _D_h_x     = 0.040;     // panel default 40 mm
+const _eps_turb_x= 0.7;       // panel default
+const _RTD_x     = 1.5;       // panel default
+const _Sn_x      = 0.6;       // swirl number default
+const _g_u_pipe_x  = 8 * Vpremix / Math.max(_D_h_x, 1e-6);
+const _g_u_actual_x= _g_u_pipe_x * (1 + _eps_turb_x);
+const _sigma_rho_x = (_PM_T_phi_x) / Math.max(T_mix_phi, 1);
+const _confine_corr = (_H2_pct_x/100 > 0.30) ? Math.sqrt(Math.max(_sigma_rho_x, 1)) : 1.0;
+const _g_c_eff_x = _gc * _confine_corr;
+const _gateA_pass= _g_u_actual_x > _g_c_eff_x;
+const _gateA_marg= _g_u_actual_x / Math.max(_g_c_eff_x, 1e-9);
+const _Ka_fb_x   = (_g_u_actual_x > 0 && _SLms > 0) ? (_g_u_actual_x * _delta_F) / _SLms : NaN;
+const _shaffer_T_tip = -1.58*_H2_pct_x - 3.63*_CO_pct_x - 4.28*_CH4_pct_x + 0.38*_PM_T_phi_x;
+const _piCIVB_x  = _SLms / Math.max(_Sn_x * Math.max(Vpremix, 1e-9) * Math.PI, 1e-12);
+const _civb_thr_x= (_H2_pct_x/100 > 0.30) ? 0.03 : 0.05;
+const _gateB_pass= _piCIVB_x < _civb_thr_x;
+const _ST_est_x  = _SLms * ((_H2_pct_x/100 > 0.30) ? 2.5 : 1.8);
+const _v_st_marg = Vpremix / Math.max(_ST_est_x, 1e-9);
+const _gateC_pass= _v_st_marg > 1.43;
+const _tau_res_99= _RTD_x * (Lpremix / Math.max(Vpremix, 1e-20));
+const _ign_marg_3= isFinite(_tauIgn) ? _tauIgn / Math.max(_tau_res_99, 1e-20) : NaN;
+const _gateD_pass= isFinite(_tauIgn) && _ign_marg_3 >= 3;
+const _all_pass  = _gateA_pass && _gateB_pass && _gateC_pass && _gateD_pass;
+const _card3_status = _all_pass ? "PASS" : "FAIL";
+const s2=[
+  ["═══ FLAME SPEED & BLOWOFF — INPUTS ═══"],[],
+  ["Parameter","Value","Unit"],
+  ["Equivalence Ratio (φ)",+phi.toFixed(4),"—"],
+  ["Fuel/Air Ratio (mass)",+(phi/fp.AFR_mass).toFixed(6),uu(u,"afr_mass")],
+  ["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],
+  ["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],
+  ["Unburned Temperature (T_mixed @ φ)",+uv(u,"T",T_mix_phi).toFixed(2),uu(u,"T")],
+  ["Pressure",+uv(u,"P",P).toFixed(3),uu(u,"P")],
+  ["Reference Velocity",+uv(u,"vel",velocity).toFixed(2),uu(u,"vel")],
+  ["Characteristic Length (L_char)",+uv(u,"len",Lchar).toFixed(4),uu(u,"len")],
+  ["Flameholder Diameter (D_fh)",+uv(u,"len",Dfh).toFixed(4),uu(u,"len")],
+  ["Premixer Length (L_premix)",+uv(u,"len",Lpremix).toFixed(4),uu(u,"len")],
+  ["Premixer Velocity (V_premix)",+uv(u,"vel",Vpremix).toFixed(2),uu(u,"vel")],
+  [],
+  ["═══ LEGACY OUTPUTS — Damköhler Blowoff ═══"],
+  ["Parameter","Value","Unit"],
+  ["Laminar Flame Speed (S_L)",+uv(u,"SL",SL).toFixed(4),uu(u,"SL")],
+  ["Chemical Timescale (τ_chem)",+bo.tau_chem.toFixed(6),"ms"],
+  ["Flow Timescale (τ_flow)",+bo.tau_flow.toFixed(6),"ms"],
+  ["Damköhler Number (Da)",+bo.Da.toFixed(4),"—"],
+  ["Blowoff Velocity",+uv(u,"vel",bo.blowoff_velocity).toFixed(2),uu(u,"vel")],
+  ["Flame Stability",bo.stable?"STABLE":"BLOWOFF RISK","—"],
+  [],
+  ["═══ CARD 1 — Flame Speed & Regime Diagnostics ═══"],
+  ["Parameter","Value","Unit"],
+  ["Effective Lewis Number (Le_eff)",+_Le_free.toFixed(3),"—"],
+  ["Le_E (excess reactant)",+_Le_free.toFixed(3),"—"],
+  ["Le_D (deficient reactant)",+_Le_free.toFixed(3),"—"],
+  ["Markstein Number (Ma)","N/A","—"],
+  ["Zeldovich Number (Ze)","N/A","—"],
+  ["Note","Le_E/Le_D/Ma/Ze require Cantera. Activate Accurate mode in the live panel for distinct values per Bechtold-Matalon Eq. 6 + Hawkes-Chen 2004 fuel weighting.",""],
+  ["Thermal Diffusivity (α_th, unburnt)",+(_alphaTh*1e6).toFixed(4),"mm²/s"],
+  ["Kinematic Viscosity (ν, unburnt)",+(_nu_free*1e6).toFixed(4),"mm²/s"],
+  ["Zeldovich Flame Thickness (δ_F)",+(_delta_F*1e6).toFixed(2),"μm"],
+  ["u'/U (turbulence intensity)",+_uPrimeRatio_x.toFixed(3),"—"],
+  ["u' (RMS turb velocity)",+uv(u,"vel",_uPrime_x).toFixed(3),uu(u,"vel")],
+  ["l_T (integral length scale, auto = 0.1·L_char)",+uv(u,"len",_lT_x).toFixed(5),uu(u,"len")],
+  ["Reynolds Re_T",+_ReT_diag.toFixed(0),"—"],
+  ["Karlovitz Number (Ka)",+_Ka_diag.toFixed(3),"—"],
+  ["Damköhler (regime, Da)",+_Da_diag.toFixed(2),"—"],
+  ["Borghi-Peters Regime",_Borghi_regime,"—"],
+  ["Turbulent Flame Speed S_T (Bradley/Lau/Lawes 1992)",+uv(u,"vel",_ST_brad).toFixed(3),uu(u,"vel")],
+  ["Turbulent Flame Speed S_T (Damköhler 1940)",+uv(u,"vel",_ST_dam).toFixed(3),uu(u,"vel")],
+  [],
+  ["═══ CARD 2 — Stabilization & Blowoff (Lefebvre + Plee-Mellor) ═══"],
+  ["Parameter","Value","Unit"],
+  ["Premixer Type (default for export)","swirl burner @ S_n=0.6","—"],
+  ["Da_crit (premixer-type)",+_Da_crit_x.toFixed(3),"—"],
+  ["Da (actual)",+_Da_actual_x.toFixed(3),"—"],
+  ["Da / Da_crit",+(_Da_actual_x/_Da_crit_x).toFixed(2),"—"],
+  ["V_BO (this geometry)",+uv(u,"vel",_V_BO_x).toFixed(2),uu(u,"vel")],
+  ["─── Lefebvre LBO (Lefebvre & Ballal 2010 Eq. 5.27) ───","",""],
+  ["Lefebvre A constant (default TF 33)",+_K_LBO_x.toFixed(4),"—"],
+  ["Primary-zone volume V_pz (default)",+_Vpz_m3_x.toFixed(4),"m³"],
+  ["Combustor air ṁ_air (from cycle if available)",+_m_air_lbo.toFixed(2),"kg/s"],
+  ["T_3 (combustor inlet T)",+uv(u,"T",_T3_lbo_K).toFixed(1),uu(u,"T")],
+  ["P_3 (combustor inlet P)",+(_P3_lbo_kPa).toFixed(1),"kPa"],
+  ["q_LBO (fuel/air mass ratio at LBO)",+_q_LBO_x.toExponential(3),"kg/kg"],
+  ["φ_LBO (Lefebvre)",+_phi_LBO_x.toFixed(4),"—"],
+  ["margin = φ − φ_LBO",+_phi_LBO_margin_x.toFixed(4),"—"],
+  ["Lefebvre LBO Status",_phi_LBO_margin_x>=0.05?"ROBUST":"BLOWOFF RISK","—"],
+  ["─── Plee-Mellor 1979 LBO Cross-check (Combust Flame 35:61) ───","",""],
+  ["τ_sl shear-layer residence",+_PM_tau_sl_ms.toFixed(3),"ms"],
+  ["τ_hc' chemical ignition delay (Eq. 17, T_φ=1800 K placeholder)",+_PM_tau_hc_ms.toFixed(4),"ms"],
+  ["τ_sl / τ_hc' (LBO line at 2.11)",+_PM_ratio.toFixed(2),"—"],
+  ["Plee-Mellor LBO Status",_PM_safe?"STABLE":"BLOWOFF","—"],
+  ["─── Legacy Premixer Stability ───","",""],
+  ["Zukoski Blow-off Time (τ_BO)",+(_tauBO*1000).toFixed(4),"ms"],
+  ["Lewis-von Elbe Gradient (g_c)",+_gc.toFixed(1),"1/s"],
+  ["Autoignition Delay (τ_ign, Spadaccini-Colket)",+(_tauIgn*1000).toFixed(4),"ms"],
+  ["Premixer Residence Time (τ_res)",+(_tauRes*1000).toFixed(4),"ms"],
+  ["Safety Margin (τ_ign / τ_res)",+(_tauIgn/_tauRes).toFixed(3),"—"],
+  ["Premixer Status",_ignSafe?"SAFE":"AUTOIGNITION RISK","—"],
+  [],
+  ["═══ CARD 3 — Premixer Flashback & Autoignition (4 gates) ═══"],
+  ["Parameter","Value","Unit"],
+  ["H₂ in fuel",+_H2_pct_x.toFixed(1),"%"],
+  ["D_h premixer (default)",+_D_h_x.toFixed(3),"m"],
+  ["ε_turb wall-shear amplification (default)",+_eps_turb_x.toFixed(2),"—"],
+  ["RTD multiplier τ_res,99/τ_res (default)",+_RTD_x.toFixed(2),"—"],
+  ["─── Gate A: Boundary-Layer Flashback (Lewis-von Elbe / Lieuwen 2021) ───","",""],
+  ["g_c critical wall gradient",+_gc.toFixed(1),"1/s"],
+  ["Confined-flame correction √σ_ρ (H₂>30%)",+_confine_corr.toFixed(2),"—"],
+  ["g_c_eff = g_c · √σ_ρ",+_g_c_eff_x.toFixed(1),"1/s"],
+  ["g_actual (Poiseuille × turb)",+_g_u_actual_x.toFixed(1),"1/s"],
+  ["Flashback Karlovitz Ka_fb",isFinite(_Ka_fb_x)?+_Ka_fb_x.toFixed(2):"N/A","—"],
+  ["margin = g_actual / g_c_eff",+_gateA_marg.toFixed(2),"×"],
+  ["Shaffer 2013 burner-tip T (Eq. 4)",+_shaffer_T_tip.toFixed(0),"K"],
+  ["Gate A Status",_gateA_pass?"PASS":"FAIL","—"],
+  ["─── Gate B: CIVB (Sattelmayer 2004) ───","",""],
+  ["Π_CIVB = S_L / (S_n·V_premix·π)",+_piCIVB_x.toFixed(4),"—"],
+  ["CIVB threshold",+_civb_thr_x.toFixed(3),"—"],
+  ["Swirl number S_n (default)",+_Sn_x.toFixed(2),"—"],
+  ["Gate B Status",_gateB_pass?"PASS":"FAIL","—"],
+  ["─── Gate C: Core Flashback (S_T vs V_premix) ───","",""],
+  ["Turbulent flame speed S_T (estimated)",+uv(u,"vel",_ST_est_x).toFixed(2),uu(u,"vel")],
+  ["margin V_premix / S_T",+_v_st_marg.toFixed(2),"—"],
+  ["Gate C Status",_gateC_pass?"PASS":"FAIL","—"],
+  ["─── Gate D: Autoignition (RTD-corrected) ───","",""],
+  ["τ_ign autoignition delay",+(_tauIgn*1000).toFixed(4),"ms"],
+  ["τ_res,99 RTD-corrected residence",+(_tau_res_99*1000).toFixed(4),"ms"],
+  ["Ignition margin τ_ign / τ_res,99 (need ≥ 3)",isFinite(_ign_marg_3)?+_ign_marg_3.toFixed(2):"N/A","—"],
+  ["Gate D Status",_gateD_pass?"PASS":"FAIL","—"],
+  ["─── Card 3 Combined ───","",""],
+  ["Card 3 Overall Status",_card3_status,"—"],
+  ["Note","Card 1/2/3 outputs above use panel default geometry (D_h=40 mm, V_pz=0.025 m³, S_n=0.6, swirl-type, ε_turb=0.7, RTD=1.5, K_LBO=0.025). Customise these in the live panel and re-export for site-specific values.",""],
+  [],
+  ["═══ S_L vs Equivalence Ratio ═══"],
+  ["Equivalence Ratio (φ)","Fuel/Air Ratio (mass)","T_mixed ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],
+  ...Array.from({length:13},(_,i)=>{const p=0.4+i*0.05;const Tm=mixT(fuel,ox,p,T_fuel??T0,T_air??T0);return[+p.toFixed(2),+(p/fp.AFR_mass).toFixed(6),+uv(u,"T",Tm).toFixed(1),+uv(u,"SL",calcSL(fuel,p,Tm,P)*100).toFixed(4)]}),
+  [],
+  ["═══ S_L vs Pressure (@T_mixed) ═══"],
+  ["Pressure ("+uu(u,"P")+")","Flame Speed ("+uu(u,"SL")+")"],
+  ...[0.5,1,2,5,10,20,40].map(p=>[+uv(u,"P",p).toFixed(2),+uv(u,"SL",calcSL(fuel,phi,T_mix_phi,p)*100).toFixed(4)]),
+  [],
+  ["═══ S_L vs Unburned Temperature (user sweep) ═══"],
+  ["Temperature ("+uu(u,"T")+")","Flame Speed ("+uu(u,"SL")+")"],
+  ...Array.from({length:23},(_,i)=>{const t=250+i*25;return[+uv(u,"T",t).toFixed(1),+uv(u,"SL",calcSL(fuel,phi,t,P)*100).toFixed(4)]}),
+  [],
+  ["═══ Damköhler vs Velocity ═══"],
+  ["Velocity ("+uu(u,"vel")+")","Damköhler (Da)","Status"],
+  ...Array.from({length:40},(_,i)=>{const v=1+i*5;const b=calcBlowoff(fuel,phi,T_mix_phi,P,v,Lchar);return[+uv(u,"vel",v).toFixed(1),+b.Da.toFixed(4),b.stable?"Stable":"Blowoff"]}),
+];
+const ws2=XLSX.utils.aoa_to_sheet(s2);ws2["!cols"]=[{wch:48},{wch:22},{wch:14}];if(_showCombustion)XLSX.utils.book_append_sheet(wb,ws2,"Flame Speed & Blowoff");
 const net=calcCombustorNetwork(fuel,ox,phi,T0,P,tau_psr,L_pfr,V_pfr,T_fuel,T_air);
 // Canonical equilibrium AFT (same calc as Flame Temp sheet). Distinct from net.T_ad, which in this reduced-order model is the PFR exit T.
 const combAFT=calcAFT_EQ(fuel,ox,phi,mixT(fuel,ox,phi,T_fuel??T0,T_air??T0),P);
@@ -2831,6 +3027,11 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const Le_eff = (accurate && bk.data && bk.data.Le_eff)
     ? bk.data.Le_eff
     : lewisNumberFreeMode(fuel);
+  // Le_E (excess reactant) and Le_D (deficient reactant) per Bechtold-Matalon
+  // Eq. 6 weighting. Backend returns both as of v6 schema. In free mode we
+  // don't have a per-reactant breakdown — fall back to Le_eff for both.
+  const Le_E_eff = (accurate && bk.data && Number.isFinite(bk.data.Le_E)) ? bk.data.Le_E : Le_eff;
+  const Le_D_eff = (accurate && bk.data && Number.isFinite(bk.data.Le_D)) ? bk.data.Le_D : Le_eff;
   const Ma_eff = (accurate && bk.data && Number.isFinite(bk.data.Ma))
     ? bk.data.Ma
     : 0;     // Free-mode placeholder — Phase 4 will fit this per fuel
@@ -2897,6 +3098,22 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const phi_LBO_margin = phi - phi_LBO;
   const phi_LBO_safe = phi_LBO_margin >= 0.05;
 
+  // ── Plee-Mellor 1979 LBO cross-check ─────────────────────────────────
+  // Eq. 17 (Configuration A — 45° conical baffle, propane fit to Ballal-
+  // Lefebvre data):  τ_hc' = 1e-4 · (T_φ/T_in) · exp(21000/(R·T_φ))  (msec)
+  // Stable when τ_sl/τ_hc' > 2.11 (Plee-Mellor Fig. 5 LBO line).
+  // T_φ = adiabatic flame T at approach φ; we use T_b from Cantera when
+  // available, else fall back to a 1800 K placeholder consistent with the
+  // Card 3 BLF gate. L = bluff-body recirc length ≈ Lchar; V = velocity.
+  const _PM_T_phi   = (accurate && bk.data && bk.data.T_max) ? bk.data.T_max : 1800;
+  const _PM_T_in    = Math.max(T3_lbo_K, 1);   // approach gas T (compressor discharge)
+  const _PM_EaR_K   = 21000.0 / 1.987;         // 21000 cal/mol / R(cal·K⁻¹·mol⁻¹) ≈ 10568 K
+  const pm_tau_hc_ms = 1e-4 * (_PM_T_phi / _PM_T_in) * Math.exp(_PM_EaR_K / Math.max(_PM_T_phi, 1));
+  const pm_tau_sl_ms = (Math.max(Lchar, 1e-9) / Math.max(velocity, 1e-9)) * 1000;
+  const pm_ratio     = pm_tau_sl_ms / Math.max(pm_tau_hc_ms, 1e-12);
+  const pm_lbo_safe  = pm_ratio > 2.11;
+  const pm_marginal  = pm_lbo_safe && pm_ratio < 2.11 * 1.3;
+
   // Sweep arrays for the two small charts under Card 2.
   // φ_LBO vs T_3: T_3 from 500 to 900 K, hold m_air, V_pz, P_3, LCV fixed.
   const lbo_T3_sweep = (() => {
@@ -2943,6 +3160,23 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // those references — to avoid a Temporal Dead Zone error that turned
   // the whole panel into a black screen on the live site.
   const H2_frac = (fuel.H2 || 0) / Math.max(Object.values(fuel).reduce((a,b)=>a+b,0), 1e-9);
+
+  // Shaffer-Duan-McDonell 2013 (J Eng GT 135:011502) Eq. 4 — predicted
+  // burner-tip temperature at flashback for the current fuel composition
+  // and approach AFT. Used as an advisory beside the BLF gate: per
+  // Shaffer §4.5 the tip T is what physically drives BLF runaway in
+  // H₂-rich blends (heat transfer to the burner rim raises local Tu,
+  // raises S_L, reduces δ_q, all of which lower g_c). Linear formula:
+  //   T_tip = -1.58·H₂% - 3.63·CO% - 4.28·CH₄% + 0.38·AFT [K]
+  // Composition fed in mole-percent (sum = 100). AFT is the bulk
+  // adiabatic flame T at approach φ; we use Cantera's T_max when in
+  // accurate mode, else the 1800 K Card 3 placeholder.
+  const _tot_fuel_pct = Math.max(Object.values(fuel).reduce((a,b)=>a+b,0), 1e-9);
+  const _H2_pct  = ((fuel.H2  || 0) / _tot_fuel_pct) * 100;
+  const _CO_pct  = ((fuel.CO  || 0) / _tot_fuel_pct) * 100;
+  const _CH4_pct = ((fuel.CH4 || 0) / _tot_fuel_pct) * 100;
+  const _AFT_card3 = (accurate && bk.data && bk.data.T_max) ? bk.data.T_max : 1800;
+  const shaffer_tip_T_K = -1.58 * _H2_pct - 3.63 * _CO_pct - 4.28 * _CH4_pct + 0.38 * _AFT_card3;
 
   // ── Gate A: boundary-layer flashback (Lewis-von Elbe / Lieuwen 2021) ──
   // Per Lieuwen, "Unsteady Combustor Physics" 2nd ed., Ch. 10 §10.1.2.1
@@ -3198,9 +3432,9 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       </div>
 
       {/* ── Lewis & Markstein with stability indicator ────────────────── */}
-      <div style={{...S.row,gap:8,marginBottom:10}}>
-        <M l="Effective Lewis (Le)" v={Le_eff.toFixed(3)} u="—" c={Le_eff<0.9?C.warm:Le_eff>1.1?C.accent3:C.good} tip={`Le = α_th / D_def (deficient-reactant basis). ${(accurate&&bk.data&&bk.data.Le_eff)?"From Cantera mixture transport.":"Free-mode: composition-weighted lookup table."} Le<1 → thermo-diffusively unstable (H₂-rich GTs operate here, S_T can exceed predictions by 30–50%). Le≈1 → stable (typical hydrocarbon). Le>1 → diffusively stable (CO-rich, naphtha).`}/>
-        <M l="Markstein (Ma)" v={Ma_eff.toFixed(2)} u="—" c={Ma_eff>0.5?C.good:Ma_eff<-0.5?C.warm:C.accent2} tip={`Ma ≈ (Ze/2)·(Le−1) (Bechtold-Matalon simplified). ${(accurate&&bk.data&&Number.isFinite(bk.data.Ma))?"From Cantera flame analysis.":"Free-mode: 0 placeholder — refine in Phase 4 validation."} +Ma: stable to wrinkling. -Ma: cellular instability. |Ma|>0.5: notable thermo-diffusive deviation from Le=1 baseline.`}/>
+      <div style={{...S.row,gap:8,marginBottom:4}}>
+        <M l="Effective Lewis (Le)" v={Le_eff.toFixed(3)} u="—" c={Le_eff<0.9?C.warm:Le_eff>1.1?C.accent3:C.good} tip={`Le_eff = Bechtold-Matalon Eq. 6 weighted average of the excess (Le_E=${Le_E_eff.toFixed(3)}) and deficient (Le_D=${Le_D_eff.toFixed(3)}) reactants. Weighting parameter A = 1 + β·(Φ−1) (β = Zeldovich number, Φ = max(φ, 1/φ)). At stoichiometry Le_eff = (Le_E+Le_D)/2; far from it Le_eff → Le_D. ${(accurate&&bk.data&&bk.data.Le_eff)?"Per-species D from Cantera mixture transport; H₂-blend Le_fuel uses Hawkes-Chen 2004 mole-weighted aggregate.":"Free-mode: composition-weighted lookup table."} Le<1 → thermo-diffusively unstable (H₂-rich GTs operate here, S_T can exceed predictions by 30–50%). Le≈1 → stable (typical hydrocarbon). Le>1 → diffusively stable (CO-rich, naphtha).`}/>
+        <M l="Markstein (Ma)" v={Ma_eff.toFixed(2)} u="—" c={Ma_eff>0.5?C.good:Ma_eff<-0.5?C.warm:C.accent2} tip={`Ma per Bechtold-Matalon 2001 Eq. 12 (sheet reference, λ=T^(1/2)): Ma = γ_1/σ + ½·β·(Le_eff−1)·γ_2 with σ = ρ_u/ρ_b. ${(accurate&&bk.data&&Number.isFinite(bk.data.Ma))?"From Cantera flame analysis (full B-M expression).":"Free-mode: 0 placeholder."} +Ma: stable to wrinkling. -Ma: cellular instability. |Ma|>0.5: notable thermo-diffusive deviation from Le=1 baseline.`}/>
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
           <Tip text={Ma_eff>0.5?"Ma > 0.5 — flame is thermo-diffusively stable. Standard turbulent-flamelet correlations apply.":Ma_eff<-0.5?"Ma < -0.5 — flame is thermo-diffusively unstable (cellular structure). S_T can exceed Bradley by 30-50%; treat correlations as conservative.":"|Ma| ≤ 0.5 — flame is near-neutral. Bradley S_T is a good baseline."}>
             <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",cursor:"help",
@@ -3209,6 +3443,13 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
               border:`1px solid ${Ma_eff>0.5?C.good+"44":Ma_eff<-0.5?C.warm+"44":C.accent2+"44"}`}}>{Ma_eff>0.5?"● STABLE":Ma_eff<-0.5?"● CELLULAR-UNSTABLE":"● NEAR-NEUTRAL"} ⓘ</span>
           </Tip>
         </div>
+      </div>
+      {/* Bechtold-Matalon Le_eff breakdown — surfaces the per-reactant Lewis
+          numbers that feed Eq. 6 so engineers investigating H₂-rich behavior
+          can see what's driving the weighted average. */}
+      <div style={{fontSize:9.5,color:C.txtMuted,marginBottom:10,fontStyle:"italic",lineHeight:1.4,paddingLeft:2}}>
+        Bechtold-Matalon decomposition: Le_E (excess) = <span style={{color:C.txtDim,fontFamily:"monospace",fontWeight:600}}>{Le_E_eff.toFixed(3)}</span> · Le_D (deficient) = <span style={{color:C.txtDim,fontFamily:"monospace",fontWeight:600}}>{Le_D_eff.toFixed(3)}</span> → Le_eff weighted by A = 1 + β·(Φ−1).
+        {(!accurate||!bk.data||!Number.isFinite(bk.data.Le_E))?<span style={{color:C.accent2,marginLeft:6}}>(activate accurate mode for distinct Le_E/Le_D from Cantera transport)</span>:null}
       </div>
 
       {/* ── Borghi-Peters regime diagram ──────────────────────────────── */}
@@ -3317,6 +3558,24 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         </div>
       </div>
 
+      {/* ── Plee-Mellor 1979 LBO cross-check (independent framework) ── */}
+      <div style={{...S.row,gap:8,marginBottom:8,marginTop:2}}>
+        <M l="τ_sl (shear-layer)" v={pm_tau_sl_ms.toFixed(2)} u="ms" c={C.violet} tip={`Shear-layer residence time τ_sl = L_recirc / V_a, with L_recirc ≈ L_char (${uv(units,"len",Lchar).toFixed(4)} ${uu(units,"len")}) and V_a = V_ref (${uv(units,"vel",velocity).toFixed(1)} ${uu(units,"vel")}). Per Plee-Mellor 1979 (Combust Flame 35:61-80) this is the fluid-mechanic timescale that competes with chemical ignition delay in the bluff-body shear layer.`}/>
+        <M l="τ_hc' (chem ignition)" v={pm_tau_hc_ms.toFixed(3)} u="ms" c={C.accent3} tip={`Plee-Mellor 1979 Eq. 17 chemical ignition delay (Configuration A — 45° conical baffle, propane fit to Ballal-Lefebvre data):\nτ_hc' = 1e-4 · (T_φ / T_in) · exp(21000 / (R · T_φ))   [msec]\nT_φ = ${_PM_T_phi.toFixed(0)} K (${(accurate&&bk.data&&bk.data.T_max)?"Cantera flame T_max":"1800 K placeholder"}); T_in = ${_PM_T_in.toFixed(0)} K (compressor discharge); E_a/R ≈ 10568 K from the Plee-Mellor activation energy 21000 cal/mol.`}/>
+        <M l="τ_sl / τ_hc'" v={pm_ratio.toFixed(2)} u="—" c={pm_lbo_safe?(pm_marginal?C.warm:C.good):C.strong} tip={`Plee-Mellor stability ratio. LBO line at ratio = 2.11 (Configuration A — Plee-Mellor Fig. 5 fit, r = 0.98, n = 72). Above the line → STABLE; below → BLOWOFF. Currently ${pm_lbo_safe?(pm_marginal?"MARGINAL (within 30% of LBO line)":"ROBUST"):"BLOWOFF — chemistry can't keep up with shear-layer residence time"}.`}/>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
+          <Tip text={`Plee-Mellor 1979 characteristic-time framework — independent of Lefebvre. Both criteria should agree on robust vs. blowoff classification; if they disagree, the operating point is in a regime where one of the framework's assumptions is being stressed (e.g. very lean φ where T_φ approaches the lean flammability limit).`}>
+            <span style={{padding:"3px 10px",borderRadius:16,fontSize:10,fontWeight:600,fontFamily:"monospace",cursor:"help",
+              background:pm_lbo_safe?(pm_marginal?`${C.warm}1F`:`${C.good}1F`):`${C.strong}1F`,
+              color:pm_lbo_safe?(pm_marginal?C.warm:C.good):C.strong,
+              border:`1px solid ${pm_lbo_safe?(pm_marginal?C.warm:C.good):C.strong}44`}}>{pm_lbo_safe?(pm_marginal?"● PM MARGINAL":"● PM ROBUST"):"● PM BLOWOFF"} ⓘ</span>
+          </Tip>
+        </div>
+      </div>
+      <div style={{fontSize:9.5,color:C.txtMuted,marginBottom:10,fontStyle:"italic",lineHeight:1.4,paddingLeft:2}}>
+        Plee-Mellor 1979 cross-check uses a Damköhler-style competition between shear-layer residence time (L_char/V_ref) and chemical ignition delay; agreement with Lefebvre above is expected for typical premixers. Configuration A constants (45° conical baffle, propane). Cited as Combust. Flame 35:61-80.
+      </div>
+
       {/* ── Sweep charts ───────────────────────────────────────────── */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:8}}>
         <div style={{background:`${C.bg2}88`,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 6px"}}>
@@ -3410,9 +3669,10 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
             <span title={`Critical wall gradient g_c = S_L²/α_th (Lewis-von Elbe). ${H2_frac>0.30?`Confined H₂-flame correction √σ_ρ=${confine_correction.toFixed(2)} applied per Lieuwen Fig. 10.9 (g_c_eff shown).`:"Unconfined; no σ_ρ correction."}`}>g_c{H2_frac>0.30?"_eff":""} = <strong>{g_c_eff.toFixed(0)}</strong> 1/s</span><br/>
             <span title={`Actual wall gradient: 8·V_premix/D_h Poiseuille estimate × (1+ε_turb)=${(1+eps_turb).toFixed(2)}. Lieuwen p. 385 reports g_u,turbulent ≈ 3·g_u,laminar (Eichler-Sattelmayer).`}>g_actual = <strong style={{color:gateA_pass?C.good:C.warm}}>{g_actual.toFixed(0)}</strong> 1/s</span><br/>
             <span title={`Flashback Karlovitz Ka_fb = g_u·δ_F/s_d^u (Lieuwen Eq. 10.5). Pass: Ka_fb ≥ 1.`}>Ka_fb = <strong>{Number.isFinite(Ka_flashback)?Ka_flashback.toFixed(2):"—"}</strong> <span style={{color:C.txtMuted}}>(need ≥ 1)</span></span><br/>
-            <span style={{fontSize:10,color:C.txtMuted}}>margin = {gateA_margin.toFixed(2)}×</span>
+            <span style={{fontSize:10,color:C.txtMuted}}>margin = {gateA_margin.toFixed(2)}×</span><br/>
+            <span title={`Shaffer-Duan-McDonell 2013 (J Eng GT 135:011502) Eq. 4 — predicted burner-tip temperature at flashback as a linear function of fuel composition + AFT:\n  T_tip = -1.58·H₂% - 3.63·CO% - 4.28·CH₄% + 0.38·AFT [K]\nPer Shaffer §4.5, this is what physically drives BLF runaway in H₂-rich blends — heat transfer to the burner rim raises local Tu, raises S_L, reduces δ_q, all of which lower g_c. Using AFT = ${_AFT_card3.toFixed(0)} K (${(accurate&&bk.data&&bk.data.T_max)?"Cantera flame T_max":"1800 K placeholder"}). Active cooling typically caps T_tip ≤ 600 K.`} style={{fontSize:10,color:shaffer_tip_T_K>500?C.warm:C.txtMuted}}>T_tip (Shaffer) = <strong>{shaffer_tip_T_K.toFixed(0)}</strong> K{shaffer_tip_T_K>500?<span style={{marginLeft:6,color:C.warm,fontWeight:600}}>⚠ &gt;500 K</span>:""}</span>
           </div>
-          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Lieuwen Eq. 10.4-10.6. Dominant for tube burners and micromixers; H₂ flames {H2_frac>0.30?"(>30% — √σ_ρ confinement applied)":"hit this gate hardest"}.</div>
+          <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Lieuwen Eq. 10.4-10.6 + Shaffer 2013 Eq. 4 tip-T predictor. Dominant for tube burners and micromixers; H₂ flames {H2_frac>0.30?"(>30% — √σ_ρ confinement applied)":"hit this gate hardest"}.</div>
         </div>
 
         {/* Gate B — CIVB */}
@@ -7618,8 +7878,9 @@ function _adaptPanelResponse(slot, r, inp){
     };
   }
   if (slot === "flame"){
-    // Backend gives SL + alpha_th_u; the rest is JS post-processing
-    // (Damköhler, blowoff, ignition margin, flashback margin) that
+    // Backend gives SL + alpha_th_u + Le_eff/Le_E/Le_D/Ma/Ze/delta_F/nu_u;
+    // the rest is JS post-processing (Damköhler, blowoff, ignition margin,
+    // flashback margin, Card 1 regime, Card 2 LBO, Card 3 gates) that
     // mirrors runFlameForAutomation exactly. Keep the two in lockstep.
     const Tmix = mixT(inp.fuel, inp.ox, inp.phi, inp.T_fuel, inp.T_air);
     const SL_cms = (r.SL || 0) * 100;
@@ -7641,6 +7902,67 @@ function _adaptPanelResponse(slot, r, inp){
     const flashback_margin = inp.Vpremix / Math.max(S_T_est, 1e-20);
     const core_flashback_safe = flashback_margin > 1/0.7;
     const premixer_safe = ignition_safe && core_flashback_safe;
+    // ── Card 1 (Flame Speed & Regime Diagnostics) — Cantera-backed when available ──
+    const Le_eff = Number.isFinite(r.Le_eff) ? r.Le_eff : (typeof lewisNumberFreeMode==="function" ? lewisNumberFreeMode(inp.fuel) : 1.0);
+    const Le_E = Number.isFinite(r.Le_E) ? r.Le_E : Le_eff;
+    const Le_D = Number.isFinite(r.Le_D) ? r.Le_D : Le_eff;
+    const Ma = Number.isFinite(r.Ma) ? r.Ma : null;
+    const Ze = Number.isFinite(r.Ze) ? r.Ze : null;
+    const delta_F = Number.isFinite(r.delta_F) ? r.delta_F : alphaTh / Math.max(SL_ms, 1e-9);
+    const nu_u_val = Number.isFinite(r.nu_u) ? r.nu_u : alphaTh / 0.71;
+    const _uPrime = 0.10 * Math.max(inp.velocity, 0);
+    const _lT = 0.10 * Math.max(inp.Lchar, 1e-6);
+    const _b = bradleyST(SL_ms, Math.max(_uPrime, 1e-9), _lT, nu_u_val, Le_eff);
+    const ReT_diag = _b.ReT, Ka_diag = _b.Ka, ST_bradley = _b.ST;
+    const ST_damkohler = damkohlerST(SL_ms, Math.max(_uPrime, 1e-9));
+    const Da_diag = (_lT / Math.max(delta_F, 1e-12)) * (SL_ms / Math.max(_uPrime, 1e-9));
+    const borghi_regime = Ka_diag<1 ? (Da_diag>1?"Flamelet":"Corrugated") : Ka_diag<100?"Thin reaction zone":"Broken reaction zone";
+    // ── Card 2 (Stabilization & Blowoff) — Lefebvre + Plee-Mellor (defaults) ──
+    const _fp_a = (typeof calcFuelProps==="function") ? calcFuelProps(inp.fuel, inp.ox) : null;
+    const _Vpz_x=0.025, _K_LBO_x=0.025, _Da_crit_x=0.50, _Sn_x=0.6;
+    const _m_air_lbo = inp.cycle?.W36_kg_s ?? inp.cycle?.mdot_air_kg_s ?? 50.0;
+    const _T3_lbo_K = inp.cycle?.T3_K ?? inp.T_air ?? 700.0;
+    const _P3_lbo_kPa = (inp.cycle?.P3_bar ?? inp.P) * 100;
+    const _FAR_st = _fp_a ? 1/Math.max(_fp_a.AFR_mass, 1e-12) : 0.0583;
+    const phi_LBO = (typeof lefebvreLBO==="function" && _fp_a) ? lefebvreLBO(_K_LBO_x, _m_air_lbo, _T3_lbo_K, _Vpz_x, _P3_lbo_kPa, _fp_a.LHV_mass, _FAR_st) : NaN;
+    const q_LBO = Number.isFinite(phi_LBO) ? phi_LBO * _FAR_st : NaN;
+    const phi_LBO_margin = inp.phi - phi_LBO;
+    const lbo_safe_lefebvre = phi_LBO_margin >= 0.05;
+    const V_BO_card2 = inp.velocity * Math.max(Da/Math.max(_Da_crit_x,1e-9), 1e-6);
+    // Plee-Mellor 1979 cross-check
+    const _PM_T_phi = Number.isFinite(r.T_max) ? r.T_max : 1800;
+    const _PM_T_in = Math.max(_T3_lbo_K, 1);
+    const _PM_EaR = 21000.0/1.987;
+    const pm_tau_hc_ms = 1e-4 * (_PM_T_phi/_PM_T_in) * Math.exp(_PM_EaR/Math.max(_PM_T_phi,1));
+    const pm_tau_sl_ms = (Math.max(inp.Lchar,1e-9)/Math.max(inp.velocity,1e-9))*1000;
+    const pm_ratio = pm_tau_sl_ms / Math.max(pm_tau_hc_ms, 1e-12);
+    const pm_lbo_safe = pm_ratio > 2.11;
+    // ── Card 3 (Premixer Flashback & Autoignition) — 4 gates ──
+    const _D_h_x=0.040, _eps_turb_x=0.7, _RTD_x=1.5;
+    const _g_u_pipe = 8 * inp.Vpremix / Math.max(_D_h_x, 1e-6);
+    const _g_u_actual = _g_u_pipe * (1 + _eps_turb_x);
+    const _T_b_card3 = Number.isFinite(r.T_max) ? r.T_max : 1800;
+    const sigma_rho = _T_b_card3 / Math.max(Tmix, 1);
+    const confine_correction = (H2_frac > 0.30) ? Math.sqrt(Math.max(sigma_rho, 1)) : 1.0;
+    const g_c_eff = g_c * confine_correction;
+    const gateA_pass = _g_u_actual > g_c_eff;
+    const gateA_margin = _g_u_actual / Math.max(g_c_eff, 1e-9);
+    const Ka_flashback = (_g_u_actual>0 && SL_ms>0) ? (_g_u_actual*delta_F)/SL_ms : NaN;
+    const _tot_pct = Math.max(Object.values(inp.fuel).reduce((a,b)=>a+(+b||0),0), 1e-9);
+    const _H2_pct = ((inp.fuel.H2 || 0)/_tot_pct)*100;
+    const _CO_pct = ((inp.fuel.CO || 0)/_tot_pct)*100;
+    const _CH4_pct = ((inp.fuel.CH4 || 0)/_tot_pct)*100;
+    const shaffer_T_tip = -1.58*_H2_pct - 3.63*_CO_pct - 4.28*_CH4_pct + 0.38*_T_b_card3;
+    const piCIVB = SL_ms / Math.max(_Sn_x*Math.max(inp.Vpremix,1e-9)*Math.PI, 1e-12);
+    const civb_threshold = (H2_frac>0.30) ? 0.03 : 0.05;
+    const gateB_pass = piCIVB < civb_threshold;
+    const v_st_margin = inp.Vpremix / Math.max(S_T_est, 1e-9);
+    const gateC_pass = v_st_margin > 1.43;
+    const tau_res_99 = _RTD_x * (inp.Lpremix / Math.max(inp.Vpremix, 1e-20));
+    const ign_margin_card3 = Number.isFinite(tau_ign) ? tau_ign / Math.max(tau_res_99, 1e-20) : NaN;
+    const gateD_pass = Number.isFinite(tau_ign) && ign_margin_card3 >= 3;
+    const card3_all_pass = gateA_pass && gateB_pass && gateC_pass && gateD_pass;
+    const card3_status = card3_all_pass ? "PASS" : "FAIL";
     return {
       SL_cms, tau_chem_ms: tau_chem * 1000, tau_flow_ms: tau_flow * 1000,
       Da, blowoff_velocity, stable,
@@ -7648,6 +7970,19 @@ function _adaptPanelResponse(slot, r, inp){
       tau_ign_ms: Number.isFinite(tau_ign) ? tau_ign * 1000 : null,
       tau_res_ms: tau_res * 1000, ignition_safe,
       flashback_margin, core_flashback_safe, premixer_safe,
+      // Card 1
+      Le_eff, Le_E, Le_D, Ma, Ze, delta_F, nu_u: nu_u_val,
+      ReT_diag, Ka_diag, Da_diag, ST_bradley, ST_damkohler, borghi_regime,
+      // Card 2
+      phi_LBO, q_LBO, phi_LBO_margin, lbo_safe_lefebvre,
+      Da_crit_x: _Da_crit_x, V_BO_card2,
+      pm_tau_sl_ms, pm_tau_hc_ms, pm_ratio, pm_lbo_safe,
+      // Card 3
+      gateA_pass, gateA_margin, Ka_flashback, g_c_eff, shaffer_T_tip,
+      piCIVB, civb_threshold, gateB_pass,
+      v_st_margin, gateC_pass,
+      tau_res_99_ms: tau_res_99 * 1000, ign_margin_card3, gateD_pass,
+      card3_status,
     };
   }
   if (slot === "map"){
@@ -8090,7 +8425,7 @@ async function runPSRForAutomation(inp, accurate){
 
 async function runFlameForAutomation(inp, accurate){
   const Tmix = mixT(inp.fuel, inp.ox, inp.phi, inp.T_fuel, inp.T_air);
-  let SL_cms, alpha_th_u;
+  let SL_cms, alpha_th_u, _bkResp = {};
   if (accurate){
     try {
       const r = await bkCachedFetch("flame", {
@@ -8103,6 +8438,7 @@ async function runFlameForAutomation(inp, accurate){
       });
       SL_cms = (r.SL || 0) * 100;
       alpha_th_u = r.alpha_th_u;
+      _bkResp = r;  // keep Le_eff / Le_E / Le_D / Ma / Ze / delta_F / nu_u / T_max
     } catch (_) {
       SL_cms = calcSL(inp.fuel, inp.phi, Tmix, inp.P) * 100;
     }
@@ -8118,17 +8454,73 @@ async function runFlameForAutomation(inp, accurate){
   const tau_BO = inp.Dfh / Math.max(1.5 * SL_ms, 1e-20);
   const alphaTh = alpha_th_u || (2e-5*Math.pow(Tmix/300,1.7)/inp.P);
   const g_c = (SL_ms*SL_ms) / Math.max(alphaTh, 1e-20);
-  // Autoignition: free correlation only (skip Cantera 0D in automation —
-  // it's a separate slow call; user can run combustor panel for τ_ign).
   const tau_ign = (typeof calcTauIgnFree === "function") ? calcTauIgnFree(Tmix, inp.P) : NaN;
   const tau_res = inp.Lpremix / Math.max(inp.Vpremix, 1e-20);
   const ignition_safe = Number.isFinite(tau_ign) && (tau_ign / Math.max(tau_res, 1e-20)) >= 3;
-  // Flashback margin: V/S_T  with S_T ≈ 1.8 × S_L (or 2.5× for H2-rich)
   const H2_frac = (inp.fuel.H2 || 0) / Math.max(Object.values(inp.fuel).reduce((a,b)=>a+(+b||0),0), 1e-9);
   const S_T_est = SL_ms * (H2_frac > 0.30 ? 2.5 : 1.8);
   const flashback_margin = inp.Vpremix / Math.max(S_T_est, 1e-20);
   const core_flashback_safe = flashback_margin > 1/0.7;
   const premixer_safe = ignition_safe && core_flashback_safe;
+  // ── Card 1 (Flame Speed & Regime Diagnostics) ──
+  const Le_eff = Number.isFinite(_bkResp.Le_eff) ? _bkResp.Le_eff : (typeof lewisNumberFreeMode==="function" ? lewisNumberFreeMode(inp.fuel) : 1.0);
+  const Le_E = Number.isFinite(_bkResp.Le_E) ? _bkResp.Le_E : Le_eff;
+  const Le_D = Number.isFinite(_bkResp.Le_D) ? _bkResp.Le_D : Le_eff;
+  const Ma = Number.isFinite(_bkResp.Ma) ? _bkResp.Ma : null;
+  const Ze = Number.isFinite(_bkResp.Ze) ? _bkResp.Ze : null;
+  const delta_F = Number.isFinite(_bkResp.delta_F) ? _bkResp.delta_F : alphaTh / Math.max(SL_ms, 1e-9);
+  const nu_u_val = Number.isFinite(_bkResp.nu_u) ? _bkResp.nu_u : alphaTh / 0.71;
+  const _uPrime = 0.10 * Math.max(inp.velocity, 0);
+  const _lT = 0.10 * Math.max(inp.Lchar, 1e-6);
+  const _b = bradleyST(SL_ms, Math.max(_uPrime, 1e-9), _lT, nu_u_val, Le_eff);
+  const ReT_diag = _b.ReT, Ka_diag = _b.Ka, ST_bradley = _b.ST;
+  const ST_damkohler = damkohlerST(SL_ms, Math.max(_uPrime, 1e-9));
+  const Da_diag = (_lT / Math.max(delta_F, 1e-12)) * (SL_ms / Math.max(_uPrime, 1e-9));
+  const borghi_regime = Ka_diag<1 ? (Da_diag>1?"Flamelet":"Corrugated") : Ka_diag<100?"Thin reaction zone":"Broken reaction zone";
+  // ── Card 2 (Stabilization & Blowoff) — Lefebvre + Plee-Mellor (defaults) ──
+  const _fp_a = (typeof calcFuelProps==="function") ? calcFuelProps(inp.fuel, inp.ox) : null;
+  const _Vpz_x=0.025, _K_LBO_x=0.025, _Da_crit_x=0.50, _Sn_x=0.6;
+  const _m_air_lbo = inp.cycle?.W36_kg_s ?? inp.cycle?.mdot_air_kg_s ?? 50.0;
+  const _T3_lbo_K = inp.cycle?.T3_K ?? inp.T_air ?? 700.0;
+  const _P3_lbo_kPa = (inp.cycle?.P3_bar ?? inp.P) * 100;
+  const _FAR_st = _fp_a ? 1/Math.max(_fp_a.AFR_mass, 1e-12) : 0.0583;
+  const phi_LBO = (typeof lefebvreLBO==="function" && _fp_a) ? lefebvreLBO(_K_LBO_x, _m_air_lbo, _T3_lbo_K, _Vpz_x, _P3_lbo_kPa, _fp_a.LHV_mass, _FAR_st) : NaN;
+  const q_LBO = Number.isFinite(phi_LBO) ? phi_LBO * _FAR_st : NaN;
+  const phi_LBO_margin = inp.phi - phi_LBO;
+  const lbo_safe_lefebvre = phi_LBO_margin >= 0.05;
+  const V_BO_card2 = inp.velocity * Math.max(Da/Math.max(_Da_crit_x,1e-9), 1e-6);
+  const _PM_T_phi = Number.isFinite(_bkResp.T_max) ? _bkResp.T_max : 1800;
+  const _PM_T_in = Math.max(_T3_lbo_K, 1);
+  const _PM_EaR = 21000.0/1.987;
+  const pm_tau_hc_ms = 1e-4 * (_PM_T_phi/_PM_T_in) * Math.exp(_PM_EaR/Math.max(_PM_T_phi,1));
+  const pm_tau_sl_ms = (Math.max(inp.Lchar,1e-9)/Math.max(inp.velocity,1e-9))*1000;
+  const pm_ratio = pm_tau_sl_ms / Math.max(pm_tau_hc_ms, 1e-12);
+  const pm_lbo_safe = pm_ratio > 2.11;
+  // ── Card 3 (Premixer Flashback & Autoignition) — 4 gates ──
+  const _D_h_x=0.040, _eps_turb_x=0.7, _RTD_x=1.5;
+  const _g_u_pipe = 8 * inp.Vpremix / Math.max(_D_h_x, 1e-6);
+  const _g_u_actual = _g_u_pipe * (1 + _eps_turb_x);
+  const _T_b_card3 = Number.isFinite(_bkResp.T_max) ? _bkResp.T_max : 1800;
+  const sigma_rho = _T_b_card3 / Math.max(Tmix, 1);
+  const confine_correction = (H2_frac > 0.30) ? Math.sqrt(Math.max(sigma_rho, 1)) : 1.0;
+  const g_c_eff = g_c * confine_correction;
+  const gateA_pass = _g_u_actual > g_c_eff;
+  const gateA_margin = _g_u_actual / Math.max(g_c_eff, 1e-9);
+  const Ka_flashback = (_g_u_actual>0 && SL_ms>0) ? (_g_u_actual*delta_F)/SL_ms : NaN;
+  const _tot_pct = Math.max(Object.values(inp.fuel).reduce((a,b)=>a+(+b||0),0), 1e-9);
+  const _H2_pct = ((inp.fuel.H2 || 0)/_tot_pct)*100;
+  const _CO_pct = ((inp.fuel.CO || 0)/_tot_pct)*100;
+  const _CH4_pct = ((inp.fuel.CH4 || 0)/_tot_pct)*100;
+  const shaffer_T_tip = -1.58*_H2_pct - 3.63*_CO_pct - 4.28*_CH4_pct + 0.38*_T_b_card3;
+  const piCIVB = SL_ms / Math.max(_Sn_x*Math.max(inp.Vpremix,1e-9)*Math.PI, 1e-12);
+  const civb_threshold = (H2_frac>0.30) ? 0.03 : 0.05;
+  const gateB_pass = piCIVB < civb_threshold;
+  const v_st_margin = inp.Vpremix / Math.max(S_T_est, 1e-9);
+  const gateC_pass = v_st_margin > 1.43;
+  const tau_res_99 = _RTD_x * (inp.Lpremix / Math.max(inp.Vpremix, 1e-20));
+  const ign_margin_card3 = Number.isFinite(tau_ign) ? tau_ign / Math.max(tau_res_99, 1e-20) : NaN;
+  const gateD_pass = Number.isFinite(tau_ign) && ign_margin_card3 >= 3;
+  const card3_status = (gateA_pass && gateB_pass && gateC_pass && gateD_pass) ? "PASS" : "FAIL";
   return {
     SL_cms, tau_chem_ms: tau_chem * 1000, tau_flow_ms: tau_flow * 1000,
     Da, blowoff_velocity, stable,
@@ -8136,6 +8528,19 @@ async function runFlameForAutomation(inp, accurate){
     tau_ign_ms: Number.isFinite(tau_ign) ? tau_ign * 1000 : null,
     tau_res_ms: tau_res * 1000, ignition_safe,
     flashback_margin, core_flashback_safe, premixer_safe,
+    // Card 1
+    Le_eff, Le_E, Le_D, Ma, Ze, delta_F, nu_u: nu_u_val,
+    ReT_diag, Ka_diag, Da_diag, ST_bradley, ST_damkohler, borghi_regime,
+    // Card 2
+    phi_LBO, q_LBO, phi_LBO_margin, lbo_safe_lefebvre,
+    Da_crit_x: _Da_crit_x, V_BO_card2,
+    pm_tau_sl_ms, pm_tau_hc_ms, pm_ratio, pm_lbo_safe,
+    // Card 3
+    gateA_pass, gateA_margin, Ka_flashback, g_c_eff, shaffer_T_tip,
+    piCIVB, civb_threshold, gateB_pass,
+    v_st_margin, gateC_pass,
+    tau_res_99_ms: tau_res_99 * 1000, ign_margin_card3, gateD_pass,
+    card3_status,
   };
 }
 
