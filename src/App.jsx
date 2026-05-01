@@ -2786,51 +2786,125 @@ function BorghiPetersDiagram({ currentX, currentY, currentLabel, trail, hover, s
         : { ...(trail[hover.idx] || {}), isCurrent: false })
     : null;
 
+  // ─── Flame-icon mini-glyphs, one per regime. Positioned at the region's
+  // visual center in log-log space. Sized to read at the export resolution
+  // and the on-screen viewBox (720×440). All paths use stroke from the
+  // region's accent color so they stay legible on the tinted background.
+  const FlameIcon = ({type, cx, cy, color}) => {
+    const t = `translate(${cx} ${cy})`;
+    if (type === "laminar") {
+      // Smooth, stable single-peak flame — a teardrop with base line.
+      return (
+        <g transform={t} pointerEvents="none">
+          <path d="M0,-15 C-7,-7 -10,2 -10,6 C-10,10 -5,12 0,12 C5,12 10,10 10,6 C10,2 7,-7 0,-15 Z"
+                fill={`${color}33`} stroke={color} strokeWidth="1.6" strokeLinejoin="round"/>
+          <line x1={-13} y1={13} x2={13} y2={13} stroke={color} strokeWidth="1.4" strokeDasharray="2,2"/>
+        </g>
+      );
+    }
+    if (type === "flamelet") {
+      // Wrinkled but intact reaction sheet — a long sinusoid + small swirl arrows.
+      return (
+        <g transform={t} pointerEvents="none">
+          <path d="M-30,2 Q-22,-8 -14,2 T2,2 T18,2 T34,2"
+                fill="none" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+          <path d="M-22,-12 a3,3 0 1,1 3,-3" fill="none" stroke={color} strokeWidth="1.2"/>
+          <path d="M-2,-12 a3,3 0 1,1 3,-3"  fill="none" stroke={color} strokeWidth="1.2"/>
+          <path d="M18,-12 a3,3 0 1,1 3,-3"  fill="none" stroke={color} strokeWidth="1.2"/>
+        </g>
+      );
+    }
+    if (type === "thin") {
+      // Disturbed, thicker flame — three-line band (dashed outer, solid core).
+      return (
+        <g transform={t} pointerEvents="none">
+          <path d="M-30,-5 Q-22,-13 -14,-5 T2,-5 T18,-5 T34,-5"
+                fill="none" stroke={color} strokeWidth="1" strokeDasharray="3,2" opacity="0.85"/>
+          <path d="M-30,0 Q-22,-8 -14,0 T2,0 T18,0 T34,0"
+                fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round"/>
+          <path d="M-30,5 Q-22,-3 -14,5 T2,5 T18,5 T34,5"
+                fill="none" stroke={color} strokeWidth="1" strokeDasharray="3,2" opacity="0.85"/>
+          <path d="M-22,-15 a3,3 0 1,1 3,-3" fill="none" stroke={color} strokeWidth="1.2"/>
+          <path d="M18,-15 a3,3 0 1,1 3,-3"  fill="none" stroke={color} strokeWidth="1.2"/>
+        </g>
+      );
+    }
+    if (type === "broken") {
+      // Reaction zone breaks up — scattered fragmented cells.
+      return (
+        <g transform={t} pointerEvents="none" opacity="0.85">
+          <circle cx={-18} cy={-2} r={5}  fill={`${color}55`} stroke={color} strokeWidth="1"/>
+          <circle cx={-7}  cy={5}  r={3}  fill={`${color}55`} stroke={color} strokeWidth="1"/>
+          <circle cx={6}   cy={-3} r={6}  fill={`${color}55`} stroke={color} strokeWidth="1"/>
+          <circle cx={17}  cy={4}  r={3}  fill={`${color}55`} stroke={color} strokeWidth="1"/>
+          <circle cx={-13} cy={9}  r={2}  fill={`${color}77`} />
+          <circle cx={2}   cy={11} r={1.6} fill={`${color}77`} />
+          <circle cx={15}  cy={-9} r={1.5} fill={`${color}77`} />
+        </g>
+      );
+    }
+    return null;
+  };
+
   return (
     <div style={{marginTop:8,background:`${C.bg2}88`,border:`1px solid ${C.border}`,borderRadius:6,padding:"10px 8px 6px"}}>
       <div style={{fontSize:10.5,fontWeight:700,color:C.txtDim,letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase",margin:"0 4px 4px 6px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <span>Borghi-Peters Regime Diagram</span>
+        <span style={{fontSize:13,color:C.accent,letterSpacing:".8px"}}>BORGHI–PETERS REGIME DIAGRAM</span>
         <span style={{fontSize:9.5,color:C.txtMuted,fontFamily:"monospace",textTransform:"none",letterSpacing:0}}>● current point &nbsp;·&nbsp; ○ last {trail.length} ops &nbsp;·&nbsp; hover for readout</span>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"auto",display:"block"}} preserveAspectRatio="xMidYMid meet">
-        {/* Background regime tints */}
-        {/* Laminar (Re_T < 1) — bottom-left of Re_T=1 line — pale blue */}
-        <polygon points={`${xToPx(xMinLog)},${yToPx(yMinLog)} ${reT1.x1},${reT1.y1} ${xToPx(xMinLog)},${reT1.y1}`} fill={`${C.accent3}10`} />
-        {/* Flamelet (Ka<1, Da>1) — between Ka=1 and Da=1 lines — pale green */}
-        <polygon points={`${ka1.x1},${ka1.y1} ${ka1.x2},${ka1.y2} ${xToPx(xMaxLog)},${yToPx(yMinLog)}`} fill={`${C.good}12`} />
-        {/* Thin reaction zone (1<Ka<100) — between the two Ka lines — amber tint.
-            Bumped from C.warm10 (≈6% alpha — invisible) to C.accent2 28 (≈16%
-            amber) so the band is clearly distinguishable from the broken-rxn
-            pink above it and the flamelet green below. */}
-        <polygon points={`${ka1.x1},${ka1.y1} ${ka1.x2},${ka1.y2} ${ka100.x2},${ka100.y2} ${ka100.x1},${ka100.y1}`} fill={`${C.accent2}28`} />
+        {/* ── Background regime tints — stronger fills for better region readability ── */}
+        {/* Flamelet (Ka<1) — full bottom band below Ka=1 line — pale green */}
+        <polygon points={`${ka1.x1},${ka1.y1} ${ka1.x2},${ka1.y2} ${xToPx(xMaxLog)},${yToPx(yMinLog)} ${xToPx(xMinLog)},${yToPx(yMinLog)}`} fill={`${C.good}1A`} />
+        {/* Thin reaction zone (1<Ka<100) — amber band */}
+        <polygon points={`${ka1.x1},${ka1.y1} ${ka1.x2},${ka1.y2} ${ka100.x2},${ka100.y2} ${ka100.x1},${ka100.y1}`} fill={`${C.warm}28`} />
         {/* Broken reaction zone (Ka>100) — top region — pale red */}
-        <polygon points={`${ka100.x1},${ka100.y1} ${ka100.x2},${ka100.y2} ${xToPx(xMaxLog)},${yToPx(yMaxLog)} ${xToPx(xMinLog)},${yToPx(yMaxLog)}`} fill={`${C.strong}10`} />
+        <polygon points={`${ka100.x1},${ka100.y1} ${ka100.x2},${ka100.y2} ${xToPx(xMaxLog)},${yToPx(yMaxLog)} ${xToPx(xMinLog)},${yToPx(yMaxLog)}`} fill={`${C.strong}1F`} />
+        {/* Laminar (Re_T < 1) — bottom-left wedge — overlaid on the green. */}
+        <polygon points={`${xToPx(xMinLog)},${yToPx(yMinLog)} ${reT1.x1},${reT1.y1} ${xToPx(xMinLog)},${reT1.y1}`} fill={`${C.accent3}33`} />
 
         {/* Major tick grid */}
         {xTicks.map(t => (
-          <line key={`xg${t}`} x1={xToPx(t)} y1={M.top} x2={xToPx(t)} y2={H-M.bottom} stroke={C.border} strokeWidth="0.5" strokeDasharray="2,3" opacity="0.5"/>
+          <line key={`xg${t}`} x1={xToPx(t)} y1={M.top} x2={xToPx(t)} y2={H-M.bottom} stroke={C.border} strokeWidth="0.5" strokeDasharray="2,3" opacity="0.45"/>
         ))}
         {yTicks.map(t => (
-          <line key={`yg${t}`} x1={M.left} y1={yToPx(t)} x2={W-M.right} y2={yToPx(t)} stroke={C.border} strokeWidth="0.5" strokeDasharray="2,3" opacity="0.5"/>
+          <line key={`yg${t}`} x1={M.left} y1={yToPx(t)} x2={W-M.right} y2={yToPx(t)} stroke={C.border} strokeWidth="0.5" strokeDasharray="2,3" opacity="0.45"/>
         ))}
 
         {/* Reference diagonals */}
-        <line x1={ka1.x1} y1={ka1.y1} x2={ka1.x2} y2={ka1.y2} stroke={C.warm} strokeWidth="1.5"/>
-        <line x1={ka100.x1} y1={ka100.y1} x2={ka100.x2} y2={ka100.y2} stroke={C.strong} strokeWidth="1.5"/>
-        <line x1={da1.x1} y1={da1.y1} x2={da1.x2} y2={da1.y2} stroke={C.accent2} strokeWidth="1.5" strokeDasharray="6,3"/>
+        <line x1={ka1.x1} y1={ka1.y1} x2={ka1.x2} y2={ka1.y2} stroke={C.strong} strokeWidth="1.7"/>
+        <line x1={ka100.x1} y1={ka100.y1} x2={ka100.x2} y2={ka100.y2} stroke={C.strong} strokeWidth="1.7"/>
+        <line x1={da1.x1} y1={da1.y1} x2={da1.x2} y2={da1.y2} stroke={C.warm} strokeWidth="1.5" strokeDasharray="6,3"/>
         <line x1={reT1.x1} y1={reT1.y1} x2={reT1.x2} y2={reT1.y2} stroke={C.accent3} strokeWidth="1.5" strokeDasharray="3,3"/>
 
-        {/* Diagonal labels */}
-        <text x={xToPx(2.7)} y={yToPx(1.2)} fill={C.warm} fontSize="11" fontFamily="monospace" fontWeight="700">Ka = 1</text>
-        <text x={xToPx(2.7)} y={yToPx(2.55)} fill={C.strong} fontSize="11" fontFamily="monospace" fontWeight="700">Ka = 100</text>
-        <text x={xToPx(0.3)} y={yToPx(1.0)} fill={C.accent2} fontSize="11" fontFamily="monospace" fontWeight="700">Da = 1</text>
-        <text x={xToPx(0.3)} y={yToPx(-0.9)} fill={C.accent3} fontSize="11" fontFamily="monospace" fontWeight="700">Re_T = 1</text>
+        {/* Diagonal labels — moved away from line origin/end so they don't crash */}
+        <text x={xToPx(3.2)} y={yToPx(1.55)} fill={C.strong} fontSize="11" fontFamily="monospace" fontWeight="700">Ka = 1</text>
+        <text x={xToPx(2.7)} y={yToPx(2.75)} fill={C.strong} fontSize="11" fontFamily="monospace" fontWeight="700">Ka = 100</text>
+        <text x={xToPx(0.3)} y={yToPx(1.0)} fill={C.warm} fontSize="11" fontFamily="monospace" fontWeight="700">Da = 1</text>
+        <text x={xToPx(0.2)} y={yToPx(-0.7)} fill={C.accent3} fontSize="11" fontFamily="monospace" fontWeight="700">Re_T = 1</text>
 
-        {/* Regime labels */}
-        <text x={xToPx(2.4)} y={yToPx(-0.4)} fill={C.good} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">FLAMELET</text>
-        <text x={xToPx(2.4)} y={yToPx(1.75)} fill={C.warm} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">THIN REACTION ZONE</text>
-        <text x={xToPx(0.4)} y={yToPx(2.7)} fill={C.strong} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">BROKEN RXN</text>
-        <text x={xToPx(0.2)} y={yToPx(-0.6)} fill={C.accent3} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">LAMINAR</text>
+        {/* ── Regime labels with flame visualizations ── */}
+        {/* LAMINAR — bottom-left corner */}
+        <FlameIcon type="laminar" cx={xToPx(0.55)} cy={yToPx(-0.55)} color={C.accent3}/>
+        <text x={xToPx(0.55)} y={yToPx(-0.55)+30} fill={C.accent3} fontSize="11.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="800" letterSpacing=".6px" textAnchor="middle">LAMINAR</text>
+        <text x={xToPx(0.55)} y={yToPx(-0.55)+42} fill={C.txtMuted} fontSize="9.5" fontStyle="italic" textAnchor="middle">smooth, stable flame</text>
+
+        {/* FLAMELET — bottom-right area */}
+        <FlameIcon type="flamelet" cx={xToPx(3.0)} cy={yToPx(-0.25)} color={C.good}/>
+        <text x={xToPx(3.0)} y={yToPx(-0.25)+30} fill={C.good} fontSize="11.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="800" letterSpacing=".6px" textAnchor="middle">FLAMELET</text>
+        <text x={xToPx(3.0)} y={yToPx(-0.25)+42} fill={C.txtMuted} fontSize="9.5" fontStyle="italic" textAnchor="middle">wrinkled but intact</text>
+
+        {/* THIN REACTION ZONE — middle band, on the right side so it stays
+            inside the band at most reasonable l_T/δ_F values and avoids
+            collision with the typical operating point cluster */}
+        <FlameIcon type="thin" cx={xToPx(2.6)} cy={yToPx(1.45)} color={C.warm}/>
+        <text x={xToPx(2.6)} y={yToPx(1.45)+30} fill={C.warm} fontSize="11.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="800" letterSpacing=".6px" textAnchor="middle">THIN REACTION ZONE</text>
+        <text x={xToPx(2.6)} y={yToPx(1.45)+42} fill={C.txtMuted} fontSize="9.5" fontStyle="italic" textAnchor="middle">disturbed, thicker flame</text>
+
+        {/* BROKEN RXN — top region */}
+        <FlameIcon type="broken" cx={xToPx(0.7)} cy={yToPx(2.55)} color={C.strong}/>
+        <text x={xToPx(0.7)} y={yToPx(2.55)+30} fill={C.strong} fontSize="11.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="800" letterSpacing=".6px" textAnchor="middle">BROKEN RXN</text>
+        <text x={xToPx(0.7)} y={yToPx(2.55)+42} fill={C.txtMuted} fontSize="9.5" fontStyle="italic" textAnchor="middle">reaction zone breaks up</text>
 
         {/* Frame */}
         <rect x={M.left} y={M.top} width={plotW} height={plotH} fill="none" stroke={C.txtDim} strokeWidth="1"/>
