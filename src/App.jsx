@@ -3020,6 +3020,24 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const v_st_margin = Vpremix / Math.max(ST_premix, 1e-9);
   const gateC_pass = v_st_margin > 1.43;
 
+  // Autoignition delay τ_ign (s) — needed by Gate D below AND by the
+  // legacy "premixer safe" rollup further down. Declared HERE to avoid
+  // a Temporal Dead Zone error: Gate D references tau_ign and the old
+  // declaration was below Gate D.
+  //   Accurate mode → Cantera 0D const-P reactor; if cutoff is reached
+  //                   without ignition, report τ_ign > cutoff and use
+  //                   the cutoff as a conservative lower bound.
+  //   Free mode     → Spadaccini–Colket NG correlation. Suppressed for
+  //                   fuels with H₂ > 5% or non-hydrocarbons (out of cal).
+  const nonNGFuel       = H2_frac > 0.05 || (fuel.CO || 0) > 0.01 || (fuel.NH3 || 0) > 0;
+  const freeCorrValid   = !nonNGFuel;
+  const accurateIgn     = accurate && bkIgn.data;
+  const tau_ign_source  = accurateIgn ? "cantera" : (freeCorrValid ? "spad_colk" : "none");
+  let tau_ign, tau_ign_is_lower_bound;
+  if (accurateIgn)            { tau_ign = bkIgn.data.tau_ign_s;    tau_ign_is_lower_bound = !bkIgn.data.ignited; }
+  else if (freeCorrValid)     { tau_ign = calcTauIgnFree(Tmix, P); tau_ign_is_lower_bound = false; }
+  else                        { tau_ign = NaN;                     tau_ign_is_lower_bound = false; }
+
   // ── Gate D: autoignition (RTD-corrected) ───────────────────────────
   // τ_res,99 = RTD_multiplier · (L_premix / V_premix). Pass: τ_ign /
   // τ_res,99 ≥ 3. Reuses the existing tau_ign (bk-fed in accurate mode)
@@ -3048,21 +3066,9 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // `if(!flameActive)` block in this same component. Hooks rules require
   // identical hook call order on every render, so the trail-reset and
   // trail-push useEffects can't live in the active branch.)
-  // Autoignition delay (s).
-  //   Accurate mode → Cantera 0D const-P reactor; if the run reaches its cutoff without ignition,
-  //                   we report τ_ign > cutoff and use the cutoff as a conservative lower bound
-  //                   for the margin (never fall through to the NG-only correlation).
-  //   Free mode     → Spadaccini–Colket NG correlation. Suppressed for fuels with H2>5% or
-  //                   non-hydrocarbon species, where the correlation is outside its calibration.
-  // (H2_frac already declared at the top of Card 3 — see TDZ-fix comment above.)
-  const nonNGFuel=H2_frac>0.05||(fuel.CO||0)>0.01||(fuel.NH3||0)>0;
-  const freeCorrValid=!nonNGFuel;
-  const accurateIgn=accurate&&bkIgn.data;
-  const tau_ign_source=accurateIgn?"cantera":(freeCorrValid?"spad_colk":"none");
-  let tau_ign, tau_ign_is_lower_bound;
-  if(accurateIgn){tau_ign=bkIgn.data.tau_ign_s;tau_ign_is_lower_bound=!bkIgn.data.ignited;}
-  else if(freeCorrValid){tau_ign=calcTauIgnFree(Tmix,P);tau_ign_is_lower_bound=false;}
-  else{tau_ign=NaN;tau_ign_is_lower_bound=false;}
+  // (Autoignition block — nonNGFuel/freeCorrValid/accurateIgn/tau_ign —
+  //  was moved above Gate D to fix a TDZ. See the comment block above
+  //  Gate D in this same component.)
   // Premixer residence time (s): τ_res = L_premix / V_premix.
   const tau_res=Lpremix/Math.max(Vpremix,1e-20);
   // Autoignition safety — τ_ign / τ_res. ≥ 3 is robust (gating threshold).
