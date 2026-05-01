@@ -978,7 +978,7 @@ const s2=[
   ["l_T (integral length scale, auto = 0.1·L_char)",+uv(u,"len",_lT_x).toFixed(5),uu(u,"len")],
   ["Reynolds Re_T",+_ReT_diag.toFixed(0),"—"],
   ["Karlovitz Number (Ka)",+_Ka_diag.toFixed(3),"—"],
-  ["Damköhler (regime, Da)",+_Da_diag.toFixed(2),"—"],
+  ["Da_regime (Borghi, l_T/δ_F · S_L/u')",+_Da_diag.toFixed(2),"—"],
   ["Borghi-Peters Regime",_Borghi_regime,"—"],
   ["Turbulent Flame Speed S_T (Bradley/Lau/Lawes 1992)",+uv(u,"vel",_ST_brad).toFixed(3),uu(u,"vel")],
   ["Turbulent Flame Speed S_T (Damköhler 1940)",+uv(u,"vel",_ST_dam).toFixed(3),uu(u,"vel")],
@@ -986,9 +986,10 @@ const s2=[
   ["═══ CARD 2 — Stabilization & Blowoff (Lefebvre + Plee-Mellor) ═══"],
   ["Parameter","Value","Unit"],
   ["Premixer Type (default for export)","swirl burner @ S_n=0.6","—"],
-  ["Da_crit (premixer-type)",+_Da_crit_x.toFixed(3),"—"],
-  ["Da (actual)",+_Da_actual_x.toFixed(3),"—"],
-  ["Da / Da_crit",+(_Da_actual_x/_Da_crit_x).toFixed(2),"—"],
+  ["Da_BO,crit (premixer-type, anchor blowoff)",+_Da_crit_x.toFixed(3),"—"],
+  ["Da_BO (actual, τ_flow/τ_chem with τ_flow=L_char/V_ref)",+_Da_actual_x.toFixed(3),"—"],
+  ["Da_BO / Da_BO,crit (margin to flame anchor blowoff)",+(_Da_actual_x/_Da_crit_x).toFixed(2),"—"],
+  ["Note","Da_BO (Card 2 / blowoff) and Da_regime (Card 1 / Borghi) are different Damköhler quantities sharing the same name — combustion convention. Da_regime places the point on the Borghi diagram; Da_BO measures flame-anchor stability.",""],
   ["V_BO (this geometry)",+uv(u,"vel",_V_BO_x).toFixed(2),uu(u,"vel")],
   ["─── Lefebvre LBO (Lefebvre & Ballal 2010 Eq. 5.27) ───","",""],
   ["Lefebvre A constant (default TF 33)",+_K_LBO_x.toFixed(4),"—"],
@@ -3425,7 +3426,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         <M l="u'/S_L" v={(uPrime/Math.max(SL_ms,1e-9)).toFixed(2)} u="—" c={C.violet} tip="Turbulence intensity ratio. <1: laminar wrinkling; ≫1: thin reaction zone."/>
         <M l="l_T/δ_F" v={(lT/Math.max(delta_F,1e-12)).toFixed(0)} u="—" c={C.accent} tip="Length scale ratio. >>1: large eddies stretch a thin flame; ~1: small eddies penetrate."/>
         <M l="Karlovitz (Ka)" v={Ka_diag<1?Ka_diag.toFixed(3):Ka_diag.toFixed(2)} u="—" c={Ka_diag<1?C.good:Ka_diag<100?C.warm:C.strong} tip={`Karlovitz number from Bradley correlation: Ka = 0.157·(u'/S_L)²·Re_T^-0.5. ${Ka_diag<1?"Ka<1: flamelet regime — every gas turbine at idle.":Ka_diag<100?"Ka>1: thin reaction zone — every gas turbine at full power.":"Ka>100: broken reaction zone — edge case."}`}/>
-        <M l="Damköhler (Da)" v={Da_diag<10?Da_diag.toFixed(2):Da_diag.toFixed(0)} u="—" c={Da_diag>1?C.good:C.warm} tip={`Da = (l_T/δ_F)·(S_L/u'). ${Da_diag>1?"Da>1: chemistry is fast relative to turbulent timescale.":"Da<1: turbulence outpaces chemistry — flame extinction risk."}`}/>
+        <M l="Da_regime (Borghi)" v={Da_diag<10?Da_diag.toFixed(2):Da_diag.toFixed(0)} u="—" c={Da_diag>1?C.good:C.warm} tip={`Borghi REGIME Damköhler: Da_regime = (l_T/δ_F)·(S_L/u') — places the operating point on the Borghi-Peters diagram below. ${Da_diag>1?"Da_regime>1: chemistry is fast relative to turbulent timescale.":"Da_regime<1: turbulence outpaces chemistry — flame extinction risk."}\n\nDistinct from the BLOWOFF Damköhler (Da_BO) on Card 2, which is τ_flow/τ_chem with τ_flow = L_char/V_ref. Same name "Damköhler", different definitions — the two values disagree by design and that's combustion convention. Card 1 = regime placement, Card 2 = flame-anchor stability.`}/>
         <M l="S_T (Bradley)" v={uv(units,"vel",ST_bradley).toFixed(2)} u={uu(units,"vel")} c={C.accent} tip={`Turbulent flame speed via Bradley/Lau/Lawes 1992: S_T = 0.88·u'·Ka^-0.3 / Le. Cross-check (Damköhler 1940): S_T_DK = ${uv(units,"vel",ST_damk).toFixed(2)} ${uu(units,"vel")}. Disagreement >2× means you're outside both calibration ranges — typically very high u'/S_L.`}/>
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
           <Tip text={`Combustion regime classification (Borghi-Peters). Ka and Da together place the operating point on the diagram below.\n• Ka<1, Da>1: laminar / corrugated flamelet (idle GTs).\n• Ka<1, Da<1: corrugated flamelet.\n• 1<Ka<100, Da>1: thin reaction zone (full-power GTs).\n• Ka>100: broken reaction zone (extinction).`}>
@@ -3548,10 +3549,15 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       </div>
 
       {/* ── Headline metrics ────────────────────────────────────────── */}
+      {/* NOTE: this is the BLOWOFF Damköhler (Da_BO), not the regime
+          Damköhler shown on Card 1. They are different quantities with the
+          same dimensionless name — distinguishing them in the labels and
+          tooltips here so an engineer who notices the discrepancy doesn't
+          chase a phantom bug. */}
       <div style={{...S.row,gap:8,marginBottom:8}}>
-        <M l={`Da_crit (${_typeEntry.label})`} v={Da_crit.toFixed(3)} u="—" c={C.accent2} tip={`Critical Damköhler for ${_typeEntry.label} (ref: ${_typeEntry.ref}). Below this Da, the recirculation can no longer compensate for chemistry timescale and the flame blows off.`}/>
-        <M l="Da (actual)" v={Da_actual.toFixed(2)} u="—" c={C.accent} tip="Damköhler at the current operating point: τ_flow / τ_chem with τ_flow = L_char / V_ref. Identical formula to the lower card."/>
-        <M l="Da / Da_crit" v={Da_ratio.toFixed(2)} u="—" c={Da_status==="green"?C.good:Da_status==="yellow"?C.warm:C.strong} tip={`Margin to flame anchor blow-off. > 3 robust, 1–3 marginal, ≤ 1 imminent blow-off. Currently ${Da_status==="green"?"ROBUST":Da_status==="yellow"?"MARGINAL":"BLOW-OFF IMMINENT"}.`}/>
+        <M l={`Da_BO,crit (${_typeEntry.label})`} v={Da_crit.toFixed(3)} u="—" c={C.accent2} tip={`Critical BLOWOFF Damköhler for ${_typeEntry.label} (ref: ${_typeEntry.ref}). Below this value the recirculation zone can no longer compensate for chemistry timescale and the flame anchor blows off. Distinct from the Borghi regime Da on Card 1: that one is Da_regime = (l_T/δ_F)·(S_L/u') for placing the operating point on the Borghi diagram. This one is Da_BO = τ_flow/τ_chem with τ_flow = L_char/V_ref — the anchor-stability Damköhler. Same name, different quantities; that's combustion convention.`}/>
+        <M l="Da_BO (anchor)" v={Da_actual.toFixed(2)} u="—" c={C.accent} tip="BLOWOFF Damköhler at the current operating point: Da_BO = τ_flow / τ_chem with τ_flow = L_char / V_ref and τ_chem = α_th / S_L². This is the flame-anchor stability ratio — distinct from the Borghi regime Da on Card 1 which uses (l_T/δ_F)·(S_L/u'). Two different Damköhlers, same name, by convention."/>
+        <M l="Da_BO / Da_BO,crit" v={Da_ratio.toFixed(2)} u="—" c={Da_status==="green"?C.good:Da_status==="yellow"?C.warm:C.strong} tip={`Margin to flame anchor blow-off. > 3 robust, 1–3 marginal, ≤ 1 imminent blow-off. Currently ${Da_status==="green"?"ROBUST":Da_status==="yellow"?"MARGINAL":"BLOW-OFF IMMINENT"}.`}/>
         <M l="V_BO (this geometry)" v={uv(units,"vel",V_BO_card2).toFixed(1)} u={uu(units,"vel")} c={C.accent2} tip={`Reference velocity at which Da would equal Da_crit for the selected ${_typeEntry.label} geometry. V_ref = ${uv(units,"vel",velocity).toFixed(1)} ${uu(units,"vel")} → V_BO = V_ref · (Da/Da_crit).`}/>
         <M l="φ_LBO (Lefebvre)" v={Number.isFinite(phi_LBO)?phi_LBO.toFixed(3):"N/A"} u="—" c={phi_LBO_safe?C.good:C.warm} tip="Lefebvre 1985 lean blow-out equivalence ratio: φ_LBO = K · √[ ṁ_air · exp(T_3/300) / (V_pz · P_3^1.3 · LCV) ] (SI: kPa, kg/s, m³, MJ/kg). Operate at φ ≥ φ_LBO + 0.05 for design margin."/>
         <M l="margin = φ − φ_LBO" v={Number.isFinite(phi_LBO)?(phi-phi_LBO).toFixed(3):"N/A"} u="—" c={phi_LBO_safe?C.good:C.warm} tip="Lean-blow-out margin. ≥ 0.05 robust; < 0.05 risk of LBO at the current operating point. Does not include transient excursions — derate by another 0.05 for fast load drops."/>
