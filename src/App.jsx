@@ -2632,8 +2632,11 @@ function BorghiPetersDiagram({ currentX, currentY, currentLabel, trail, hover, s
         <polygon points={`${xToPx(xMinLog)},${yToPx(yMinLog)} ${reT1.x1},${reT1.y1} ${xToPx(xMinLog)},${reT1.y1}`} fill={`${C.accent3}10`} />
         {/* Flamelet (Ka<1, Da>1) — between Ka=1 and Da=1 lines — pale green */}
         <polygon points={`${ka1.x1},${ka1.y1} ${ka1.x2},${ka1.y2} ${xToPx(xMaxLog)},${yToPx(yMinLog)}`} fill={`${C.good}12`} />
-        {/* Thin reaction zone (1<Ka<100) — between the two Ka lines — pale orange */}
-        <polygon points={`${ka1.x1},${ka1.y1} ${ka1.x2},${ka1.y2} ${ka100.x2},${ka100.y2} ${ka100.x1},${ka100.y1}`} fill={`${C.warm}10`} />
+        {/* Thin reaction zone (1<Ka<100) — between the two Ka lines — amber tint.
+            Bumped from C.warm10 (≈6% alpha — invisible) to C.accent2 28 (≈16%
+            amber) so the band is clearly distinguishable from the broken-rxn
+            pink above it and the flamelet green below. */}
+        <polygon points={`${ka1.x1},${ka1.y1} ${ka1.x2},${ka1.y2} ${ka100.x2},${ka100.y2} ${ka100.x1},${ka100.y1}`} fill={`${C.accent2}28`} />
         {/* Broken reaction zone (Ka>100) — top region — pale red */}
         <polygon points={`${ka100.x1},${ka100.y1} ${ka100.x2},${ka100.y2} ${xToPx(xMaxLog)},${yToPx(yMaxLog)} ${xToPx(xMinLog)},${yToPx(yMaxLog)}`} fill={`${C.strong}10`} />
 
