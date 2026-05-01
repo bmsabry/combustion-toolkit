@@ -891,7 +891,7 @@ const _Vpz_m3_x  = 0.025;     // primary-zone volume default
 const _K_LBO_x   = 0.025;     // Lefebvre A constant default (TF 33 / median)
 const _m_air_lbo = (cycleResult && cycleResult.W36_kg_s)
   ? cycleResult.W36_kg_s
-  : (cycleResult && cycleResult.mdot_air_kg_s) ? cycleResult.mdot_air_kg_s : 50.0;
+  : (cycleResult && cycleResult.mdot_air_kg_s) ? cycleResult.mdot_air_kg_s : 1.0;
 const _T3_lbo_K  = (cycleResult && cycleResult.T3_K) ? cycleResult.T3_K : T0;
 const _P3_lbo_kPa= (cycleResult && cycleResult.P3_bar) ? cycleResult.P3_bar*100 : P*101.325;
 const _FAR_st    = 1 / Math.max(fp.AFR_mass, 1e-12);
@@ -3083,12 +3083,12 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
     ? cycleResult.W36_kg_s
     : (cycleResult && cycleResult.mdot_air_kg_s)
       ? cycleResult.mdot_air_kg_s
-      : 50.0;                  // placeholder — flag in UI when no cycle
+      : 1.0;                   // placeholder — flag in UI when no cycle
   const m_air_source = (cycleResult && cycleResult.W36_kg_s)
     ? "W36 (cycle)"
     : (cycleResult && cycleResult.mdot_air_kg_s)
       ? "ṁ_air (cycle)"
-      : "default 50 kg/s — run Cycle for plant value";
+      : "default 1 kg/s — run Cycle for plant value";
   const T3_lbo_K = (cycleResult && cycleResult.T3_K) ? cycleResult.T3_K : T0;
   const P3_lbo_kPa = (cycleResult && cycleResult.P3_bar)
     ? cycleResult.P3_bar * 100
@@ -7928,7 +7928,7 @@ function _adaptPanelResponse(slot, r, inp){
     // ── Card 2 (Stabilization & Blowoff) — Lefebvre + Plee-Mellor (defaults) ──
     const _fp_a = (typeof calcFuelProps==="function") ? calcFuelProps(inp.fuel, inp.ox) : null;
     const _Vpz_x=0.025, _K_LBO_x=0.025, _Da_crit_x=0.50, _Sn_x=0.6;
-    const _m_air_lbo = inp.cycle?.W36_kg_s ?? inp.cycle?.mdot_air_kg_s ?? 50.0;
+    const _m_air_lbo = inp.cycle?.W36_kg_s ?? inp.cycle?.mdot_air_kg_s ?? 1.0;
     const _T3_lbo_K = inp.cycle?.T3_K ?? inp.T_air ?? 700.0;
     const _P3_lbo_kPa = (inp.cycle?.P3_bar ?? inp.P) * 100;
     const _FAR_st = _fp_a ? 1/Math.max(_fp_a.AFR_mass, 1e-12) : 0.0583;
@@ -8488,7 +8488,7 @@ async function runFlameForAutomation(inp, accurate){
   // ── Card 2 (Stabilization & Blowoff) — Lefebvre + Plee-Mellor (defaults) ──
   const _fp_a = (typeof calcFuelProps==="function") ? calcFuelProps(inp.fuel, inp.ox) : null;
   const _Vpz_x=0.025, _K_LBO_x=0.025, _Da_crit_x=0.50, _Sn_x=0.6;
-  const _m_air_lbo = inp.cycle?.W36_kg_s ?? inp.cycle?.mdot_air_kg_s ?? 50.0;
+  const _m_air_lbo = inp.cycle?.W36_kg_s ?? inp.cycle?.mdot_air_kg_s ?? 1.0;
   const _T3_lbo_K = inp.cycle?.T3_K ?? inp.T_air ?? 700.0;
   const _P3_lbo_kPa = (inp.cycle?.P3_bar ?? inp.P) * 100;
   const _FAR_st = _fp_a ? 1/Math.max(_fp_a.AFR_mass, 1e-12) : 0.0583;
