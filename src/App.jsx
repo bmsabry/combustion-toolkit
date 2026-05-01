@@ -989,7 +989,7 @@ const _ignSafe=_tauRes<_tauIgn;
 const _Le_free   = lewisNumberFreeMode(fuel);
 const _nu_free   = _alphaTh / 0.71;                              // Pr ≈ 0.71 fallback for hot air
 const _delta_F   = _alphaTh / Math.max(_SLms, 1e-9);             // Zeldovich δ_F
-const _uPrimeRatio_x = 0.10;                                      // panel default (u'/U)
+const _uPrimeRatio_x = 0.20;                                      // panel default (u'/U)
 const _uPrime_x  = _uPrimeRatio_x * Math.max(velocity, 0);
 const _lT_x      = 0.10 * Math.max(Lchar, 1e-6);
 const _bradley   = bradleyST(_SLms, Math.max(_uPrime_x, 1e-9), _lT_x, _nu_free, _Le_free);
@@ -2900,7 +2900,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // ── Card 1 (Flame Speed & Regime Diagnostics) panel-local state ──────
   // u'/U turbulence intensity. Default 0.10 = smooth duct. Range 0.05–0.30.
   // 0.20 ≈ swirl premixer; 0.30 ≈ highly turbulated dump combustor.
-  const [uPrimeRatio, setUPrimeRatio] = useState(0.10);
+  const [uPrimeRatio, setUPrimeRatio] = useState(0.20);
   // Reference velocity for u' computation (Option B):
   //   "vref"    = V_ref at the flame anchor — used by Card 1 (regime
   //               diagnostics, Borghi/Bradley) and Card 2 (blowoff /
