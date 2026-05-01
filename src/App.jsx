@@ -542,21 +542,41 @@ const _LBO_LP_HIGH = 30;
 //   phi_low ≤ φ_actual ≤ phi_high → ALARM       (inside the band)
 //   φ_actual < phi_low            → HIGH_RISK   (below the lowest LBO)
 const _LBO_P_KPA_FACTOR = Math.pow(101.325, 1.3);  // ≈ 304.1, atm→kPa^1.3 conversion
-function lefebvreLBO_band(K, T3_K, LCV_MJ_kg, FAR_stoich, phi_actual){
+
+// Fuel-composition multiplier on the φ_LBO band, applied to BOTH edges.
+// Linear in mole fraction: pure H₂ → ×(1/3), pure C₃H₈ → ×0.9, pure CH₄
+// (or any other species) → ×1.0. Composition mix scales linearly.
+//   m = 1 − (1 − 1/3)·x_H2 − (1 − 0.9)·x_C3H8
+//     = 1 − (2/3)·x_H2 − 0.1·x_C3H8
+// Captures the empirically observed shift: H₂-rich fuels are MUCH more
+// flammable (lower LBO) than NG; C3-heavy fuels are slightly more
+// flammable (modest LBO drop) due to higher reactivity per mole.
+function _lboFuelMultiplier(fuel_pct){
+  const total = Object.values(fuel_pct||{}).reduce((a,b)=>a+(+b||0),0);
+  if (total <= 0) return 1.0;
+  const x_H2 = ((fuel_pct.H2   || 0) / total);
+  const x_C3 = ((fuel_pct.C3H8 || 0) / total);
+  return Math.max(0.0, 1.0 - (2.0/3.0) * x_H2 - 0.1 * x_C3);
+}
+
+function lefebvreLBO_band(K, T3_K, LCV_MJ_kg, FAR_stoich, phi_actual, fuel_pct){
   const H_r = Math.max(LCV_MJ_kg, 1e-6) / 43.5;
   const denom = _LBO_P_KPA_FACTOR * Math.exp(Math.max(T3_K, 1) / 300) * H_r;
   const q_low  = Math.max(K, 0) * _LBO_LP_LOW  / Math.max(denom, 1e-12);
   const q_high = Math.max(K, 0) * _LBO_LP_HIGH / Math.max(denom, 1e-12);
+  // Apply fuel-composition multiplier to both edges (H₂ shifts band down,
+  // C₃H₈ shifts modestly; CH₄ baseline = 1.0). See _lboFuelMultiplier.
+  const fuel_mult = _lboFuelMultiplier(fuel_pct);
   // Clamp upper bound at 1.0 — φ_LBO > 1 is non-physical (LBO is a LEAN limit)
-  const phi_low  = q_low  / Math.max(FAR_stoich, 1e-12);
-  const phi_high = Math.min(q_high / Math.max(FAR_stoich, 1e-12), 1.0);
+  const phi_low  = (q_low  / Math.max(FAR_stoich, 1e-12)) * fuel_mult;
+  const phi_high = Math.min((q_high / Math.max(FAR_stoich, 1e-12)) * fuel_mult, 1.0);
   // Three-state status
   let status;
   if (!Number.isFinite(phi_actual))         status = "—";
   else if (phi_actual >  phi_high)          status = "SAFE";
   else if (phi_actual >= phi_low)           status = "ALARM";
   else                                      status = "HIGH_RISK";
-  return { phi_low, phi_high, status };
+  return { phi_low, phi_high, status, fuel_mult };
 }
 
 // Legacy single-point Lefebvre LBO (kept for backward compatibility — not
@@ -962,7 +982,7 @@ const _Borghi_regime = _Ka_diag<1?(_Da_diag>1?"Flamelet":"Corrugated"):_Ka_diag<
 const _K_LBO_x   = 6.29;      // Lefebvre A — premixed-gas calibration (anchored to LMS100, φ_LBO=0.40 at LP_high)
 const _T3_lbo_K  = (cycleResult && cycleResult.T3_K) ? cycleResult.T3_K : T0;
 const _FAR_st    = 1 / Math.max(fp.AFR_mass, 1e-12);
-const _lbo_band_x = lefebvreLBO_band(_K_LBO_x, _T3_lbo_K, fp.LHV_mass, _FAR_st, phi);
+const _lbo_band_x = lefebvreLBO_band(_K_LBO_x, _T3_lbo_K, fp.LHV_mass, _FAR_st, phi, fuel);
 const _phi_LBO_low_x  = _lbo_band_x.phi_low;
 const _phi_LBO_high_x = _lbo_band_x.phi_high;
 const _lbo_status_x   = _lbo_band_x.status;
@@ -1073,11 +1093,12 @@ const s2=[
   ["Lefebvre A constant (premixed-gas calibration)",+_K_LBO_x.toFixed(4),"—"],
   ["Loading-parameter band swept (LP, kg/(s·m³·atm^1.3))",`${_LBO_LP_LOW}–${_LBO_LP_HIGH}`,"—"],
   ["T_3 (combustor inlet T)",+uv(u,"T",_T3_lbo_K).toFixed(1),uu(u,"T")],
+  ["Fuel composition multiplier m_fuel (× both band edges)",+(_lbo_band_x.fuel_mult).toFixed(3),"—"],
   ["φ_LBO_low (LP="+_LBO_LP_LOW+", well-loaded sound design)",+_phi_LBO_low_x.toFixed(3),"—"],
   ["φ_LBO_high (LP="+_LBO_LP_HIGH+", high-loaded marginal design)",+_phi_LBO_high_x.toFixed(3),"—"],
   ["Operating φ vs band",+phi.toFixed(4),"—"],
   ["Lefebvre LBO Status",_lbo_status_x === "SAFE" ? "SAFE (above band)" : _lbo_status_x === "ALARM" ? "ALARM (in band)" : _lbo_status_x === "HIGH_RISK" ? "HIGH RISK (below band)" : "—","—"],
-  ["Note","φ_LBO band: sweeps loading parameter LP = ṁ_air/(V_pz·P_3_atm^1.3) over typical industry-GT design range. q_LBO = K · LP / (304.1 · exp(T_3/300) · H_r); φ_LBO = q_LBO/FAR_stoich. Drops dependency on ṁ_air, V_pz, AND P_3 — only T_3 and fuel matter. Status: φ above band = SAFE; in band = ALARM; below = HIGH RISK.",""],
+  ["Note","φ_LBO band: sweeps loading parameter LP = ṁ_air/(V_pz·P_3_atm^1.3) over typical industry-GT design range. q_LBO = K · LP / (304.1 · exp(T_3/300) · H_r); φ_LBO = (q_LBO/FAR_stoich) × m_fuel. Drops dependency on ṁ_air, V_pz, AND P_3 — only T_3 and fuel matter. K hidden; default 6.29. m_fuel = 1 − (2/3)·x_H₂ − 0.1·x_C₃H₈ (linear in mole fraction; pure H₂ → ×1/3; pure C₃H₈ → ×0.9; pure CH₄ → ×1.0). Status: φ above band = SAFE; in band = ALARM; below = HIGH RISK.",""],
   ["─── Plee-Mellor 1979 LBO Cross-check (Combust Flame 35:61) ───","",""],
   ["τ_sl shear-layer residence",+_PM_tau_sl_ms.toFixed(3),"ms"],
   ["τ_hc' chemical ignition delay (Eq. 17, T_φ=1800 K placeholder)",+_PM_tau_hc_ms.toFixed(4),"ms"],
@@ -3178,7 +3199,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const _fp_card2 = calcFuelProps(fuel, ox);                          // {LHV_mass, AFR_mass, ...}
   const T3_lbo_K  = (cycleResult && cycleResult.T3_K) ? cycleResult.T3_K : T0;
   const _FAR_stoich_lbo = 1 / Math.max(_fp_card2.AFR_mass, 1e-12);    // mass basis
-  const _lbo_band = lefebvreLBO_band(K_LBO, T3_lbo_K, _fp_card2.LHV_mass, _FAR_stoich_lbo, phi);
+  const _lbo_band = lefebvreLBO_band(K_LBO, T3_lbo_K, _fp_card2.LHV_mass, _FAR_stoich_lbo, phi, fuel);
   const phi_LBO_low  = _lbo_band.phi_low;
   const phi_LBO_high = _lbo_band.phi_high;
   const lbo_status   = _lbo_band.status;     // "SAFE" | "ALARM" | "HIGH_RISK" | "—"
@@ -3213,7 +3234,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const lbo_T3_sweep = (() => {
     const r = [];
     for (let T3 = 500; T3 <= 900; T3 += 25) {
-      const b = lefebvreLBO_band(K_LBO, T3, _fp_card2.LHV_mass, _FAR_stoich_lbo, phi);
+      const b = lefebvreLBO_band(K_LBO, T3, _fp_card2.LHV_mass, _FAR_stoich_lbo, phi, fuel);
       r.push({ T: uv(units, "T", T3), phiLBO_low: b.phi_low, phiLBO_high: b.phi_high });
     }
     return r;
@@ -3628,21 +3649,12 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         })}
       </div>
 
-      {/* ── LBO calibration row (K_LBO + LP-band approach) ─────────────── */}
+      {/* ── LBO calibration row (LP-band approach; K_LBO hidden) ─────── */}
       <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:10,padding:"8px 10px",background:`${C.accent3}08`,border:`1px solid ${C.accent3}30`,borderRadius:6,fontSize:10.5,fontFamily:"monospace"}}>
-        <span style={{fontSize:10,fontWeight:700,color:C.accent3,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".8px",textTransform:"uppercase"}}>LBO inputs:</span>
-        <div style={{display:"flex",alignItems:"center",gap:5}}>
-          <Tip text={`Lefebvre constant A — calibration in Eq. 5.27 (Lefebvre & Ballal 2010, p. 185).\n\nDefault 6.29 — premixed-gas DLN calibration. Back-fit so that at the LMS100 NG-DLN baseline (T_3=800 K, NG) the formula returns the canonical industrial φ_LBO ≈ 0.40 at the upper-LP design point.\n\nLefebvre Table 5.1 published values 0.013–0.064 (J79, F101, TF33, etc.) were fit for KEROSENE-SPRAY aero engines — those baked in the droplet-evaporation timescale that doesn't apply to premixed gas. Using them here would under-predict φ_LBO by ~250×.\n\nNote: this panel uses the LP-BAND approach (sweep loading parameter over the typical industry range LP=10-30 kg/(s·m³·atm^1.3)) instead of asking for V_pz and ṁ_air explicitly — that input pair is calibration-fragile and gave non-physical φ_LBO > 1 when mismatched. The band approach is robust against V_pz misses.`}><label style={{color:C.txtDim,cursor:"help"}}>A ⓘ</label></Tip>
-          <NumField value={K_LBO} decimals={4}
-            onCommit={v=>setKLBO(Math.max(1e-5, Math.min(50, +v)))}
-            style={{width:64,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
-          <span style={{fontSize:9,color:C.txtMuted,fontStyle:"italic"}}>(provisional · Lefebvre Eq. 5.27)</span>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:5,marginLeft:"auto"}}>
-          <Tip text={`Loading-parameter band used for the φ_LBO range below: LP = ṁ_air/(V_pz · P_3_atm^1.3) ∈ [${_LBO_LP_LOW}, ${_LBO_LP_HIGH}] kg/(s·m³·atm^1.3). This brackets the typical industrial DLN design space (well-loaded sound design through high-loaded marginal design). Sweeping LP captures the realistic φ_LBO uncertainty without needing the user to dial-in V_pz and ṁ_air for their specific combustor.`}>
-            <span style={{color:C.txtDim,fontStyle:"italic",cursor:"help"}}>LP band: {_LBO_LP_LOW}–{_LBO_LP_HIGH} kg/(s·m³·atm^1.3) ⓘ</span>
-          </Tip>
-        </div>
+        <span style={{fontSize:10,fontWeight:700,color:C.accent3,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".8px",textTransform:"uppercase"}}>LBO band:</span>
+        <Tip text={`Lefebvre LP-band approach (Lefebvre & Ballal 2010 Eq. 5.27 reformulated).\n\nUnder the hood: loading parameter LP = ṁ_air/(V_pz · P_3_atm^1.3) is swept over the typical industrial-GT design range LP ∈ [${_LBO_LP_LOW}, ${_LBO_LP_HIGH}] kg/(s·m³·atm^1.3). This brackets the typical industrial DLN design space (well-loaded sound design through high-loaded marginal design).\n\nq_LBO = K · LP / (304.1 · exp(T_3/300) · H_r);  φ_LBO = (q_LBO/FAR_stoich) × m_fuel\n\nA constant (K) hidden under the hood — fixed at the premixed-gas calibration value (anchored to LMS100 NG-DLN baseline). Sweeping LP drops dependency on V_pz and ṁ_air entirely (calibration-fragile pair), and the multiplicative fuel-composition correction m_fuel handles fuel reactivity shifts.`}>
+          <span style={{color:C.txtDim,fontStyle:"italic",cursor:"help"}}>LP {_LBO_LP_LOW}–{_LBO_LP_HIGH} kg/(s·m³·atm^1.3) · m_fuel = {_lbo_band.fuel_mult.toFixed(3)} (H₂ {((fuel.H2||0)/Math.max(Object.values(fuel).reduce((a,b)=>a+b,0),1e-9)*100).toFixed(0)}%, C₃H₈ {((fuel.C3H8||0)/Math.max(Object.values(fuel).reduce((a,b)=>a+b,0),1e-9)*100).toFixed(0)}%) ⓘ</span>
+        </Tip>
       </div>
 
       {/* ── Headline metrics ────────────────────────────────────────── */}
@@ -8047,7 +8059,7 @@ function _adaptPanelResponse(slot, r, inp){
     const _T3_lbo_K = inp.cycle?.T3_K ?? inp.T_air ?? 700.0;
     const _FAR_st = _fp_a ? 1/Math.max(_fp_a.AFR_mass, 1e-12) : 0.0583;
     const _lbo_band = (typeof lefebvreLBO_band==="function" && _fp_a)
-      ? lefebvreLBO_band(_K_LBO_x, _T3_lbo_K, _fp_a.LHV_mass, _FAR_st, inp.phi)
+      ? lefebvreLBO_band(_K_LBO_x, _T3_lbo_K, _fp_a.LHV_mass, _FAR_st, inp.phi, inp.fuel)
       : { phi_low: NaN, phi_high: NaN, status: "—" };
     const phi_LBO_low = _lbo_band.phi_low;
     const phi_LBO_high = _lbo_band.phi_high;
@@ -8107,6 +8119,7 @@ function _adaptPanelResponse(slot, r, inp){
       ReT_diag, Ka_diag, Da_diag, ST_bradley, ST_damkohler, borghi_regime,
       // Card 2
       phi_LBO_low, phi_LBO_high, lbo_status, lbo_safe_lefebvre,
+      lbo_fuel_mult: _lbo_band.fuel_mult,
       Da_crit_x: _Da_crit_x, V_BO_card2,
       pm_tau_sl_ms, pm_tau_hc_ms, pm_ratio, pm_lbo_safe,
       // Card 3
@@ -8615,7 +8628,7 @@ async function runFlameForAutomation(inp, accurate){
   const _T3_lbo_K = inp.cycle?.T3_K ?? inp.T_air ?? 700.0;
   const _FAR_st = _fp_a ? 1/Math.max(_fp_a.AFR_mass, 1e-12) : 0.0583;
   const _lbo_band = (typeof lefebvreLBO_band==="function" && _fp_a)
-    ? lefebvreLBO_band(_K_LBO_x, _T3_lbo_K, _fp_a.LHV_mass, _FAR_st, inp.phi)
+    ? lefebvreLBO_band(_K_LBO_x, _T3_lbo_K, _fp_a.LHV_mass, _FAR_st, inp.phi, inp.fuel)
     : { phi_low: NaN, phi_high: NaN, status: "—" };
   const phi_LBO_low = _lbo_band.phi_low;
   const phi_LBO_high = _lbo_band.phi_high;

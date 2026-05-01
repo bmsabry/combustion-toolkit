@@ -691,8 +691,9 @@ export const AUTO_OUTPUTS = [
   { id: "ST_damkohler",       label: "S_T (Damköhler)",   panel: "flame", unit_si: "m/s", unit_en: "ft/s", siToEn: ms_to_fts, pick: r => r.flame?.ST_damkohler },
   { id: "borghi_regime",      label: "Borghi-Peters Regime", panel: "flame", unit: "—", pick: r => r.flame?.borghi_regime },
   // ── Card 2 (Stabilization & Blowoff) — Lefebvre BAND (LP-sweep) + Plee-Mellor ──
-  { id: "phi_LBO_low",        label: "φ_LBO_low (LP=10)",  panel: "flame", unit: "—", pick: r => r.flame?.phi_LBO_low },
-  { id: "phi_LBO_high",       label: "φ_LBO_high (LP=30)", panel: "flame", unit: "—", pick: r => r.flame?.phi_LBO_high },
+  { id: "phi_LBO_low",        label: "φ_LBO_low (LP=10, m_fuel applied)",  panel: "flame", unit: "—", pick: r => r.flame?.phi_LBO_low },
+  { id: "phi_LBO_high",       label: "φ_LBO_high (LP=30, m_fuel applied)", panel: "flame", unit: "—", pick: r => r.flame?.phi_LBO_high },
+  { id: "lbo_fuel_mult",      label: "m_fuel (LBO comp multiplier; 1.0=CH₄, 1/3=H₂, 0.9=C₃H₈)", panel: "flame", unit: "—", pick: r => r.flame?.lbo_fuel_mult },
   { id: "lbo_status",         label: "LBO Status (SAFE/ALARM/HIGH_RISK)", panel: "flame", unit: "—", pick: r => r.flame?.lbo_status },
   { id: "lbo_safe_lefebvre",  label: "Lefebvre LBO Safe (= SAFE)", panel: "flame", unit: "bool", pick: r => r.flame?.lbo_safe_lefebvre },
   { id: "Da_crit_x",          label: "Da_crit (premixer)", panel: "flame", unit: "—", pick: r => r.flame?.Da_crit_x },
