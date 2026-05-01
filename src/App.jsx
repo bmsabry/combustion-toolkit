@@ -559,17 +559,32 @@ function _lboFuelMultiplier(fuel_pct){
   return Math.max(0.0, 1.0 - (2.0/3.0) * x_H2 - 0.1 * x_C3);
 }
 
-function lefebvreLBO_band(K, T3_K, LCV_MJ_kg, FAR_stoich, phi_actual, fuel_pct){
-  const H_r = Math.max(LCV_MJ_kg, 1e-6) / 43.5;
+// CH₄ REFERENCE properties — used unconditionally in the band calculation
+// so that m_fuel is the ONE AND ONLY composition effect on the band.
+// Without this lock-in, switching from CH₄ to C₃H₈ shifts both LCV (50→46.4)
+// and FAR_stoich (0.0581→0.0641), and those shifts eat ~12% of the m_fuel
+// multiplier — meaning 100% C₃H₈ would show ~0.88× CH₄ instead of exactly
+// 0.9×. Locking to CH₄ refs ensures: pure C₃H₈ → exactly 0.9×, pure H₂ →
+// exactly 1/3×, any blend → linearly between, regardless of fuel-specific
+// LCV/FAR_stoich shifts.
+const _LBO_LCV_REF_MJ_KG = 50.0;     // pure CH₄ LCV
+const _LBO_FAR_REF       = 0.0581;   // pure CH₄ FAR_stoich (mass basis)
+
+// Note: LCV_MJ_kg and FAR_stoich parameters retained in the signature for
+// backward compatibility with existing call sites, but they are IGNORED.
+// The band is always computed with CH₄ reference props; m_fuel is the
+// sole composition modifier.
+function lefebvreLBO_band(K, T3_K, _LCV_unused, _FAR_unused, phi_actual, fuel_pct){
+  const H_r = _LBO_LCV_REF_MJ_KG / 43.5;                                // CH₄-locked
   const denom = _LBO_P_KPA_FACTOR * Math.exp(Math.max(T3_K, 1) / 300) * H_r;
   const q_low  = Math.max(K, 0) * _LBO_LP_LOW  / Math.max(denom, 1e-12);
   const q_high = Math.max(K, 0) * _LBO_LP_HIGH / Math.max(denom, 1e-12);
-  // Apply fuel-composition multiplier to both edges (H₂ shifts band down,
-  // C₃H₈ shifts modestly; CH₄ baseline = 1.0). See _lboFuelMultiplier.
+  // Apply fuel-composition multiplier to both edges (H₂ shifts band down ×1/3,
+  // C₃H₈ shifts modestly ×0.9, CH₄ baseline = 1.0). Linear in mole fraction.
   const fuel_mult = _lboFuelMultiplier(fuel_pct);
   // Clamp upper bound at 1.0 — φ_LBO > 1 is non-physical (LBO is a LEAN limit)
-  const phi_low  = (q_low  / Math.max(FAR_stoich, 1e-12)) * fuel_mult;
-  const phi_high = Math.min((q_high / Math.max(FAR_stoich, 1e-12)) * fuel_mult, 1.0);
+  const phi_low  = (q_low  / _LBO_FAR_REF) * fuel_mult;                 // CH₄-locked
+  const phi_high = Math.min((q_high / _LBO_FAR_REF) * fuel_mult, 1.0);  // CH₄-locked
   // Three-state status
   let status;
   if (!Number.isFinite(phi_actual))         status = "—";
