@@ -3039,19 +3039,23 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
 
   // ── Card 1: Flame Speed & Regime Diagnostics — derived quantities ─────
   // All transport-derived numbers come from Cantera (bk.data) when accurate
-  // mode is on; otherwise we fall back to JS approximations or set to NaN
-  // so the UI shows "—" instead of a fictitious value.
+  // mode is on; otherwise we fall back to JS approximations.
   //
-  //   δ_F  : Zeldovich flame thickness (m) = α_th / S_L.
-  //   ν    : kinematic viscosity (m²/s) of the unburned mixture.
-  //   Le   : effective Lewis number (deficient-reactant basis).
-  //   Ma   : Markstein number, Bechtold-Matalon simplified.
-  //   u'   : turbulence velocity = (u'/U) · V_ref, in m/s.
-  //   l_T  : integral length scale (m). Auto = 0.1·L_char (Tennekes-Lumley).
-  //   Re_T : turbulent Reynolds = u'·l_T / ν.
-  //   Ka   : Karlovitz number, from Bradley (0.157·(u'/SL)²·Re_T^-0.5).
-  //   Da   : Damköhler = (l_T/δ_F)·(SL/u') = τ_T/τ_chem.
-  //   S_T  : Bradley turbulent flame speed.
+  //   δ_F   : Zeldovich flame thickness (m) = α_th / S_L. (Williams 1985)
+  //   ν     : kinematic viscosity (m²/s) of the unburned mixture.
+  //   Le_eff: B-M Eq. 6 weighted average of Le_E (excess) and Le_D (deficient).
+  //           Hawkes-Chen 2004 mole-weighted aggregate D_fuel for blends.
+  //   Le_E  : Lewis number of excess reactant (lean → O₂; rich → fuel).
+  //   Le_D  : Lewis number of deficient reactant (lean → fuel; rich → O₂).
+  //   Ma    : Markstein per B-M Eq. 12, sheet ref, λ=T^(1/2):
+  //           Ma = γ_1/σ + ½·β·(Le_eff−1)·γ_2 with σ=ρ_u/ρ_b.
+  //   u'    : turbulence velocity = (u'/U) · V_ref, in m/s.
+  //   l_T   : integral length scale (m). Auto = 0.1·L_char (Tennekes-Lumley).
+  //   Re_T  : turbulent Reynolds = u'·l_T / ν.
+  //   Ka    : Karlovitz number, from Bradley (0.157·(u'/SL)²·Re_T^-0.5).
+  //   Da_regime : Borghi Damköhler = (l_T/δ_F)·(SL/u') = τ_T/τ_chem.
+  //              (Distinct from Card 2's Da_BO = τ_flow/τ_chem with τ_flow=L_char/V_ref.)
+  //   S_T   : Bradley turbulent flame speed = 0.88·u'·Ka^(-0.3)/Le_eff.
   const delta_F = (accurate && bk.data && bk.data.delta_F)
     ? bk.data.delta_F
     : alphaTh / Math.max(SL_ms, 1e-9);
@@ -3107,8 +3111,11 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   // (linear in V_ref since τ_flow ∝ 1/V).
   const V_BO_card2 = velocity * Math.max(Da_ratio, 1e-9);
 
-  // Lefebvre LBO. Uses cycle outputs when available; falls back to
-  // sidebar T0/P + a 50 kg/s m_air placeholder otherwise.
+  // Lefebvre LBO. Uses cycle outputs (W36_kg_s and T3_K, P3_bar) when
+  // available; falls back to sidebar T0/P + a 1 kg/s m_air placeholder
+  // otherwise — flagged in the UI so users know to run Cycle for plant
+  // values. K_LBO default is 6.29 (premixed-gas DLN calibration, back-fit
+  // to LMS100 baseline so φ_LBO ≈ 0.40).
   const _fp_card2 = calcFuelProps(fuel, ox);                                   // {LHV_mass:MJ/kg, ...}
   const m_air_lbo = (cycleResult && cycleResult.W36_kg_s)
     ? cycleResult.W36_kg_s
