@@ -959,8 +959,17 @@ const _shaffer_T_tip = -1.58*_H2_pct_x - 3.63*_CO_pct_x - 4.28*_CH4_pct_x + 0.38
 const _piCIVB_x  = _SLms / Math.max(_Sn_x * Math.max(Vpremix, 1e-9) * Math.PI, 1e-12);
 const _civb_thr_x= (_H2_pct_x/100 > 0.30) ? 0.03 : 0.05;
 const _gateB_pass= _piCIVB_x < _civb_thr_x;
-const _ST_est_x  = _SLms * ((_H2_pct_x/100 > 0.30) ? 2.5 : 1.8);
-const _v_st_marg = Vpremix / Math.max(_ST_est_x, 1e-9);
+// Gate C uses Bradley S_T (not the simple SL × 1.8 turb-factor estimator).
+// The legacy SL × 1.8 estimator is kept further down for the legacy
+// flashback_margin rollup, but the panel's actual Gate C output uses
+// Bradley S_T with V_premix-based u' — Excel must match the panel.
+const _uPrime_premix_x = 0.10 * Math.max(Vpremix, 0);          // u' = 10% × V_premix (Card 3 convention)
+const _lT_premix_x     = 0.10 * Math.max(_D_h_x, 1e-6);        // l_T = 0.1 × D_h
+const _bradley_premix_x= bradleyST(_SLms, Math.max(_uPrime_premix_x, 1e-9), _lT_premix_x, _nu_free, _Le_free);
+const _ST_premix_x     = _bradley_premix_x.ST;
+// Legacy turb-factor S_T (kept for documentation; not used for Gate C anymore).
+const _ST_est_x_legacy = _SLms * ((_H2_pct_x/100 > 0.30) ? 2.5 : 1.8);
+const _v_st_marg = Vpremix / Math.max(_ST_premix_x, 1e-9);
 const _gateC_pass= _v_st_marg > 1.43;
 const _tau_res_99= _RTD_x * (Lpremix / Math.max(Vpremix, 1e-20));
 const _ign_marg_3= isFinite(_tauIgn) ? _tauIgn / Math.max(_tau_res_99, 1e-20) : NaN;
@@ -1038,7 +1047,9 @@ const s2=[
   ["─── Legacy Premixer Stability ───","",""],
   ["Zukoski Blow-off Time (τ_BO)",+(_tauBO*1000).toFixed(4),"ms"],
   ["Lewis-von Elbe Gradient (g_c)",+_gc.toFixed(1),"1/s"],
-  ["Autoignition Delay (τ_ign, Spadaccini-Colket)",+(_tauIgn*1000).toFixed(4),"ms"],
+  ["Autoignition Delay (τ_ign, Spadaccini-Colket)",
+    (_tauIgn > 1000) ? "> 1000 s (correlation OOR — mixture thermo-kinetically stable)" : +(_tauIgn*1000).toFixed(4),
+    "ms"],
   ["Premixer Residence Time (τ_res)",+(_tauRes*1000).toFixed(4),"ms"],
   ["Safety Margin (τ_ign / τ_res)",+(_tauIgn/_tauRes).toFixed(3),"—"],
   ["Premixer Status",_ignSafe?"SAFE":"AUTOIGNITION RISK","—"],
@@ -1056,7 +1067,12 @@ const s2=[
   ["g_actual (Poiseuille × turb)",+_g_u_actual_x.toFixed(1),"1/s"],
   ["Flashback Karlovitz Ka_fb",isFinite(_Ka_fb_x)?+_Ka_fb_x.toFixed(2):"N/A","—"],
   ["margin = g_actual / g_c_eff",+_gateA_marg.toFixed(2),"×"],
-  ["Shaffer 2013 burner-tip T (Eq. 4)",+uv(u,"T",_shaffer_T_tip).toFixed(0),uu(u,"T")],
+  // Shaffer Eq. 4 OOR guard: flag when T_tip < T_air (extrapolated outside H₂-blend cal window)
+  ["Shaffer 2013 burner-tip T (Eq. 4)",
+    (_shaffer_T_tip < (T_air ?? T0) || (_CH4_pct_x > 50 && _H2_pct_x < 10))
+      ? "OOR (low-H₂ fuel — Eq. 4 calibration window violated)"
+      : +uv(u,"T",_shaffer_T_tip).toFixed(0),
+    uu(u,"T")],
   ["Gate A Status",_gateA_pass?"PASS":"FAIL","—"],
   ["─── Gate B: CIVB (Sattelmayer 2004) ───","",""],
   ["Π_CIVB = S_L / (S_n·V_premix·π)",+_piCIVB_x.toFixed(4),"—"],
@@ -1064,7 +1080,8 @@ const s2=[
   ["Swirl number S_n (default)",+_Sn_x.toFixed(2),"—"],
   ["Gate B Status",_gateB_pass?"PASS":"FAIL","—"],
   ["─── Gate C: Core Flashback (S_T vs V_premix) ───","",""],
-  ["Turbulent flame speed S_T (estimated)",+uv(u,"vel",_ST_est_x).toFixed(2),uu(u,"vel")],
+  ["Turbulent flame speed S_T (Bradley, V_premix-based u')",+uv(u,"vel",_ST_premix_x).toFixed(2),uu(u,"vel")],
+  ["  ↳ Legacy turb-factor estimator (SL × 1.8, for context)",+uv(u,"vel",_ST_est_x_legacy).toFixed(2),uu(u,"vel")],
   ["margin V_premix / S_T",+_v_st_marg.toFixed(2),"—"],
   ["Gate C Status",_gateC_pass?"PASS":"FAIL","—"],
   ["─── Gate D: Autoignition (RTD-corrected) ───","",""],
@@ -3133,11 +3150,25 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
     : P * 101.325;             // sidebar P is in atm internally
   // FAR_stoich from fuel-properties helper (1/AFR_stoich, mass basis).
   const _FAR_stoich_lbo = 1 / Math.max(_fp_card2.AFR_mass, 1e-12);
-  const phi_LBO = lefebvreLBO(K_LBO, m_air_lbo, T3_lbo_K, V_pz_m3,
+  const phi_LBO_raw = lefebvreLBO(K_LBO, m_air_lbo, T3_lbo_K, V_pz_m3,
                                P3_lbo_kPa, _fp_card2.LHV_mass,
                                _FAR_stoich_lbo);
+  // Loading parameter ṁ_air / (V_pz · (P/atm)^1.3) — the canonical industry
+  // diagnostic. Lefebvre's correlation is calibrated for loading 50–500
+  // kg/(s·m³·atm^1.3); outside that band the formula extrapolates and can
+  // return φ_LBO > 1, which is non-physical (LBO is by definition a LEAN
+  // limit, so φ_LBO must be ≤ 1).
+  const _P3_atm_lbo = P3_lbo_kPa / 101.325;
+  const lbo_loading_param = m_air_lbo / Math.max(V_pz_m3 * Math.pow(Math.max(_P3_atm_lbo, 1e-6), 1.3), 1e-12);
+  const lbo_loading_in_range = lbo_loading_param > 30 && lbo_loading_param < 800;
+  // Sanity-clamp φ_LBO to physically meaningful range. Display "OUT OF
+  // RANGE" if the raw value exceeds 0.9 — that means the V_pz/ṁ_air/P_3
+  // combination is grossly mismatched (typically: user ran a frame engine
+  // through Cycle but kept the LMS100-default V_pz=0.025 m³).
+  const phi_LBO_oor = !Number.isFinite(phi_LBO_raw) || phi_LBO_raw > 0.9 || phi_LBO_raw < 0.05;
+  const phi_LBO = phi_LBO_oor ? NaN : phi_LBO_raw;
   const phi_LBO_margin = phi - phi_LBO;
-  const phi_LBO_safe = phi_LBO_margin >= 0.05;
+  const phi_LBO_safe = !phi_LBO_oor && phi_LBO_margin >= 0.05;
 
   // ── Plee-Mellor 1979 LBO cross-check ─────────────────────────────────
   // Eq. 17 (Configuration A — 45° conical baffle, propane fit to Ballal-
@@ -3218,6 +3249,20 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
   const _CH4_pct = ((fuel.CH4 || 0) / _tot_fuel_pct) * 100;
   const _AFT_card3 = (accurate && bk.data && bk.data.T_max) ? bk.data.T_max : 1800;
   const shaffer_tip_T_K = -1.58 * _H2_pct - 3.63 * _CO_pct - 4.28 * _CH4_pct + 0.38 * _AFT_card3;
+  // Shaffer Eq. 4 was fit on H₂/CO/CH₄ blends at AFT = 1700-1900 K with
+  // significant H₂ content. For CH₄-rich (>50%) low-H₂ (<10%) fuels it
+  // extrapolates and returns T_tip < T_air, which is non-physical (the
+  // burner tip can't be colder than the inlet air). Suppress display
+  // outside the calibration window and route callers through the OOR flag.
+  const T_air_for_shaffer = Tair || 300;
+  const shaffer_T_tip_OOR = (shaffer_tip_T_K < T_air_for_shaffer) || (_CH4_pct > 50 && _H2_pct < 10);
+
+  // Spadaccini-Colket τ_ign extrapolation guard. Calibration range is roughly
+  // T = 1000-1500 K; below T_premix ≈ 800 K the exponential blows up and
+  // returns τ_ign on the order of years — meaningless. Mark as OOR when
+  // τ_ign > 1000 s; the underlying physics ("mixture is thermo-kinetically
+  // stable, cannot autoignite") is correct but the number is useless.
+  const tau_ign_OOR_threshold_s = 1000.0;
 
   // ── Gate A: boundary-layer flashback (Lewis-von Elbe / Lieuwen 2021) ──
   // Per Lieuwen, "Unsteady Combustor Physics" 2nd ed., Ch. 10 §10.1.2.1
@@ -3567,9 +3612,9 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:10,padding:"8px 10px",background:`${C.accent3}08`,border:`1px solid ${C.accent3}30`,borderRadius:6,fontSize:10.5,fontFamily:"monospace"}}>
         <span style={{fontSize:10,fontWeight:700,color:C.accent3,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".8px",textTransform:"uppercase"}}>LBO inputs:</span>
         <div style={{display:"flex",alignItems:"center",gap:5}}>
-          <Tip text="Primary-zone volume V_pz (m³). Default 0.025 m³ — middle of the frame-GT (~0.05) / aero-derivative (~0.005) range. Drives the Lefebvre φ_LBO scale: smaller V_pz → higher φ_LBO."><label style={{color:C.txtDim,cursor:"help"}}>V_pz (m³) ⓘ</label></Tip>
+          <Tip text="Primary-zone volume V_pz (m³). Defaults: aero-derivative ~0.005, LMS100 ~0.025, F-class frame ~0.5–1.0 m³. Drives the Lefebvre φ_LBO scale: smaller V_pz → higher φ_LBO. CRITICAL: when running through Cycle for a frame engine (~200 kg/s air), the default 0.025 m³ produces an out-of-range loading parameter and meaningless φ_LBO > 1. Set to 0.5–1.0 m³ for F-class machines."><label style={{color:C.txtDim,cursor:"help"}}>V_pz (m³) ⓘ</label></Tip>
           <NumField value={V_pz_m3} decimals={4}
-            onCommit={v=>setVpzM3(Math.max(1e-5, Math.min(1, +v)))}
+            onCommit={v=>setVpzM3(Math.max(1e-5, Math.min(5, +v)))}
             style={{width:74,padding:"3px 6px",fontFamily:"monospace",color:C.accent3,fontSize:11,fontWeight:700,background:C.bg,border:`1px solid ${C.accent3}50`,borderRadius:4,textAlign:"center",outline:"none"}}/>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5}}>
@@ -3584,6 +3629,19 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
           <span style={{fontSize:9,color:cycleResult?C.good:C.warm,fontStyle:"italic"}}>({m_air_source})</span>
         </div>
       </div>
+      {/* Loading-parameter sanity row — flags when V_pz / ṁ_air / P_3 trio
+          puts Lefebvre's correlation outside its calibration band. */}
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10,padding:"6px 10px",background:lbo_loading_in_range?`${C.good}08`:`${C.strong}12`,border:`1px solid ${lbo_loading_in_range?C.good+"30":C.strong+"55"}`,borderRadius:6,fontSize:10,fontFamily:"monospace"}}>
+        <span style={{fontSize:10,fontWeight:700,color:lbo_loading_in_range?C.good:C.strong,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".8px",textTransform:"uppercase"}}>Loading parameter:</span>
+        <Tip text={`Lefebvre's loading parameter ṁ_air / (V_pz · (P_3/atm)^1.3) characterises how heavily the primary zone is loaded. Calibration band 30–800 kg/(s·m³·atm^1.3). Outside this band the φ_LBO correlation extrapolates and the result is unreliable.\n\nYour current trio: ṁ_air=${m_air_lbo.toFixed(1)} kg/s, V_pz=${V_pz_m3.toFixed(4)} m³, P_3=${(P3_lbo_kPa/101.325).toFixed(1)} atm.`}>
+          <span style={{color:lbo_loading_in_range?C.good:C.strong,fontWeight:700,cursor:"help"}}>{lbo_loading_param.toFixed(0)} kg/(s·m³·atm^1.3) {lbo_loading_in_range?"✓ in 30–800 band":"✗ OUT OF RANGE — Lefebvre extrapolating, φ_LBO unreliable"}</span>
+        </Tip>
+        {!lbo_loading_in_range && (
+          <span style={{color:C.txtMuted,fontStyle:"italic",marginLeft:"auto"}}>
+            {lbo_loading_param > 800 ? `Try V_pz ≈ ${(m_air_lbo/(150*Math.pow(P3_lbo_kPa/101.325,1.3))).toFixed(3)} m³` : `Try V_pz ≈ ${(m_air_lbo/(150*Math.pow(P3_lbo_kPa/101.325,1.3))).toFixed(3)} m³`}
+          </span>
+        )}
+      </div>
 
       {/* ── Headline metrics ────────────────────────────────────────── */}
       {/* NOTE: this is the BLOWOFF Damköhler (Da_BO), not the regime
@@ -3596,8 +3654,8 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
         <M l="Da_BO (anchor)" v={Da_actual.toFixed(2)} u="—" c={C.accent} tip="BLOWOFF Damköhler at the current operating point: Da_BO = τ_flow / τ_chem with τ_flow = L_char / V_ref and τ_chem = α_th / S_L². This is the flame-anchor stability ratio — distinct from the Borghi regime Da on Card 1 which uses (l_T/δ_F)·(S_L/u'). Two different Damköhlers, same name, by convention."/>
         <M l="Da_BO / Da_BO,crit" v={Da_ratio.toFixed(2)} u="—" c={Da_status==="green"?C.good:Da_status==="yellow"?C.warm:C.strong} tip={`Margin to flame anchor blow-off. > 3 robust, 1–3 marginal, ≤ 1 imminent blow-off. Currently ${Da_status==="green"?"ROBUST":Da_status==="yellow"?"MARGINAL":"BLOW-OFF IMMINENT"}.`}/>
         <M l="V_BO (this geometry)" v={uv(units,"vel",V_BO_card2).toFixed(1)} u={uu(units,"vel")} c={C.accent2} tip={`Reference velocity at which Da would equal Da_crit for the selected ${_typeEntry.label} geometry. V_ref = ${uv(units,"vel",velocity).toFixed(1)} ${uu(units,"vel")} → V_BO = V_ref · (Da/Da_crit).`}/>
-        <M l="φ_LBO (Lefebvre)" v={Number.isFinite(phi_LBO)?phi_LBO.toFixed(3):"N/A"} u="—" c={phi_LBO_safe?C.good:C.warm} tip="Lefebvre 1985 lean blow-out equivalence ratio: φ_LBO = K · √[ ṁ_air · exp(T_3/300) / (V_pz · P_3^1.3 · LCV) ] (SI: kPa, kg/s, m³, MJ/kg). Operate at φ ≥ φ_LBO + 0.05 for design margin."/>
-        <M l="margin = φ − φ_LBO" v={Number.isFinite(phi_LBO)?(phi-phi_LBO).toFixed(3):"N/A"} u="—" c={phi_LBO_safe?C.good:C.warm} tip="Lean-blow-out margin. ≥ 0.05 robust; < 0.05 risk of LBO at the current operating point. Does not include transient excursions — derate by another 0.05 for fast load drops."/>
+        <M l="φ_LBO (Lefebvre)" v={phi_LBO_oor?"OOR":Number.isFinite(phi_LBO)?phi_LBO.toFixed(3):"N/A"} u="—" c={phi_LBO_oor?C.strong:phi_LBO_safe?C.good:C.warm} tip={`Lefebvre 1985 lean blow-out equivalence ratio: q_LBO = (A·ṁ_air) / (V_pz · P_3^1.3 · exp(T_3/300) · H_r), φ_LBO = q_LBO/FAR_stoich. Operate at φ ≥ φ_LBO + 0.05 for design margin.\n\nLoading parameter ṁ_air/(V_pz·(P_3/atm)^1.3) = ${lbo_loading_param.toFixed(0)} kg/(s·m³·atm^1.3). Calibration band: 30–800. ${lbo_loading_in_range?"In range — Lefebvre output is reliable.":"OUT OF RANGE — formula extrapolates and the φ_LBO it returns is meaningless. Most common cause: V_pz is wrong for your engine. For an F-class frame engine (~200 kg/s air) set V_pz to 0.5–1.0 m³, not the LMS100 default 0.025 m³."}${phi_LBO_oor?" Raw computed φ_LBO_raw = "+(Number.isFinite(phi_LBO_raw)?phi_LBO_raw.toFixed(3):"NaN")+" — physically impossible (LBO is a LEAN limit so φ_LBO must be < 1). Display blanked.":""}`}/>
+        <M l="margin = φ − φ_LBO" v={phi_LBO_oor?"OOR":Number.isFinite(phi_LBO)?(phi-phi_LBO).toFixed(3):"N/A"} u="—" c={phi_LBO_oor?C.strong:phi_LBO_safe?C.good:C.warm} tip="Lean-blow-out margin. ≥ 0.05 robust; < 0.05 risk of LBO at the current operating point. Does not include transient excursions — derate by another 0.05 for fast load drops."/>
         <M l="Zukoski Blow-off (τ_BO)" v={(tau_BO*1000).toFixed(3)} u="ms" c={C.accent3} tip="Time for the flame to detach from the bluff body: τ_BO = D_flameholder / (1.5·S_L). Same value as on the legacy Premixer card below — also lives here because it characterises blow-off, not flashback."/>
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 10px"}}>
           <Tip text={`Blow-off status combines Da margin AND φ_LBO margin.\nDa/Da_crit: ${Da_ratio.toFixed(2)} (${Da_status==="green"?"robust":Da_status==="yellow"?"marginal":"imminent"})\nφ−φ_LBO: ${(phi-phi_LBO).toFixed(3)} (${phi_LBO_safe?"≥0.05 robust":"<0.05 risk"})`}>
@@ -3721,7 +3779,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
             <span title={`Actual wall gradient: 8·V_premix/D_h Poiseuille estimate × (1+ε_turb)=${(1+eps_turb).toFixed(2)}. Lieuwen p. 385 reports g_u,turbulent ≈ 3·g_u,laminar (Eichler-Sattelmayer).`}>g_actual = <strong style={{color:gateA_pass?C.good:C.warm}}>{g_actual.toFixed(0)}</strong> 1/s</span><br/>
             <span title={`Flashback Karlovitz Ka_fb = g_u·δ_F/s_d^u (Lieuwen Eq. 10.5). Pass: Ka_fb ≥ 1.`}>Ka_fb = <strong>{Number.isFinite(Ka_flashback)?Ka_flashback.toFixed(2):"—"}</strong> <span style={{color:C.txtMuted}}>(need ≥ 1)</span></span><br/>
             <span style={{fontSize:10,color:C.txtMuted}}>margin = {gateA_margin.toFixed(2)}×</span><br/>
-            <span title={`Shaffer-Duan-McDonell 2013 (J Eng GT 135:011502) Eq. 4 — predicted burner-tip temperature at flashback as a linear function of fuel composition + AFT:\n  T_tip = -1.58·H₂% - 3.63·CO% - 4.28·CH₄% + 0.38·AFT [K, internally]\nPer Shaffer §4.5, this is what physically drives BLF runaway in H₂-rich blends — heat transfer to the burner rim raises local Tu, raises S_L, reduces δ_q, all of which lower g_c. Using AFT = ${uv(units,"T",_AFT_card3).toFixed(0)} ${uu(units,"T")} (${(accurate&&bk.data&&bk.data.T_max)?"Cantera flame T_max":"1800 K placeholder"}). Active cooling typically caps T_tip ≤ ${uv(units,"T",600).toFixed(0)} ${uu(units,"T")} (≈600 K).`} style={{fontSize:10,color:shaffer_tip_T_K>500?C.warm:C.txtMuted}}>T_tip (Shaffer) = <strong>{uv(units,"T",shaffer_tip_T_K).toFixed(0)}</strong> {uu(units,"T")}{shaffer_tip_T_K>500?<span style={{marginLeft:6,color:C.warm,fontWeight:600}}>⚠ &gt;{uv(units,"T",500).toFixed(0)} {uu(units,"T")}</span>:""}</span>
+            <span title={`Shaffer-Duan-McDonell 2013 (J Eng GT 135:011502) Eq. 4 — predicted burner-tip temperature at flashback as a linear function of fuel composition + AFT:\n  T_tip = -1.58·H₂% - 3.63·CO% - 4.28·CH₄% + 0.38·AFT [K, internally]\nPer Shaffer §4.5, this is what physically drives BLF runaway in H₂-rich blends — heat transfer to the burner rim raises local Tu, raises S_L, reduces δ_q, all of which lower g_c. Using AFT = ${uv(units,"T",_AFT_card3).toFixed(0)} ${uu(units,"T")} (${(accurate&&bk.data&&bk.data.T_max)?"Cantera flame T_max":"1800 K placeholder"}). Active cooling typically caps T_tip ≤ ${uv(units,"T",600).toFixed(0)} ${uu(units,"T")} (≈600 K).\n\nValidity: Shaffer's experiments used H₂/CO/CH₄ blends; pure-NG / low-H₂ fuels extrapolate to T_tip < T_air, which is non-physical. ${shaffer_T_tip_OOR?`OUT OF RANGE: T_tip predicted ${uv(units,"T",shaffer_tip_T_K).toFixed(0)} ${uu(units,"T")} < T_air ${uv(units,"T",T_air_for_shaffer).toFixed(0)} ${uu(units,"T")} OR fuel is CH₄-dominant with <10% H₂. Display suppressed.`:"In calibration window."}`} style={{fontSize:10,color:shaffer_T_tip_OOR?C.txtMuted:(shaffer_tip_T_K>500?C.warm:C.txtMuted)}}>{shaffer_T_tip_OOR?<>T_tip (Shaffer) = <strong style={{color:C.txtMuted}}>OOR</strong> <span style={{color:C.txtMuted,fontStyle:"italic"}}>(low-H₂ fuel — Eq. 4 extrapolated)</span></>:<>T_tip (Shaffer) = <strong>{uv(units,"T",shaffer_tip_T_K).toFixed(0)}</strong> {uu(units,"T")}{shaffer_tip_T_K>500?<span style={{marginLeft:6,color:C.warm,fontWeight:600}}>⚠ &gt;{uv(units,"T",500).toFixed(0)} {uu(units,"T")}</span>:""}</>}</span>
           </div>
           <div style={{fontSize:9,color:C.txtMuted,marginTop:4,fontStyle:"italic",lineHeight:1.3}}>Lieuwen Eq. 10.4-10.6 + Shaffer 2013 Eq. 4 tip-T predictor. Dominant for tube burners and micromixers; H₂ flames {H2_frac>0.30?"(>30% — √σ_ρ confinement applied)":"hit this gate hardest"}.</div>
         </div>
@@ -3759,7 +3817,13 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
           <div style={{fontSize:10,fontWeight:700,color:gateD_pass?C.good:C.warm,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>{gateD_pass?"✓":isFinite(tau_ign)?"✗":"–"} Gate D — Autoignition</div>
           {isFinite(tau_ign) ? (
             <div style={{fontSize:11,fontFamily:"monospace",color:C.txt,lineHeight:1.5}}>
-              <span title={`τ_ign = ${(tau_ign*1000).toFixed(3)} ms. ${tau_ign_is_lower_bound?"Cantera did not observe ignition within window — lower bound.":"Cantera 0D const-P, "+IG_MECHANISMS.find(m=>m.id===igMechanism)?.label}.`}>τ_ign = <strong>{tau_ign_is_lower_bound?">":""}{(tau_ign*1000).toFixed(tau_ign<1?3:tau_ign<10?2:1)}</strong> ms</span><br/>
+              {(() => {
+                const tau_OOR = !accurateIgn && Number.isFinite(tau_ign) && tau_ign > tau_ign_OOR_threshold_s;
+                if (tau_OOR) {
+                  return <span title={`Spadaccini-Colket τ_ign = ${tau_ign.toExponential(2)} s ≈ ${(tau_ign/86400).toFixed(0)} days. Calibrated for T = 1000-1500 K; at T_premix = ${Tmix.toFixed(0)} K the exp(20130/T) term blows up and gives a value that means "the mixture is thermo-kinetically frozen at this T — autoignition is essentially impossible". Useful conclusion: SAFE on autoignition. Useless number to display, so suppressed.`} style={{color:C.good}}>τ_ign = <strong>&gt; 1000 s</strong> <span style={{fontSize:9,fontStyle:"italic",color:C.good}}>(corr. extrapolated — mixture thermo-kinetically stable, autoignition impossible)</span></span>;
+                }
+                return <span title={`τ_ign = ${(tau_ign*1000).toFixed(3)} ms. ${tau_ign_is_lower_bound?"Cantera did not observe ignition within window — lower bound.":accurateIgn?"Cantera 0D const-P, "+IG_MECHANISMS.find(m=>m.id===igMechanism)?.label:"Spadaccini-Colket NG correlation."}.`}>τ_ign = <strong>{tau_ign_is_lower_bound?">":""}{(tau_ign*1000).toFixed(tau_ign<1?3:tau_ign<10?2:1)}</strong> ms</span>;
+              })()}<br/>
               <span title={`τ_res,99 = RTD·(L_premix/V_premix) = ${RTD_multiplier.toFixed(1)}·${(tau_res_mean*1000).toFixed(3)} ms.`}>τ_res,99 = <strong>{(tau_res_99*1000).toFixed(3)}</strong> ms</span><br/>
               <span style={{fontSize:10,color:gateD_pass?C.good:C.warm}}>margin = {tau_ign_is_lower_bound?">":""}{ign_margin_card3.toFixed(1)} (need ≥ 3)</span>
             </div>
@@ -8007,7 +8071,14 @@ function _adaptPanelResponse(slot, r, inp){
     const piCIVB = SL_ms / Math.max(_Sn_x*Math.max(inp.Vpremix,1e-9)*Math.PI, 1e-12);
     const civb_threshold = (H2_frac>0.30) ? 0.03 : 0.05;
     const gateB_pass = piCIVB < civb_threshold;
-    const v_st_margin = inp.Vpremix / Math.max(S_T_est, 1e-9);
+    // Gate C: use Bradley S_T (V_premix-based u') to match the panel — NOT
+    // the simple SL × 1.8 turb-factor estimator (which is the legacy
+    // flashback_margin metric, computed above).
+    const _uPrime_premix_a = 0.10 * Math.max(inp.Vpremix, 0);
+    const _lT_premix_a     = 0.10 * Math.max(_D_h_x, 1e-6);
+    const _bradley_premix_a= bradleyST(SL_ms, Math.max(_uPrime_premix_a, 1e-9), _lT_premix_a, nu_u_val, Le_eff);
+    const ST_premix_gateC  = _bradley_premix_a.ST;
+    const v_st_margin = inp.Vpremix / Math.max(ST_premix_gateC, 1e-9);
     const gateC_pass = v_st_margin > 1.43;
     const tau_res_99 = _RTD_x * (inp.Lpremix / Math.max(inp.Vpremix, 1e-20));
     const ign_margin_card3 = Number.isFinite(tau_ign) ? tau_ign / Math.max(tau_res_99, 1e-20) : NaN;
@@ -8566,7 +8637,13 @@ async function runFlameForAutomation(inp, accurate){
   const piCIVB = SL_ms / Math.max(_Sn_x*Math.max(inp.Vpremix,1e-9)*Math.PI, 1e-12);
   const civb_threshold = (H2_frac>0.30) ? 0.03 : 0.05;
   const gateB_pass = piCIVB < civb_threshold;
-  const v_st_margin = inp.Vpremix / Math.max(S_T_est, 1e-9);
+  // Gate C: use Bradley S_T to match the panel (the simple SL × 1.8
+  // estimator is reserved for the legacy flashback_margin metric above).
+  const _uPrime_premix_b = 0.10 * Math.max(inp.Vpremix, 0);
+  const _lT_premix_b     = 0.10 * Math.max(_D_h_x, 1e-6);
+  const _bradley_premix_b= bradleyST(SL_ms, Math.max(_uPrime_premix_b, 1e-9), _lT_premix_b, nu_u_val, Le_eff);
+  const ST_premix_gateC  = _bradley_premix_b.ST;
+  const v_st_margin = inp.Vpremix / Math.max(ST_premix_gateC, 1e-9);
   const gateC_pass = v_st_margin > 1.43;
   const tau_res_99 = _RTD_x * (inp.Lpremix / Math.max(inp.Vpremix, 1e-20));
   const ign_margin_card3 = Number.isFinite(tau_ign) ? tau_ign / Math.max(tau_res_99, 1e-20) : NaN;
