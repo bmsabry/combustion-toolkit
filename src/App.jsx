@@ -2792,7 +2792,7 @@ function BorghiPetersDiagram({ currentX, currentY, currentLabel, trail, hover, s
 
         {/* Regime labels */}
         <text x={xToPx(2.4)} y={yToPx(-0.4)} fill={C.good} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">FLAMELET</text>
-        <text x={xToPx(2.4)} y={yToPx(0.8)} fill={C.warm} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">THIN REACTION ZONE</text>
+        <text x={xToPx(2.4)} y={yToPx(1.75)} fill={C.warm} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">THIN REACTION ZONE</text>
         <text x={xToPx(0.4)} y={yToPx(2.7)} fill={C.strong} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">BROKEN RXN</text>
         <text x={xToPx(0.2)} y={yToPx(-0.6)} fill={C.accent3} fontSize="10.5" fontFamily="'Barlow Condensed',sans-serif" fontWeight="700" letterSpacing=".5px">LAMINAR</text>
 
