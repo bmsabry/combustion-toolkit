@@ -690,11 +690,11 @@ export const AUTO_OUTPUTS = [
   { id: "ST_bradley",         label: "S_T (Bradley)",     panel: "flame", unit_si: "m/s", unit_en: "ft/s", siToEn: ms_to_fts, pick: r => r.flame?.ST_bradley },
   { id: "ST_damkohler",       label: "S_T (Damköhler)",   panel: "flame", unit_si: "m/s", unit_en: "ft/s", siToEn: ms_to_fts, pick: r => r.flame?.ST_damkohler },
   { id: "borghi_regime",      label: "Borghi-Peters Regime", panel: "flame", unit: "—", pick: r => r.flame?.borghi_regime },
-  // ── Card 2 (Stabilization & Blowoff) — Lefebvre + Plee-Mellor ──
-  { id: "phi_LBO",            label: "φ_LBO (Lefebvre)",  panel: "flame", unit: "—",  pick: r => r.flame?.phi_LBO },
-  { id: "q_LBO",              label: "q_LBO (Lefebvre)",  panel: "flame", unit: "kg/kg", pick: r => r.flame?.q_LBO },
-  { id: "phi_LBO_margin",     label: "φ − φ_LBO margin",  panel: "flame", unit: "—",  pick: r => r.flame?.phi_LBO_margin },
-  { id: "lbo_safe_lefebvre",  label: "Lefebvre LBO Safe", panel: "flame", unit: "bool", pick: r => r.flame?.lbo_safe_lefebvre },
+  // ── Card 2 (Stabilization & Blowoff) — Lefebvre BAND (LP-sweep) + Plee-Mellor ──
+  { id: "phi_LBO_low",        label: "φ_LBO_low (LP=10)",  panel: "flame", unit: "—", pick: r => r.flame?.phi_LBO_low },
+  { id: "phi_LBO_high",       label: "φ_LBO_high (LP=30)", panel: "flame", unit: "—", pick: r => r.flame?.phi_LBO_high },
+  { id: "lbo_status",         label: "LBO Status (SAFE/ALARM/HIGH_RISK)", panel: "flame", unit: "—", pick: r => r.flame?.lbo_status },
+  { id: "lbo_safe_lefebvre",  label: "Lefebvre LBO Safe (= SAFE)", panel: "flame", unit: "bool", pick: r => r.flame?.lbo_safe_lefebvre },
   { id: "Da_crit_x",          label: "Da_crit (premixer)", panel: "flame", unit: "—", pick: r => r.flame?.Da_crit_x },
   { id: "V_BO_card2",         label: "V_BO (this geom)",  panel: "flame", unit_si: "m/s", unit_en: "ft/s", siToEn: ms_to_fts, pick: r => r.flame?.V_BO_card2 },
   { id: "pm_tau_sl_ms",       label: "τ_sl (Plee-Mellor)", panel: "flame", unit: "ms", pick: r => r.flame?.pm_tau_sl_ms },
