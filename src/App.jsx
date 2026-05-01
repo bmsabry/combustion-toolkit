@@ -3453,15 +3453,20 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       </div>
 
       {/* ── Borghi-Peters regime diagram ──────────────────────────────── */}
-      <BorghiPetersDiagram
-        currentX={lT/Math.max(delta_F,1e-12)}
-        currentY={uPrime/Math.max(SL_ms,1e-9)}
-        currentLabel={{phi:+phi.toFixed(3),T0:+T0.toFixed(1),P:+P.toFixed(3),Ka:Ka_diag,Da:Da_diag,ReT:ReT_diag}}
-        trail={borghiTrail}
-        hover={borghiHover}
-        setHover={setBorghiHover}
-        units={units}
-      />
+      {/* Wrapper caps width at 50% so the diagram doesn't dominate the
+          panel. The SVG inside uses width:100% / height:auto so it
+          rescales cleanly to the cap. Centred for visual balance. */}
+      <div style={{maxWidth:"50%",margin:"0 auto"}}>
+        <BorghiPetersDiagram
+          currentX={lT/Math.max(delta_F,1e-12)}
+          currentY={uPrime/Math.max(SL_ms,1e-9)}
+          currentLabel={{phi:+phi.toFixed(3),T0:+T0.toFixed(1),P:+P.toFixed(3),Ka:Ka_diag,Da:Da_diag,ReT:ReT_diag}}
+          trail={borghiTrail}
+          hover={borghiHover}
+          setHover={setBorghiHover}
+          units={units}
+        />
+      </div>
     </div>
     {/* ═══════════ END CARD 1 ═══════════ */}
 
