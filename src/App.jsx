@@ -616,9 +616,24 @@ const PREMIXER_TYPES = {
     inputs: [
       { id:"holeDiamMm", label:"Hole diameter (mm)", min:0.5, max:5.0,
         step:0.1, default:1.5, decimals:1,
-        tooltip:"Per-jet hole diameter. Typical micromixer: 0.5-2 mm. Da_crit ≈ 0.045 (similar to bluff body)." },
+        tooltip:"Per-jet hole diameter. Typical micromixer: 0.5-2 mm.\n\nDa_crit (engineering screening interpolation):\n  0.5 mm  → 0.100  (small jets, high local strain → harder to anchor)\n  1.5 mm  → 0.045  (typical micromixer, bluff-body-like)\n  5.0 mm  → 0.030  (large jets, easier to anchor)\n\nLinear interp between the three anchors. Engineering-grade screen only — calibrate against rig data for design margin decisions." },
     ],
-    daCrit: () => 0.045,
+    // Engineering-grade Da_crit screen vs. hole diameter. Three-point
+    // linear interp through the anchors above:
+    //   d ≤ 0.5 mm → 0.100   (very small jets, high strain, hard to anchor)
+    //   d  = 1.5 mm → 0.045  (typical micromixer, bluff-body-like)
+    //   d ≥ 5.0 mm → 0.030   (large jets, behave like stable bluff bodies)
+    // Smaller holes raise Da_crit because the per-jet strain rate climbs
+    // and the local mixing/residence time shrinks — both make it harder
+    // to maintain the anchor against blowoff. NOT a fitted correlation;
+    // calibrate against rig data before design use.
+    daCrit: (p) => {
+      const d = +p.holeDiamMm || 1.5;
+      if (d <= 0.5) return 0.100;
+      if (d <= 1.5) return 0.100 + (0.045 - 0.100) * (d - 0.5) / 1.0;
+      if (d <= 5.0) return 0.045 + (0.030 - 0.045) * (d - 1.5) / 3.5;
+      return 0.030;
+    },
   },
 };
 
