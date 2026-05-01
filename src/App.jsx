@@ -579,12 +579,20 @@ function lefebvreLBO_band(K, T3_K, _LCV_unused, _FAR_unused, phi_actual, fuel_pc
   const denom = _LBO_P_KPA_FACTOR * Math.exp(Math.max(T3_K, 1) / 300) * H_r;
   const q_low  = Math.max(K, 0) * _LBO_LP_LOW  / Math.max(denom, 1e-12);
   const q_high = Math.max(K, 0) * _LBO_LP_HIGH / Math.max(denom, 1e-12);
-  // Apply fuel-composition multiplier to both edges (H₂ shifts band down ×1/3,
-  // C₃H₈ shifts modestly ×0.9, CH₄ baseline = 1.0). Linear in mole fraction.
+  // CRITICAL ORDER OF OPERATIONS:
+  //   1. Compute CH₄ baseline band, with the 1.0 clamp on the upper bound.
+  //   2. THEN apply the fuel multiplier to the clamped baseline.
+  // This guarantees the band of ANY other fuel is exactly m_fuel × the
+  // CH₄ band at every T_3 — even at low T_3 where the raw CH₄ upper would
+  // exceed 1.0 (and gets clamped). If we applied m_fuel before the clamp
+  // (older buggy version), the propane upper at low T_3 would also exceed
+  // 1.0 and clamp, masking the multiplier and giving a 1.0/1.0 = 1.0 ratio
+  // instead of the requested 0.9.
+  const phi_low_CH4_base  = q_low  / _LBO_FAR_REF;
+  const phi_high_CH4_base = Math.min(q_high / _LBO_FAR_REF, 1.0);       // clamp on CH₄ baseline
   const fuel_mult = _lboFuelMultiplier(fuel_pct);
-  // Clamp upper bound at 1.0 — φ_LBO > 1 is non-physical (LBO is a LEAN limit)
-  const phi_low  = (q_low  / _LBO_FAR_REF) * fuel_mult;                 // CH₄-locked
-  const phi_high = Math.min((q_high / _LBO_FAR_REF) * fuel_mult, 1.0);  // CH₄-locked
+  const phi_low  = phi_low_CH4_base  * fuel_mult;                       // exactly × m_fuel
+  const phi_high = phi_high_CH4_base * fuel_mult;                       // exactly × m_fuel
   // Three-state status
   let status;
   if (!Number.isFinite(phi_actual))         status = "—";
