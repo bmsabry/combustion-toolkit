@@ -46,7 +46,7 @@ from .mixture import compute_ratios
 # ----- reference design point (100 % load, LMS100 DLE, Tamb 44 °F) -----------
 _REF = {
     "NOx15":       45.0,   # ppmvd @ 15 % O2
-    "CO15":        180.0,  # ppmvd @ 15 % O2
+    "CO15":        130.0,  # ppmvd @ 15 % O2  (re-anchored 2026-05-02 from 180.0)
     "PX36_SEL":    4.3,    # low-frequency dynamics
     "PX36_SEL_HI": 2.2,    # high-frequency dynamics
 }
