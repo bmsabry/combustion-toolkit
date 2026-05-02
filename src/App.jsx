@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo, useCallback, useEffect, useRef, createContext, useContext } from "react";
+import { Fragment, memo, useState, useMemo, useCallback, useEffect, useRef, createContext, useContext } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as XLSX from "xlsx-js-style";   // drop-in replacement that supports cell styles
 import { smartRound, excelNumberFormat, smartFormat } from "./format";
@@ -5512,6 +5512,43 @@ function KV({k,v}){return(<div style={{display:"flex",justifyContent:"space-betw
    air flow, total fuel flow, combustor_air_frac. From sidebar: T_fuel, WFR,
    water_mode, T_water.
 ═══════════════════════════════════════════════════════════════════════════ */
+
+// ─── Module-scope φ controls (used by Operating Snapshot in mapping) ─────
+// These live OUTSIDE CombustorMappingPanel so React keeps a stable
+// component identity across the 2 Hz live-mapping ticker. Previously
+// they were inline inside the panel body, which made them brand-new
+// component types on every render — React would unmount each <button>
+// and remount a fresh one every 500 ms. If a tick fired between
+// mousedown and mouseup, the button you were pressing got destroyed
+// and the click was lost — that's the "sticky and non-responsive"
+// feel the user reported during recording. With them hoisted, the
+// DOM nodes persist across ticks and clicks register instantly.
+//
+// Wrapped in React.memo (imported as `memo`) so even if the parent rerenders 2×/s, these
+// only repaint when val/color/step actually change.
+const PhiEditor = memo(function PhiEditor({val, setVal, step, color}) {
+  return (
+    <div style={{display:"inline-flex",alignItems:"center",gap:3,width:104,justifyContent:"center"}}>
+      <button onClick={()=>setVal(Math.max(0,+(val-step).toFixed(4)))}
+        title={`Decrease φ by ${step}`}
+        style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1,flex:"0 0 auto"}}>−</button>
+      <NumField value={val} decimals={4} onCommit={v=>setVal(Math.max(0,+v))}
+        style={{width:60,padding:"3px 4px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${color}40`,borderRadius:4,textAlign:"center",outline:"none",flex:"0 0 auto"}}/>
+      <button onClick={()=>setVal(+(val+step).toFixed(4))}
+        title={`Increase φ by ${step}`}
+        style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1,flex:"0 0 auto"}}>+</button>
+    </div>
+  );
+});
+
+const PhiDisabled = memo(function PhiDisabled({val, color}) {
+  return (
+    <div style={{display:"inline-block",width:104,padding:"4px 6px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:`${color}18`,border:`1px dashed ${color}80`,borderRadius:4,textAlign:"center",boxSizing:"border-box"}}>
+      {(val||0).toFixed(4)}
+    </div>
+  );
+});
+
 function CombustorMappingPanel({
   fuel, Tfuel, WFR=0, waterMode="liquid", T_water,
   cycleResult, bkCycle,
@@ -6371,28 +6408,11 @@ function CombustorMappingPanel({
   const OMnegFuel    = fuel_residual < -1e-6 || (R && m_fuel_OM<=0 && (m_fuel_IP_bk+m_fuel_OP_bk+m_fuel_IM_bk)>m_fuel_total*1.001);
   const OMphiExtreme = phi_OM>0 && (phi_OM<0.05 || phi_OM>1.5);
 
-  // ── Inline φ editor (used in Cards 1 and 2) ─────────────────────────────
-  // inline-flex so it shrinks to its content and centers properly when the
-  // parent cell uses textAlign:center. Fixed width (104 px) so all three
-  // editors line up vertically and match the OM disabled-value pill below.
-  const PhiEditor = ({val,setVal,step,color})=>(
-    <div style={{display:"inline-flex",alignItems:"center",gap:3,width:104,justifyContent:"center"}}>
-      <button onClick={()=>setVal(Math.max(0,+(val-step).toFixed(4)))}
-        title={`Decrease φ by ${step}`}
-        style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1,flex:"0 0 auto"}}>−</button>
-      <NumField value={val} decimals={4} onCommit={v=>setVal(Math.max(0,+v))}
-        style={{width:60,padding:"3px 4px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:C.bg,border:`1px solid ${color}40`,borderRadius:4,textAlign:"center",outline:"none",flex:"0 0 auto"}}/>
-      <button onClick={()=>setVal(+(val+step).toFixed(4))}
-        title={`Increase φ by ${step}`}
-        style={{padding:"2px 6px",fontSize:11,fontWeight:700,fontFamily:"monospace",color,background:"transparent",border:`1px solid ${color}60`,borderRadius:3,cursor:"pointer",lineHeight:1,flex:"0 0 auto"}}>+</button>
-    </div>
-  );
-  // Disabled φ pill for Outer Main — same width as PhiEditor (104 px) and
-  // same vertical footprint so OM's row reads as a peer of IP/OP/IM, not
-  // a misaligned outlier.
-  const PhiDisabled = ({val,color})=>(
-    <div style={{display:"inline-block",width:104,padding:"4px 6px",fontFamily:"monospace",color,fontSize:12,fontWeight:700,background:`${color}18`,border:`1px dashed ${color}80`,borderRadius:4,textAlign:"center",boxSizing:"border-box"}}>{(val||0).toFixed(4)}</div>
-  );
+  // PhiEditor and PhiDisabled are HOISTED to module scope (above this
+  // function definition) so the -/+ buttons keep a stable React
+  // component identity across the 2 Hz live-mapping ticker.
+  // See the comment block at the module-level definitions for the full
+  // root-cause explanation.
 
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <InlineBusyBanner loading={accurate&&(bkCycle?.loading||bkMap.loading)}/>
