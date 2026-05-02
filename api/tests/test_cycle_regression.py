@@ -34,22 +34,26 @@ from app.science import cycle
 # -------------------------- design-point anchors ---------------------------
 
 def test_lms100_design_anchor_exact():
+    """Design anchor at T_amb=44°F (T_amb_K=279.817) under the user-supplied
+    100%-load deck table (added 2026-05-02). Values are linear-interpolated
+    between the 40°F and 50°F table points:
+        P3   = 645.8 + 0.4×(640.0 - 645.8)   = 643.48 psia = 44.37 bar
+        T4   = 2780  + 0.4×(2780  - 2780 )   = 2780 °F     = 1799.82 K
+        MW   = 110   + 0.4×(108   - 110  )   = 109.2 MW
+    T3 stays at 700°F across the full 100%-load envelope (intercooler hold).
+    Efficiency lifts from 44.2 % (old parametric) to 44.9 % because MW rose
+    1.7 MW at the same fuel flow (T4 unchanged at this anchor).
+    """
     r = cycle.run("LMS100PB+", 1.01325, 279.817, 80.0, 100.0)
     assert r["T3_K"] == pytest.approx(644.26, abs=0.05)
-    assert r["P3_bar"] == pytest.approx(44.0, abs=0.01)
+    assert r["P3_bar"] == pytest.approx(44.37, abs=0.02)
     assert r["T4_K"] == pytest.approx(1799.82, abs=0.05)
-    assert r["MW_net"] == pytest.approx(107.5, abs=0.05)
+    assert r["MW_net"] == pytest.approx(109.2, abs=0.1)
     assert r["intercooled"] is True
     # Intercooler duty must be positive and in a sensible range
     assert 20.0 < r["intercooler_duty_MW"] < 60.0
-    # T4 anchor was lowered from 1825.37 → 1799.82 (2826°F → 2780°F) per the
-    # PB+ uprate (cooler firing, longer hot-section life). MW_net is OEM-deck
-    # commanded so it's unaffected. mdot_fuel drops with T4 (less fuel needed
-    # for the cooler combustor exit), pushing η_LHV slightly UP at the same
-    # commanded power. Honest Brayton number is now ~44.2 %.
-    assert r["efficiency_LHV"] == pytest.approx(0.442, abs=0.005), r["efficiency_LHV"]
-    # Heat rate ~8146 kJ/kWh at 44.2 % eff
-    assert r["heat_rate_kJ_per_kWh"] == pytest.approx(8146.0, abs=100.0)
+    assert r["efficiency_LHV"] == pytest.approx(0.449, abs=0.005), r["efficiency_LHV"]
+    assert r["heat_rate_kJ_per_kWh"] == pytest.approx(8016.0, abs=100.0)
 
 
 def test_lm6000_design_anchor_exact():
@@ -194,7 +198,10 @@ def test_load_scales_mw_monotonically():
     (real gas-turbine behavior). We check monotonicity and rough ranges.
     """
     for engine, T_amb, RH, MW_des in [
-        ("LMS100PB+", 279.817, 80.0, 107.5),
+        # LMS100PB+ design anchor at 44°F: was 107.5 MW under the parametric
+        # deck; raised to 109.2 MW under the user-supplied 100%-load table
+        # (interp between table points 40°F=110 and 50°F=108).
+        ("LMS100PB+", 279.817, 80.0, 109.2),
         ("LM6000PF",  288.706, 60.0,  45.0),
     ]:
         r100 = cycle.run(engine, 1.01325, T_amb, RH, 100.0)

@@ -131,12 +131,13 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         # Polytropic turbine/compressor efficiencies (Option A physics).
         # Calibrated so MW_gross = W_turb − W_comp − W_parasitic reaches
         # MW_cap at the design anchor for pure CH4 humid-air operation.
-        "eta_isen_turb": 0.7770,   # HP+IP+LP expansion, P3 → P_exhaust = 1.05 bar
-                                   # (re-calibrated +1.70% when T4 anchor was
-                                   # lowered 1825.37 → 1799.82 K, to restore
-                                   # MW_gross ≈ 108.0 ≥ MW_cap at the design
-                                   # point — matches the original cap-binding
-                                   # margin of +0.5 MW.)
+        "eta_isen_turb": 0.7805,   # HP+IP+LP expansion, P3 → P_exhaust = 1.05 bar.
+                                   # Re-calibrated 2026-05-02 from 0.7770 → 0.7805
+                                   # so that MW_gross matches the new MW_cap of
+                                   # 109.2 MW set by the user-supplied 100%-load
+                                   # deck table at the 44°F design anchor.
+                                   # (Was 0.7770 to match MW_cap of 107.5 MW
+                                   # under the prior parametric model.)
         "eta_isen_comp": 0.88,     # used in LPC T-rise; HPC captured by T3 anchor
         "P_exhaust_bar": 1.05,     # back-pressure at LP turbine exit (stack losses)
         "W_parasitic_frac_of_rated": 0.015,  # 1.5 % of rated MW (oil pumps, gearbox, aux)
@@ -158,6 +159,27 @@ ENGINE_DECKS: Dict[str, Dict[str, Any]] = {
         #    75 % load → T3 = 660 °F = 622.04 K
         # Slope = (644.26 − 622.04) K / 25 % = 0.8889 K per % load.
         "T3_load_slope_K_per_pct": 0.8889,
+        # ── 100 %-load deck — measured/published curves vs T_amb ───────
+        # Replaces the previous parametric off-design power-laws for
+        # P3, T3, T4 and MW_net at 100 % load. Anywhere off these
+        # curves is interpolated linearly; outside the [0, 100] °F
+        # range the endpoints are clamped (no extrapolation).
+        # T_Bulk is INTENTIONALLY OMITTED — it stays Cantera-derived
+        # from (T3, P3, phi_Bulk) so that fuel-composition changes flow
+        # through correctly. The reference T_Bulk_F values from the
+        # source deck (informational only) are: 2990, 3000, 3010, 3030,
+        # 3030, 3030, 3030, 3035, 3040, 3045, 3045.
+        # Source: user-supplied LMS100PB+ deck, 2026-05-02.
+        # All temperatures in °F, P3 in psia, MW in MW (electrical).
+        # Note T4 ramps from 2740 → 2780 °F as ambient warms 0 → 30 °F
+        # (cold-day torque-limit curve), then holds at 2780 °F.
+        "load100_curves": {
+            "T_amb_F":  [0,    10,    20,    30,    40,    50,   60,   70,    80,   90,   100  ],
+            "T3_F":     [700,  700,   700,   700,   700,   700,  700,  700,   700,  700,  700  ],
+            "P3_psia":  [662.6,656.9, 651.3, 645.8, 645.8, 640.0,635.0,624.8, 610.0,600.0,599.0],
+            "T4_F":     [2740, 2750,  2760,  2780,  2780,  2780, 2780, 2780,  2780, 2780, 2780 ],
+            "MW_net":   [110,  110,   110,   110,   110,   108,  106,  104,   103,  100,  99   ],
+        },
     },
     "LM6000PF": {
         "label": "GE LM6000PF (2-spool aero-derivative, non-intercooled)",
@@ -223,6 +245,44 @@ def _humid_air_mol_pct(T_amb_K: float, P_amb_bar: float, RH_pct: float) -> Dict[
     out = {k: (v / dry_total) * (1.0 - X_H2O) * 100.0 for k, v in dry.items()}
     out["H2O"] = X_H2O * 100.0
     return out
+
+
+def _F_to_K(T_F: float) -> float:
+    """°F → K convenience helper used by the load-100 deck lookup."""
+    return (float(T_F) - 32.0) * 5.0 / 9.0 + 273.15
+
+
+def _lookup_load100(deck: Dict[str, Any], T_amb_K: float, key_F: str) -> Optional[float]:
+    """Linear-interpolate a 100 %-load deck curve at the given T_amb.
+
+    Inputs
+    ------
+    deck    : engine deck dict (must contain `load100_curves`).
+    T_amb_K : ambient temperature, K.
+    key_F   : column to interpolate, in °F units. One of:
+              "T3_F", "P3_psia", "T_Bulk_F", "T4_F", "MW_net".
+
+    Returns
+    -------
+    Interpolated value in the column's native units, or None if the deck
+    has no `load100_curves` block. Outside the calibrated T_amb range
+    the result is clamped to the nearest endpoint (NO extrapolation).
+    """
+    curves = deck.get("load100_curves")
+    if not curves or key_F not in curves:
+        return None
+    T_amb_F = (T_amb_K - 273.15) * 9.0 / 5.0 + 32.0
+    xs_F = curves["T_amb_F"]
+    ys   = curves[key_F]
+    # Clamp at edges
+    if T_amb_F <= xs_F[0]:  return float(ys[0])
+    if T_amb_F >= xs_F[-1]: return float(ys[-1])
+    # Linear interp
+    for i in range(len(xs_F) - 1):
+        if xs_F[i] <= T_amb_F <= xs_F[i + 1]:
+            frac = (T_amb_F - xs_F[i]) / (xs_F[i + 1] - xs_F[i])
+            return float(ys[i] + frac * (ys[i + 1] - ys[i]))
+    return float(ys[-1])  # unreachable
 
 
 def _humid_air_density(T_amb_K: float, P_amb_bar: float, RH_pct: float) -> float:
@@ -779,7 +839,11 @@ def run(
     rho_des = _humid_air_density(deck["T_amb_design_K"], deck["P_amb_design_bar"], deck["RH_design_pct"])
     rho_ratio = rho_amb / rho_des  # >1 on cold days → more MW, more airflow
 
-    # --- Airflow, MW_max_ambient ---
+    # --- Airflow, MW_max_ambient, T4, P3 ---
+    # 100 %-load values come from the user-supplied deck table when the
+    # engine has a `load100_curves` block; otherwise fall back to the
+    # original parametric power-laws (still used by LM6000PF, which has
+    # no measured table yet).
     a_m, a_P3 = deck["a_m"], deck["a_P3"]
     beta_m, beta_P3, beta_MW = deck["beta_m"], deck["beta_P3"], deck["beta_MW"]
     mdot_air = (
@@ -787,16 +851,29 @@ def run(
         * (a_m + (1.0 - a_m) * load_frac)
         * (rho_ratio ** beta_m)
     )
-    MW_max_ambient = deck["MW_design"] * (rho_ratio ** beta_MW)
-    MW_net = MW_max_ambient * load_frac
 
-    # --- T4, P3 ---
-    T4_K = deck["T4_design_K"] * (deck["a_T4"] + (1.0 - deck["a_T4"]) * load_frac)
-    P3_bar = (
-        deck["P3_design_bar"]
-        * (a_P3 + (1.0 - a_P3) * load_frac)
-        * (rho_ratio ** beta_P3)
-    )
+    P3_100_psia = _lookup_load100(deck, T_amb_K, "P3_psia")
+    T4_100_F    = _lookup_load100(deck, T_amb_K, "T4_F")
+    MW_100      = _lookup_load100(deck, T_amb_K, "MW_net")
+    if P3_100_psia is not None and T4_100_F is not None and MW_100 is not None:
+        # Table-driven path. Part-load shape is preserved by applying the
+        # SAME parametric scaling around the table's 100 %-load anchor.
+        P3_100_bar    = P3_100_psia / 14.5038
+        T4_100_K_val  = _F_to_K(T4_100_F)
+        P3_bar = P3_100_bar * (a_P3 + (1.0 - a_P3) * load_frac)
+        T4_K   = T4_100_K_val * (deck["a_T4"] + (1.0 - deck["a_T4"]) * load_frac)
+        MW_max_ambient = float(MW_100)          # = table value at 100 %-load
+        MW_net         = MW_max_ambient * load_frac
+    else:
+        # Legacy parametric path (LM6000PF and any deck without load100_curves)
+        MW_max_ambient = deck["MW_design"] * (rho_ratio ** beta_MW)
+        MW_net = MW_max_ambient * load_frac
+        T4_K = deck["T4_design_K"] * (deck["a_T4"] + (1.0 - deck["a_T4"]) * load_frac)
+        P3_bar = (
+            deck["P3_design_bar"]
+            * (a_P3 + (1.0 - a_P3) * load_frac)
+            * (rho_ratio ** beta_P3)
+        )
 
     # --- T3, plus stations upstream ---
     stations: Dict[str, float] = {
