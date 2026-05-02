@@ -86,7 +86,8 @@ _PHI_IP_FLOOR = 0.25
 _P3_EXP = {
     "NOx15":       0.467,
     "CO15":       -1.0,
-    "PX36_SEL":    0.50,
+    "PX36_SEL":    0.56,    # bumped 2026-05-02 from 0.50 — slightly stronger
+                            # P3 sensitivity on the low-frequency acoustic trace
     "PX36_SEL_HI": 0.44,
 }
 
