@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import cantera as ct
 from fastapi import FastAPI
@@ -18,6 +19,28 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("combustion-toolkit-api")
 
 settings = get_settings()
+
+# ── Sentry (no-op when SENTRY_DSN unset, e.g. in dev / desktop loopback) ──
+# Errors that bubble out of any endpoint are captured with stack + request
+# context. Free tier (5K events / month) is plenty for our scale.
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            environment=settings.env,
+            traces_sample_rate=0.05,                 # 5 % perf sampling
+            send_default_pii=False,
+            integrations=[FastApiIntegration(), StarletteIntegration()],
+        )
+        log.info("Sentry initialised (env=%s)", settings.env)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Sentry init failed (continuing): %s", e)
+else:
+    log.info("Sentry disabled (SENTRY_DSN not set)")
 
 
 # Fail fast in production if SECRET_KEY is still the development placeholder.
@@ -47,6 +70,12 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── Rate limiter ─────────────────────────────────────────────────
+    # The per-IP limiter lives inside routers.calc (no extra wiring
+    # needed here — each endpoint that wants limiting takes a tiny
+    # FastAPI Depends(...) that does the bucket bookkeeping and raises
+    # 429 directly. See `_rate_limit` in routers/calc.py.
 
     # Routers
     app.include_router(auth.router)

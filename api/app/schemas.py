@@ -221,6 +221,27 @@ class FlameSpeedSweepResponse(BaseModel):
     points: List[FlameSpeedSweepPoint]
 
 
+class SweepJobSubmitted(BaseModel):
+    """Returned by POST /calc/flame-speed-sweep when the job is queued.
+
+    Sweeps run async on a dedicated thread pool so they don't block other
+    Cantera requests. The client polls `poll_url` every few seconds until
+    `status == "done"` (or `"error"`), then reads `result`.
+    """
+    job_id: str
+    status: str = "queued"           # queued | running | done | error
+    poll_url: str                    # GET this to check status
+
+
+class SweepJobStatus(BaseModel):
+    """Returned by GET /calc/sweep-result/{job_id}."""
+    job_id: str
+    status: str                      # queued | running | done | error
+    elapsed_s: float = 0.0
+    result: Optional[FlameSpeedSweepResponse] = None
+    error: Optional[str] = None
+
+
 class AutoignitionRequest(BaseCalcRequest):
     """Constant-pressure autoignition delay for the premixed (fuel+air) mixture.
 

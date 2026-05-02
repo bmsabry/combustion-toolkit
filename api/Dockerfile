@@ -31,13 +31,25 @@ COPY alembic ./alembic
 ENV PORT=8000
 EXPOSE 8000
 
-# Worker timeout must exceed the longest solver pool timeout in routers/calc.py
-# (540 s for /calc/flame-speed-sweep). We set 600 s — Render's HTTP ceiling on
-# Standard — so gunicorn does not kill the worker mid-sweep. 2 workers for light concurrency.
+# Worker config tuned for ~100 concurrent paid users on Render Standard
+# (2 GB RAM / 1 shared vCPU). Notes:
+#   • 4 workers ≈ 4× the previous concurrency. Each worker holds its own
+#     Cantera Solution pool (~50–150 MB once warm); 4×150 = 600 MB plus
+#     base FastAPI + LRU cache, well under Render's 2 GB ceiling.
+#   • Sweeps now run on a SEPARATE thread pool inside each worker and
+#     return a job_id immediately — they no longer hold the request open
+#     for 540 s, so the per-request timeout can be tighter.
+#   • --max-requests 250 recycles workers periodically to release any
+#     accumulated Cantera/scipy memory before it becomes a leak. Jitter
+#     prevents all workers recycling at the same instant.
+#   • --timeout 240 still leaves 360 s of headroom under Render's 600 s
+#     HTTP ceiling for the longest single-point solve.
 CMD ["gunicorn", "app.main:app", \
      "-k", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:8000", \
-     "--workers", "2", \
-     "--timeout", "600", \
+     "--workers", "4", \
+     "--timeout", "240", \
      "--graceful-timeout", "30", \
+     "--max-requests", "250", \
+     "--max-requests-jitter", "50", \
      "--access-logfile", "-"]

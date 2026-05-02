@@ -148,8 +148,30 @@ export async function calcAFT(payload) {
 export async function calcFlameSpeed(payload) {
   return request("/calc/flame-speed", { method: "POST", body: payload, auth: true });
 }
-export async function calcFlameSpeedSweep(payload) {
-  return request("/calc/flame-speed-sweep", { method: "POST", body: payload, auth: true });
+// Sweeps are async on the backend (a single call can take up to 540 s and
+// used to block all other Cantera traffic). The POST returns a job_id;
+// we poll /calc/sweep-result/{job_id} until status="done" and resolve
+// with the same shape callers expect (the FlameSpeedSweepResponse).
+export async function calcFlameSpeedSweep(payload, { pollIntervalMs = 2500, maxWaitMs = 600000 } = {}) {
+  const submitted = await request("/calc/flame-speed-sweep", { method: "POST", body: payload, auth: true });
+  const jobId = submitted && submitted.job_id;
+  if (!jobId) {
+    // Backwards-compat: if the backend ever returned the result inline (old
+    // synchronous shape), pass it straight through.
+    if (submitted && submitted.points) return submitted;
+    throw new Error("Sweep submission failed (no job_id)");
+  }
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxWaitMs) {
+    const status = await request(`/calc/sweep-result/${jobId}`, { method: "GET", auth: true });
+    if (status.status === "done" && status.result) return status.result;
+    if (status.status === "error") {
+      const e = new Error(status.error || "Sweep failed on the backend");
+      e.code = "sweep_error"; throw e;
+    }
+    await new Promise(r => setTimeout(r, pollIntervalMs));
+  }
+  throw new Error(`Sweep did not finish within ${Math.round(maxWaitMs/1000)} s`);
 }
 export async function calcCombustor(payload) {
   return request("/calc/combustor", { method: "POST", body: payload, auth: true });

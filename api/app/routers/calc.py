@@ -1,11 +1,16 @@
 """Accurate Cantera-backed calculation endpoints. Requires FULL subscription."""
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import time
+import uuid
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..deps import require_full_subscription
 from ..models import User
@@ -26,6 +31,8 @@ from ..schemas import (
     FlameSpeedResponse,
     FlameSpeedSweepRequest,
     FlameSpeedSweepResponse,
+    SweepJobSubmitted,
+    SweepJobStatus,
     PropsRequest,
     PropsResponse,
     SolvePhiForTflameRequest,
@@ -53,6 +60,88 @@ router = APIRouter(prefix="/calc", tags=["calc (accurate Cantera)"])
 # Cantera isn't thread-safe; serialize via a single-thread executor.
 _solver_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cantera")
 
+# ── Sweep pool: SEPARATE serialized executor for /flame-speed-sweep ──
+# Sweeps cost up to 540 s and used to share `_solver_pool`, so a single
+# user kicking off a sweep would block every other Cantera request for
+# ~9 minutes. Splitting them means single-point flame solves stay
+# responsive even while a sweep is running. Sweeps are submitted in a
+# fire-and-forget pattern: the POST returns a job_id immediately, and
+# the client polls /calc/sweep-result/{job_id} until done.
+_sweep_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cantera-sweep")
+_sweep_jobs: "OrderedDict[str, dict]" = OrderedDict()
+_SWEEP_JOBS_MAX = 200          # bounded so we never grow without limit
+_SWEEP_JOB_TTL_S = 30 * 60     # results readable for 30 min after finish
+
+# ── Rate limiter — minimal in-process token bucket ──
+# slowapi has a known incompat with `from __future__ import annotations`
+# + FastAPI type-hint introspection, so we roll our own. Per-IP buckets,
+# fixed-window. Render's load balancer sets X-Forwarded-For, so we
+# bucket by the real client IP rather than the Render proxy IP.
+# Limits are per-process; with 4 gunicorn workers the effective per-IP
+# allowance is ~4× the value here, which is acceptable headroom for the
+# sole goal: prevent a runaway script / tab from locking the Cantera
+# pool. A real distributed limiter would need Redis — Tier 2 work.
+_RL_BUCKETS: Dict[str, Dict[str, list[float]]] = {}   # bucket_key -> {endpoint: [timestamps]}
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        # Take the first IP in the chain (closest to client). Render appends
+        # the proxy IP after the real client, so [0] is what we want.
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+def _rate_limit(endpoint: str, per_min: int, per_hour: int):
+    """FastAPI dependency factory. Raises 429 with Retry-After when the
+    caller has exceeded either window."""
+    def _dep(request: Request):
+        ip = _client_ip(request)
+        now = time.time()
+        bucket = _RL_BUCKETS.setdefault(ip, {})
+        hits = bucket.setdefault(endpoint, [])
+        # Trim everything older than 1 hour.
+        cutoff_h = now - 3600
+        cutoff_m = now - 60
+        # in-place filter for speed
+        if hits and hits[0] < cutoff_h:
+            new_hits = [t for t in hits if t >= cutoff_h]
+            bucket[endpoint] = new_hits
+            hits = new_hits
+        recent_min = sum(1 for t in hits if t >= cutoff_m)
+        if recent_min >= per_min:
+            oldest_in_window = next(t for t in hits if t >= cutoff_m)
+            retry = max(1, int(oldest_in_window + 60 - now))
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many {endpoint} requests — limit {per_min}/min. Retry in {retry}s.",
+                headers={"Retry-After": str(retry)},
+            )
+        if len(hits) >= per_hour:
+            retry = max(1, int(hits[0] + 3600 - now))
+            raise HTTPException(
+                status_code=429,
+                detail=f"Hourly cap reached for {endpoint} — limit {per_hour}/hour. Retry in {retry//60}m.",
+                headers={"Retry-After": str(retry)},
+            )
+        hits.append(now)
+        # Cap dict size to avoid unbounded growth from drive-by traffic.
+        if len(_RL_BUCKETS) > 5000:
+            # Drop oldest 1000 by last-touch.
+            stale = sorted(_RL_BUCKETS.items(), key=lambda kv: max((max(v) for v in kv[1].values() if v), default=0))[:1000]
+            for k, _ in stale:
+                _RL_BUCKETS.pop(k, None)
+    return _dep
+
+# Per-endpoint limit profiles. The numbers are conservative — generous
+# enough that a normal user clicking through panels never sees a 429,
+# tight enough that a runaway loop or stuck retry can't lock workers.
+_RL_FLAME      = _rate_limit("flame-speed",        per_min=30, per_hour=500)
+_RL_COMBUSTOR  = _rate_limit("combustor",          per_min=20, per_hour=300)
+_RL_AUTOIGN    = _rate_limit("autoignition",       per_min=30, per_hour=500)
+_RL_BATCH      = _rate_limit("batch",              per_min=60, per_hour=1000)
+_RL_SWEEP_POST = _rate_limit("sweep-submit",       per_min=3,  per_hour=20)
+_RL_SWEEP_POLL = _rate_limit("sweep-poll",         per_min=120, per_hour=3000)
+
 # ───────────────────────────────────────────────────────────────────────
 #  Backend-side LRU cache for solver results.
 #  Keyed on a stable hash of the request body (with the `lean` field
@@ -62,10 +151,6 @@ _solver_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cantera")
 #  pays the Cantera cost. Bounded entry count to keep memory predictable
 #  inside Render Standard's 2 GB.
 # ───────────────────────────────────────────────────────────────────────
-import hashlib
-import json
-from collections import OrderedDict
-
 _BACKEND_CACHE_MAX_ENTRIES = 500
 _backend_cache: "OrderedDict[str, dict]" = OrderedDict()
 
@@ -148,7 +233,9 @@ def calc_aft(body: AFTRequest, _: User = Depends(require_full_subscription)) -> 
 
 @router.post("/flame-speed", response_model=FlameSpeedResponse)
 def calc_flame_speed(
-    body: FlameSpeedRequest, _: User = Depends(require_full_subscription)
+    body: FlameSpeedRequest,
+    _: User = Depends(require_full_subscription),
+    __=Depends(_RL_FLAME),
 ) -> FlameSpeedResponse:
     result = _cached_compute(body, "flame_speed", lambda: _run_in_pool(
         flame_speed.run,
@@ -172,46 +259,118 @@ def calc_flame_speed(
     return FlameSpeedResponse(**result)
 
 
-@router.post("/flame-speed-sweep", response_model=FlameSpeedSweepResponse)
-def calc_flame_speed_sweep(
-    body: FlameSpeedSweepRequest, _: User = Depends(require_full_subscription)
-) -> FlameSpeedSweepResponse:
-    """Run a Cantera FreeFlame at each point in sweep_values.
-
-    Per-point FreeFlame cost in production is ~15–30 s depending on how close
-    the point sits to a flammability limit. A 10-point sweep can breach 300 s
-    when extremes fight convergence, so we widen the pool timeout to 540 s —
-    below Render's 600 s HTTP ceiling on Standard, leaving headroom. The
-    single-point endpoints keep the tighter 180 s ceiling.
-    """
+def _run_sweep_job(job_id: str, args: tuple) -> None:
+    """Worker thread body — runs on _sweep_pool. Stores result/error in
+    `_sweep_jobs[job_id]`. Never raises; failures are captured as a
+    "status: error" record the client can read."""
+    job = _sweep_jobs.get(job_id)
+    if job is None:
+        return
+    job["status"] = "running"
+    job["started_at"] = time.time()
     try:
-        result = _solver_pool.submit(
-            flame_speed_sweep.run,
-            body.sweep_var,
-            list(body.sweep_values),
-            body.fuel,
-            body.oxidizer,
-            body.phi,
-            body.T0,
-            body.P,
-            body.T_fuel_K,
-            body.T_air_K,
-            body.domain_length_m,
-            body.WFR,
-            body.water_mode,
-        ).result(timeout=540)
-    except Exception as e:
-        log.exception("flame-speed-sweep error: %s", e)
-        raise HTTPException(
-            status_code=500,
-            detail="Flame-speed sweep failed. One or more points may be outside the flammability limits; narrow the range and retry.",
-        ) from e
-    return FlameSpeedSweepResponse(**result)
+        result = flame_speed_sweep.run(*args)
+        job["result"] = result
+        job["status"] = "done"
+    except Exception as e:  # noqa: BLE001
+        log.exception("flame-speed-sweep job %s error: %s", job_id, e)
+        job["error"] = "Flame-speed sweep failed. One or more points may be outside the flammability limits; narrow the range and retry."
+        job["status"] = "error"
+    finally:
+        job["finished_at"] = time.time()
+
+
+def _evict_old_sweep_jobs() -> None:
+    """Drop finished jobs older than _SWEEP_JOB_TTL_S, and trim by max
+    count. Keeps the in-memory store bounded across long uptimes."""
+    now = time.time()
+    expired = [
+        jid for jid, j in _sweep_jobs.items()
+        if j.get("finished_at") and (now - j["finished_at"]) > _SWEEP_JOB_TTL_S
+    ]
+    for jid in expired:
+        _sweep_jobs.pop(jid, None)
+    while len(_sweep_jobs) > _SWEEP_JOBS_MAX:
+        _sweep_jobs.popitem(last=False)
+
+
+@router.post("/flame-speed-sweep", response_model=SweepJobSubmitted)
+def calc_flame_speed_sweep(
+    body: FlameSpeedSweepRequest,
+    _: User = Depends(require_full_subscription),
+    __=Depends(_RL_SWEEP_POST),
+) -> SweepJobSubmitted:
+    """Submit a Cantera FreeFlame sweep. Returns a `job_id` IMMEDIATELY
+    — the actual sweep runs on `_sweep_pool` in the background and can
+    take up to 540 s. The client polls `GET /calc/sweep-result/{job_id}`
+    until status="done".
+
+    Why async: a single sweep used to lock the whole Cantera worker for
+    minutes, so two concurrent users could starve every other request.
+    Splitting it onto its own pool + returning immediately means
+    single-point flame solves stay responsive even during a sweep.
+    """
+    _evict_old_sweep_jobs()
+    job_id = uuid.uuid4().hex
+    _sweep_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "created_at": time.time(),
+        "started_at": None,
+        "finished_at": None,
+        "result": None,
+        "error": None,
+    }
+    args = (
+        body.sweep_var,
+        list(body.sweep_values),
+        body.fuel,
+        body.oxidizer,
+        body.phi,
+        body.T0,
+        body.P,
+        body.T_fuel_K,
+        body.T_air_K,
+        body.domain_length_m,
+        body.WFR,
+        body.water_mode,
+    )
+    _sweep_pool.submit(_run_sweep_job, job_id, args)
+    return SweepJobSubmitted(
+        job_id=job_id,
+        status="queued",
+        poll_url=f"/calc/sweep-result/{job_id}",
+    )
+
+
+@router.get("/sweep-result/{job_id}", response_model=SweepJobStatus)
+def get_sweep_result(
+    job_id: str,
+    _: User = Depends(require_full_subscription),
+    __=Depends(_RL_SWEEP_POLL),
+) -> SweepJobStatus:
+    """Poll a sweep job. Returns status + (when done) the full result.
+    Results stay readable for ~30 minutes after the job finishes."""
+    job = _sweep_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Sweep job not found or expired")
+    started = job.get("started_at") or job.get("created_at") or time.time()
+    finished = job.get("finished_at") or time.time()
+    elapsed = max(0.0, finished - started)
+    return SweepJobStatus(
+        job_id=job_id,
+        status=job["status"],
+        elapsed_s=elapsed,
+        result=FlameSpeedSweepResponse(**job["result"]) if job.get("result") else None,
+        error=job.get("error"),
+    )
 
 
 @router.post("/combustor", response_model=CombustorResponse)
 def calc_combustor(
-    body: CombustorRequest, _: User = Depends(require_full_subscription)
+    body: CombustorRequest,
+    _: User = Depends(require_full_subscription),
+    __=Depends(_RL_COMBUSTOR),
 ) -> CombustorResponse:
     def _compute():
         r = _run_in_pool(
@@ -329,7 +488,9 @@ def calc_cycle(body: CycleRequest, _: User = Depends(require_full_subscription))
 
 @router.post("/autoignition", response_model=AutoignitionResponse)
 def calc_autoignition(
-    body: AutoignitionRequest, _: User = Depends(require_full_subscription)
+    body: AutoignitionRequest,
+    _: User = Depends(require_full_subscription),
+    __=Depends(_RL_AUTOIGN),
 ) -> AutoignitionResponse:
     result = _cached_compute(body, "autoignition", lambda: _run_in_pool(
         autoignition.run,
@@ -578,7 +739,11 @@ _KIND_DISPATCH = {
 
 
 @router.post("/batch", response_model=BatchResponse)
-def calc_batch(body: BatchRequest, _: User = Depends(require_full_subscription)) -> BatchResponse:
+def calc_batch(
+    body: BatchRequest,
+    _: User = Depends(require_full_subscription),
+    __=Depends(_RL_BATCH),
+) -> BatchResponse:
     results = []
     for i, job in enumerate(body.jobs):
         try:
