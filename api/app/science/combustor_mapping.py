@@ -86,10 +86,12 @@ _PHI_IP_FLOOR = 0.25
 _P3_EXP = {
     "NOx15":       0.467,
     "CO15":       -1.0,
-    "PX36_SEL":    1.70,    # bumped 2026-05-02 (0.50 → … → 1.50 → 1.70);
-                            # super-linear P3 sensitivity on the low-freq trace
-                            # (above the typical 0.4-1.0 published range —
-                            # tuned empirically against site data).
+    "PX36_SEL":    1.00,    # back to 1.00 (linear in P3) on 2026-05-02 after
+                            # T_Bulk derivative was added — the T_Bulk term
+                            # now carries most of the part-load sensitivity,
+                            # so the pressure exponent doesn't need to be
+                            # super-linear. (Earlier excursions: 0.50 → 0.56
+                            # → 0.60 → 0.65 → 0.75 → 0.90 → 1.50 → 1.70 → 1.00)
     "PX36_SEL_HI": 0.44,
 }
 
