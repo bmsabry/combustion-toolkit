@@ -134,16 +134,16 @@ def _nox15_tflame_contribution(Tflame_F: float,
 
 def _px36_sel_tflame_contribution(Tflame_F: float,
                                    Tref_F: float = 3035.0,
-                                   T_lo_F:  float = 2900.0,
+                                   T_lo_F:  float = 2950.0,
                                    T_hi_F:  float = 3060.0,
                                    slope_per_F: float = 0.318 / 50.0) -> float:
     """Piecewise-linear PX36_SEL contribution from T_Bulk (Tflame).
 
     Slope is +0.318 psi per +50 °F (≈ +0.00636 psi/°F), centered on the
     LMS100 reference Tflame_F = 3035 °F. Clamps:
-        Tflame ≤ 2900 °F  → contribution frozen at the 2900 °F value
-                            (= -0.859 psi)
-        2900 < Tflame < 3060 → linear: slope_per_F × (Tflame - 3035)
+        Tflame ≤ 2950 °F  → contribution frozen at the 2950 °F value
+                            (= -0.541 psi)        # was 2900 °F → -0.859 psi
+        2950 < Tflame < 3060 → linear: slope_per_F × (Tflame - 3035)
         Tflame ≥ 3060 °F  → contribution frozen at the 3060 °F value
                             (= +0.159 psi)
 
