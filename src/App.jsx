@@ -93,10 +93,10 @@ const UNMAPPED_MAPPING_TABLES = {
     ..._sparseRows(0.70, 1.0, 0.51),
   ],
   4: [
-    // BRNDMD 4 unmapped: φ_IM bumped 0.43 → 0.47 on 2026-05-02 per site
-    // recalibration. φ_OP=0.70 and φ_IP=2.0 unchanged.
-    ..._denseRows (0.70, 2.0, 0.47),
-    ..._sparseRows(0.70, 2.0, 0.47),
+    // BRNDMD 4 unmapped: φ_OP=0.70, φ_IP=2.0, φ_IM=0.43.
+    // (Briefly bumped IM to 0.47 on 2026-05-02 then reverted same day.)
+    ..._denseRows (0.70, 2.0, 0.43),
+    ..._sparseRows(0.70, 2.0, 0.43),
   ],
   2: [
     ..._denseRows (0.85, 5.3, 0.0),
@@ -129,11 +129,10 @@ const MAPPED_MAPPING_TABLES = {
     _tblRow(850, 0.70, 1.0, 0.51),
   ],
   4: [
-    // BRNDMD 4 mapped: same as UNMAPPED (no rig data yet for BD4) —
-    // φ_IM bumped 0.43 → 0.47 in lockstep with the UNMAPPED change
-    // on 2026-05-02. φ_OP=0.70 and φ_IP=2.0 unchanged.
-    ..._denseRows (0.70, 2.0, 0.47),
-    ..._sparseRows(0.70, 2.0, 0.47),
+    // BRNDMD 4 mapped: same as UNMAPPED (no rig data yet for BD4).
+    // φ_OP=0.70, φ_IP=2.0, φ_IM=0.43.
+    ..._denseRows (0.70, 2.0, 0.43),
+    ..._sparseRows(0.70, 2.0, 0.43),
   ],
   2: [
     ..._denseRows (0.85, 5.3, 0.0),
