@@ -6529,7 +6529,7 @@ function CombustorMappingPanel({
                 {[
                   ["Inner Pilot","IP",C.strong,"centerbody pilot",C_IP,phiIP,setPhiIP,0.05,true],
                   ["Outer Pilot","OP",C.orange,"annular pilot",C_OP,phiOP,setPhiOP,0.05,true],
-                  ["Inner Main","IM",C.accent,"inner premix",C_IM,phiIM,setPhiIM,0.01,true],
+                  ["Inner Main","IM",C.accent,"inner premix",C_IM,phiIM,setPhiIM,0.005,true],
                   ["Outer Main","OM",C.accent2,"float circuit",C_OM,phi_OM,null,0,false],
                 ].map(([label,key,color,sub,row,phiV,setPhi,step,editable],idx)=>(
                   <tr key={key} style={{background:`${color}08`}}>
@@ -7052,7 +7052,7 @@ function CombustorMappingPanel({
           {[
             ["Inner Pilot (IP)","centerbody pilot",C.strong,fracIP,setFracIP,m_air_IP,phiIP,setPhiIP,0.05,m_fuel_IP_bk,true],
             ["Outer Pilot (OP)","annular pilot",C.orange,fracOP,setFracOP,m_air_OP,phiOP,setPhiOP,0.05,m_fuel_OP_bk,true],
-            ["Inner Main (IM)","inner premix",C.accent,fracIM,setFracIM,m_air_IM,phiIM,setPhiIM,0.01,m_fuel_IM_bk,true],
+            ["Inner Main (IM)","inner premix",C.accent,fracIM,setFracIM,m_air_IM,phiIM,setPhiIM,0.005,m_fuel_IM_bk,true],
             ["Outer Main (OM)","float circuit",C.accent2,fracOM,setFracOM,m_air_OM,phi_OM,null,0,m_fuel_OM,false],
           ].map(([name,sub,color,frac,setFrac,mAir,phiV,setPhi,step,mFuel,editable])=>(
             <div key={name} style={{display:"grid",gridTemplateColumns:cols,columnGap:14,alignItems:"center",padding:"9px 12px",borderTop:`1px solid ${C.border}`,background:`${color}08`}}>
