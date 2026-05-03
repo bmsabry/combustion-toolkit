@@ -5598,28 +5598,30 @@ function CombustorMappingPanel({
   const {accurate}=useContext(AccurateCtx);
 
   // ─── Engine load ramp — 0.2 MW/sec ────────────────────────────────────
-  // When the user changes load, the cycle backend returns the new steady-
-  // state engine outputs INSTANTLY. Real engines take time — a typical LMS100
-  // ramp rate is ~0.2-0.8 MW/sec depending on the gradient permit. We
-  // interpolate cycleResult and bkMap.data linearly between the previous
-  // displayed state and the new target at exactly 0.2 MW/sec, so the live
-  // mapping traces show a representative engine response instead of a
-  // discontinuous jump. The measurement-device noise + first-order lag
-  // (PX36 1 s, NOx/CO 90 s, etc.) sits ON TOP of this physical ramp,
-  // unchanged — so PX36 still settles in 1 s after the engine reaches the
-  // new MW, but the engine itself takes (ΔMW / 0.2) seconds to get there.
+  // When the user changes LOAD, the cycle backend returns the new steady-
+  // state engine outputs instantly. A real LMS100 takes time (~0.2 MW/sec
+  // permitted gradient). We interpolate cycleResult linearly between the
+  // previous displayed state and the new target at 0.2 MW/sec so the live
+  // mapping traces show a representative engine response.
+  //
+  // CRITICAL: ONLY load (MW) changes are ramped. φ button clicks, fuel
+  // composition edits, water settings, ambient changes, etc. all snap
+  // instantly — they're operator inputs, not engine transients. The map
+  // output (PX36/NOx/CO correlations) is interpolated alongside the
+  // cycle ONLY while a load ramp is in flight; for any other input
+  // change the map snaps to the latest backend value.
   const RAMP_RATE_MW_PER_S = 0.2;
   const [displayedCycle, setDisplayedCycle] = useState(cycleResultProp);
   const [displayedMap,   setDisplayedMap]   = useState(bkMapProp?.data || null);
+  // ramp state — `active` flips true ONLY when a load (MW) change triggers
+  // an interpolation. φ / fuel / ambient changes do NOT set active=true.
   const rampRef = useRef({
+    active: false,
     startCycle: null, targetCycle: null,
     startMap:   null, targetMap:   null,
-    startMW:    null, targetMW:    null,
+    startMW:    0,    targetMW:    0,
     started_at: 0,
   });
-  // Linear-interp helper that walks a result dict and lerps every numeric
-  // field, recurses one level into nested objects (e.g. correlations).
-  // Strings, arrays, and nulls fall through to the target value.
   const lerpResult = useCallback((a, b, t) => {
     if (!a) return b; if (!b) return a;
     if (t <= 0) return a; if (t >= 1) return b;
@@ -5641,66 +5643,84 @@ function CombustorMappingPanel({
     }
     return out;
   }, []);
-  // When a new cycleResult arrives from the backend, kick off a new ramp
-  // FROM whatever is currently displayed (handles rapid load changes mid-ramp).
+  // CYCLE EFFECT — the only place that activates a ramp. Compares MW; if
+  // ΔMW ≥ 0.05 we set active=true and capture start/target. Otherwise we
+  // snap (cycle changed for some non-power reason — fuel, ambient, etc.).
   useEffect(() => {
     if (!cycleResultProp) return;
     if (!displayedCycle) { setDisplayedCycle(cycleResultProp); return; }
     const startMW  = Number(displayedCycle.MW_net) || 0;
     const targetMW = Number(cycleResultProp.MW_net) || 0;
     if (Math.abs(targetMW - startMW) < 0.05) {
-      // Nothing meaningful changed — snap immediately
-      setDisplayedCycle(cycleResultProp);
+      setDisplayedCycle(cycleResultProp);  // snap — non-power cycle change
       return;
     }
+    // True load change — start ramp
     rampRef.current = {
-      ...rampRef.current,
+      active: true,
       startCycle: displayedCycle,
       targetCycle: cycleResultProp,
       startMW, targetMW,
+      // Map endpoints are filled when the next bkMap.data arrives (from the
+      // cycle-driven mapping refetch). Until then the displayed map stays
+      // at its previous value, then ramps once both endpoints are known.
+      startMap: displayedMap,
+      targetMap: null,
       started_at: Date.now(),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cycleResultProp]);
-  // Same trigger for bkMap.data — start a parallel ramp on the correlation
-  // outputs so PX36/NOx/CO/etc all transition smoothly together.
+  // MAP EFFECT — only stores the new map as a ramp target IF a ramp is
+  // currently active. For any other reason the map updated (φ click, fuel
+  // change, etc.) we SNAP to the new value immediately — that's exactly
+  // what the user demanded: φ adjustments must be instantly visible.
   useEffect(() => {
     const newMap = bkMapProp?.data || null;
     if (!newMap) return;
-    if (!displayedMap) { setDisplayedMap(newMap); return; }
-    rampRef.current = {
-      ...rampRef.current,
-      startMap: displayedMap,
-      targetMap: newMap,
-    };
+    const r = rampRef.current;
+    if (r.active && !r.targetMap) {
+      // First map update after load change — capture as ramp target
+      rampRef.current = { ...r, targetMap: newMap };
+    } else {
+      // Either no ramp active (φ click etc.) or ramp already has its
+      // target — either way, snap. φ changes mid-ramp also snap, by design.
+      setDisplayedMap(newMap);
+      // If we're snapping mid-ramp, also kill the map portion of the ramp
+      // so we don't drift backwards on the next tick.
+      if (r.active) rampRef.current = { ...r, startMap: newMap, targetMap: null };
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bkMapProp?.data]);
-  // 200 ms ramp ticker — advances both interpolations until progress=1,
-  // then settles. Self-quiescent: when there's no active ramp it just
-  // sets state once to the target and skips further work.
+  // 200 ms ticker — advances the ramp only while r.active is true.
   useEffect(() => {
     const id = setInterval(() => {
       const r = rampRef.current;
-      if (!r.targetCycle) return;
+      if (!r.active) return;
       const elapsed = (Date.now() - r.started_at) / 1000;
       const totalDelta = Math.abs(r.targetMW - r.startMW);
-      const required = totalDelta / RAMP_RATE_MW_PER_S;          // s
+      const required = totalDelta / RAMP_RATE_MW_PER_S;
       const progress = required > 0 ? Math.min(1, elapsed / required) : 1;
-      // Cycle interpolation
       if (r.startCycle && r.targetCycle) {
         setDisplayedCycle(lerpResult(r.startCycle, r.targetCycle, progress));
       }
-      // Mapping interpolation (uses same fractional progress)
       if (r.startMap && r.targetMap) {
         setDisplayedMap(lerpResult(r.startMap, r.targetMap, progress));
+      }
+      if (progress >= 1) {
+        // Ramp complete — clear state so next non-power change snaps.
+        rampRef.current = {
+          active: false,
+          startCycle: null, targetCycle: null,
+          startMap: null, targetMap: null,
+          startMW: 0, targetMW: 0,
+          started_at: 0,
+        };
       }
     }, 200);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // Shadow the props with the ramped versions — the rest of the panel
-  // consumes `cycleResult` and `bkMap` exactly as it did before, so no
-  // call-site changes needed downstream.
+  // Shadow the props so downstream code consumes the ramped versions.
   const cycleResult = displayedCycle;
   const bkMap = bkMapProp ? { ...bkMapProp, data: displayedMap || bkMapProp.data } : bkMapProp;
 
