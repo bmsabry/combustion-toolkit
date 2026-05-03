@@ -66,7 +66,12 @@ _REFPT = {
 # already converted to "per unit phi" by pre-multiplying by 10.
 # Phi_IP applies only above 0.25 (one-sided ramp). See _phi_ip_delta below.
 _DERIV = {
-    "DT_Main": {"NOx15": 0.0375, "CO15":  0.424, "PX36_SEL": -0.004,  "PX36_SEL_HI": -0.0004},
+    # PX36_SEL and PX36_SEL_HI ∂/∂DT_Main are piecewise (linear up to
+    # DT_Main = 650 °F, then flat) and handled by
+    # _px36_dt_main_contribution() below — the entries here are 0 to
+    # avoid double-counting in the generic linear loop. NOx15 and CO15
+    # keep their original linear slopes against DT_Main.
+    "DT_Main": {"NOx15": 0.0375, "CO15":  0.424, "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "N2":      {"NOx15": -0.25,  "CO15":  2.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "C3":      {"NOx15":  0.75,  "CO15": -12.0,  "PX36_SEL":  0.04,   "PX36_SEL_HI":  0.0266},
     "Phi_OP":  {"NOx15":  17.5,  "CO15":  -70.0, "PX36_SEL": -1.5,    "PX36_SEL_HI": -0.15},
@@ -78,6 +83,13 @@ _DERIV = {
     "Tflame":  {"NOx15":  0.0,   "CO15": -1.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "T3":      {"NOx15":  0.065, "CO15":  0.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
 }
+
+# DT_Main piecewise slopes for PX36 outputs (linear up to clamp, then flat).
+# Same slope as the original _DERIV row, just with an upper clamp added so
+# very wide IM-vs-OM spreads don't keep dragging PX36 down indefinitely.
+_DT_MAIN_PX36_SEL_SLOPE    = -0.004    # psi/°F — same magnitude as old _DERIV
+_DT_MAIN_PX36_SEL_HI_SLOPE = -0.0004   # psi/°F — same magnitude as old _DERIV
+_DT_MAIN_PX36_CLAMP_F      = 650.0     # above this DT_Main, contribution is frozen
 
 # Phi_IP activation threshold. Below this the IP derivative contributes 0.
 _PHI_IP_FLOOR = 0.25
@@ -130,6 +142,27 @@ def _nox15_tflame_contribution(Tflame_F: float,
     # Low regime — frozen at the running total at 2750
     return slope_hi * (brk_hi_F - Tref_F) + slope_mid * (brk_lo_F - brk_hi_F) \
            + slope_lo * (T - brk_lo_F)
+
+
+def _px36_dt_main_contribution(DT_Main_F: float,
+                                slope_per_F: float,
+                                DT_ref_F:   float = 450.0,
+                                DT_clamp_F: float = _DT_MAIN_PX36_CLAMP_F) -> float:
+    """Piecewise PX36 contribution from DT_Main, linear up to DT_clamp_F
+    then frozen at the clamp value.
+
+    DT_Main < DT_clamp_F → slope_per_F × (DT_Main − DT_ref_F)
+    DT_Main ≥ DT_clamp_F → slope_per_F × (DT_clamp_F − DT_ref_F)
+
+    Used for both PX36_SEL (slope -0.004 psi/°F) and PX36_SEL_HI
+    (slope -0.0004 psi/°F). The clamp keeps very wide IM/OM spreads
+    from continuing to drag PX36 down — physically the dynamics signal
+    saturates once DT_Main pushes past 650 °F. NOx15 / CO15 still use
+    the original unclamped linear slopes against DT_Main.
+    """
+    DT = float(DT_Main_F)
+    DT_clamped = min(DT_clamp_F, DT)
+    return slope_per_F * (DT_clamped - DT_ref_F)
 
 
 def _px36_sel_tflame_contribution(Tflame_F: float,
@@ -359,11 +392,19 @@ def run(
         if name == "NOx15":
             y += _nox15_tflame_contribution(Tflame_F)
         # PX36_SEL gets a clamped-linear Tflame contribution (anchored at
-        # 3035 °F, slope +0.318 psi per +50 °F, frozen below 2900 °F and
+        # 3035 °F, slope +0.318 psi per +50 °F, frozen below 2950 °F and
         # above 3060 °F). PX36_SEL_HI is intentionally NOT given a Tflame
         # term — only the low-frequency trace responds to bulk flame T.
         if name == "PX36_SEL":
             y += _px36_sel_tflame_contribution(Tflame_F)
+        # PX36_SEL and PX36_SEL_HI get a clamped-linear DT_Main term:
+        # the slope (matching the old _DERIV magnitudes) is active up to
+        # DT_Main = 650 °F, then frozen so very wide spreads stop pushing
+        # the dynamics signal indefinitely.
+        if name == "PX36_SEL":
+            y += _px36_dt_main_contribution(DT_Main_F, _DT_MAIN_PX36_SEL_SLOPE)
+        elif name == "PX36_SEL_HI":
+            y += _px36_dt_main_contribution(DT_Main_F, _DT_MAIN_PX36_SEL_HI_SLOPE)
         y_lin[name] = y
 
         # Step 2: Phi_OP multiplier (ONLY for PX36_SEL_HI)
