@@ -93,8 +93,10 @@ const UNMAPPED_MAPPING_TABLES = {
     ..._sparseRows(0.70, 1.0, 0.51),
   ],
   4: [
-    ..._denseRows (0.70, 2.0, 0.43),
-    ..._sparseRows(0.70, 2.0, 0.43),
+    // BRNDMD 4 unmapped: φ_IM bumped 0.43 → 0.47 on 2026-05-02 per site
+    // recalibration. φ_OP=0.70 and φ_IP=2.0 unchanged.
+    ..._denseRows (0.70, 2.0, 0.47),
+    ..._sparseRows(0.70, 2.0, 0.47),
   ],
   2: [
     ..._denseRows (0.85, 5.3, 0.0),
