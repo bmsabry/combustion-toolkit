@@ -86,7 +86,7 @@ _PHI_IP_FLOOR = 0.25
 _P3_EXP = {
     "NOx15":       0.467,
     "CO15":       -1.0,
-    "PX36_SEL":    1.50,    # bumped 2026-05-02 (0.50 → … → 0.90 → 1.50);
+    "PX36_SEL":    1.70,    # bumped 2026-05-02 (0.50 → … → 1.50 → 1.70);
                             # super-linear P3 sensitivity on the low-freq trace
                             # (above the typical 0.4-1.0 published range —
                             # tuned empirically against site data).
