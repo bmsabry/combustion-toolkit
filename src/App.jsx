@@ -89,8 +89,10 @@ const UNMAPPED_MAPPING_TABLES = {
     ..._sparseRows(0.80, 0.0, 0.51),
   ],
   6: [
-    ..._denseRows (0.70, 1.0, 0.51),
-    ..._sparseRows(0.70, 1.0, 0.51),
+    // BRNDMD 6 unmapped: φ_IM lowered 0.51 → 0.49 on 2026-05-02
+    // per site recalibration. φ_OP=0.70 and φ_IP=1.0 unchanged.
+    ..._denseRows (0.70, 1.0, 0.49),
+    ..._sparseRows(0.70, 1.0, 0.49),
   ],
   4: [
     // BRNDMD 4 unmapped: φ_OP=0.70, φ_IP=2.0, φ_IM=0.43.
@@ -120,13 +122,16 @@ const MAPPED_MAPPING_TABLES = {
   ],
   6: [
     // BRNDMD 6 mapped: IP=1.2 for T3 ≤ 670, IP=1.0 for T3 ≥ 680.
-    ...Array.from({length: 18}, (_, i) => _tblRow(500 + i*10, 0.70, 1.2, 0.51)),   // 500–670
-    _tblRow(680, 0.70, 1.0, 0.51),
-    _tblRow(690, 0.70, 1.0, 0.51),
-    _tblRow(700, 0.70, 1.0, 0.51),
-    _tblRow(750, 0.70, 1.0, 0.51),
-    _tblRow(800, 0.70, 1.0, 0.51),
-    _tblRow(850, 0.70, 1.0, 0.51),
+    // φ_IM lowered 0.51 → 0.49 on 2026-05-02 per site recalibration
+    // (same change applied to UNMAPPED to keep them in lockstep until
+    // separate rig data lands for BD6).
+    ...Array.from({length: 18}, (_, i) => _tblRow(500 + i*10, 0.70, 1.2, 0.49)),   // 500–670
+    _tblRow(680, 0.70, 1.0, 0.49),
+    _tblRow(690, 0.70, 1.0, 0.49),
+    _tblRow(700, 0.70, 1.0, 0.49),
+    _tblRow(750, 0.70, 1.0, 0.49),
+    _tblRow(800, 0.70, 1.0, 0.49),
+    _tblRow(850, 0.70, 1.0, 0.49),
   ],
   4: [
     // BRNDMD 4 mapped: same as UNMAPPED (no rig data yet for BD4).
