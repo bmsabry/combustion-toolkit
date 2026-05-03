@@ -6500,6 +6500,9 @@ function CombustorMappingPanel({
 
         {/* Inlet state chips (read-only from cycle) */}
         <div style={{display:"flex",gap:8,flexWrap:"wrap",fontFamily:"monospace",fontSize:11,marginBottom:10}}>
+          {/* BRNDMD chip — leftmost so users see the burner-mode ladder
+              position at a glance before reading the cycle stations. */}
+          <div title="BRNDMD = burner mode (7=full DLE, 6=transitional, 4=part-load, 2=startup). Computed from MW_net via the emissions-mode ladder." style={{padding:"5px 9px",background:`${C.violet}15`,borderRadius:5,border:`1px solid ${C.violet}66`}}><span style={{color:C.txtDim}}>BRNDMD:</span> <strong style={{color:C.violet}}>{Number.isFinite(brndmdVal)?brndmdVal:"—"}</strong></div>
           <div style={{padding:"5px 9px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>T₃:</span> <strong style={{color:C.accent}}>{fmtT(T3)} {uu(units,"T")}</strong></div>
           <div style={{padding:"5px 9px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>P₃:</span> <strong style={{color:C.accent}}>{units==="SI"?(P3_bar/1.01325).toFixed(3)+" atm":(P3_bar*14.5038).toFixed(1)+" psia"}</strong></div>
           <div style={{padding:"5px 9px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>T_fuel:</span> <strong style={{color:C.accent2}}>{fmtT(Tfuel)} {uu(units,"T")}</strong></div>
