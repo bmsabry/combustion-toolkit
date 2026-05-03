@@ -1540,7 +1540,7 @@ const sA=[
   ["Group","Parameter","Value","Basis / Rationale"],
 
   ["1. Ambient & Inlet","Reference pressure","1.01325 bar","Sea-level ISA. P_amb input overrides for off-design."],
-  ["","Reference temperature","288.706 K (60 °F)","LM6000 ISO anchor. LMS100 anchored at 44 °F / 80% RH."],
+  ["","Reference temperature","LMS100 anchored at 44 °F / 80% RH","288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."],
   ["","Relative humidity","User input 0–100%","Default 60%. Enters via humid-air R and cp."],
   ["","Inlet pressure drop","0 bar","No filter / silencer loss."],
   ["","Inlet ram recovery","1.0","Stationary ground operation."],
@@ -1559,14 +1559,14 @@ const sA=[
   ["","Heat rejected","Q_IC = mdot · Δh","Diagnostic only; not used in MW calc."],
 
   ["5. Combustor","Combustor ΔP","4%","P4 = 0.96 · P3."],
-  ["","Combustor bypass fraction","LM6000: 0.683 / LMS100: 0.747","Per-engine calibration. Core-to-casing split."],
+  ["","Combustor bypass fraction","LMS100: 0.747","Per-engine calibration. Core-to-casing split."],
   ["","Combustor air fraction (flame/total)","0.88 (both)","Flame vs dilution zone split."],
-  ["","T4 target","LM6000: 1755 K / LMS100: 1800 K","Firing temperature — commanded by deck. LMS100 lowered from 1825 K to 1800 K (2826°F → 2780°F) for the PB+ uprate."],
+  ["","T4 target","LMS100: 1800 K (2780 °F) at 100% load","Firing temperature — commanded by deck. Now driven by the user-supplied 100%-load deck table."],
   ["","φ4 solve","Cantera equilibrate(\"HP\")","Back-solved so product T = T4. Equilibrium only."],
   ["","T_Bulk","equilibrate(\"HP\") at (T3,P3,φ_Bulk)","Drives downstream panels when linked."],
   ["","Heat loss","0%","Adiabatic combustor (AFT panel has separate HL input)."],
 
-  ["6. Turbine","η_isen_turb","LM6000: 0.7416 / LMS100: 0.7640","Calibrated so MW_gross lands at cap at anchor."],
+  ["6. Turbine","η_isen_turb","LMS100: 0.7805","Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."],
   ["","Expansion path","gas.SP = s_in, P_exh; η correction","Equilibrium products, Cantera enthalpy."],
   ["","P_exhaust","1.05 bar","Stack + HRSG backpressure."],
   ["","Cooling air","In bypass fraction","No re-injection mixing."],
@@ -1589,12 +1589,11 @@ const sA=[
   ["","Low-LHV warning","LHV_vol < 800 BTU/scf","Dilute fuel — doubles fuel flow."],
   ["","Derate application","MW_net = MW_uncapped · (1 − derate%)","Stacks with part-load, not with ambient droop."],
 
-  ["10. Engine Deck Anchors","LM6000PF","45.0 MW @ 60 °F / 60% RH","T3 811 K · P3 30.3 bar · T4 1755 K · η 42.4% · HR 8493 BTU/kWh."],
-  ["","LMS100PB+","107.5 MW @ 44 °F / 80% RH","T3 644 K · P3 44.0 bar · T4 1800 K (2780°F) · η_LHV 44.2% · HR 8146 kJ/kWh · intercooled. T4 anchor and η_isen_turb co-tuned for the PB+ uprate (cooler firing, more efficient turbine)."],
+  ["10. Engine Deck Anchors","LMS100PB+","109.2 MW @ 44 °F / 80% RH","T3 644 K · P3 44.4 bar · T4 1800 K (2780°F) · η_LHV 44.9% · HR 8016 kJ/kWh · intercooled. Now driven by user-supplied 100%-load deck table (P3, T3, T4, MW vs T_amb). Additional engines are in development."],
   ["","Anchor method","combustor_bypass_frac + η_isen_turb","Two per-engine knobs fit MW and η at anchor."],
 
   ["11. Off-design Scaling","Density lapse","mdot_air ∝ ρ_amb · VGV(T_amb)","Engine-specific lapse curve."],
-  ["","LMS100 intercooler benefit","Architectural","HPC inlet pinned to T_cool_in."],
+  ["","LMS100 intercooler benefit","Architectural","HPC inlet pinned to T_cool_in. LMS100 loses less on hot days than non-intercooled engines."],
   ["","Load line","Linear in cap","Cap = load_pct · rated_ambient. Gross super-linear at low load."],
   ["","Humidity","Via humid-air R only","Higher RH → more volumetric mdot."],
   ["","Altitude","Not modeled","Use P_amb input if needed."],
@@ -2214,7 +2213,7 @@ function HelpModal({show,onClose}){if(!show)return null;
 
       {_h("Left Sidebar")}
       {_sub("Engine & Ambient")}
-      <p><strong>Engine</strong> — pick LM6000PF (single-shaft) or LMS100PB+ (intercooled). Drives MW cap, T4 firing temperature, and which panels are visible (Combustor Mapping is LMS100-only).</p>
+      <p><strong>Engine</strong> — currently calibrated for the LMS100PB+ DLE IC (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives MW cap, T4 firing temperature, and the Combustor Mapping panel. Additional engines are in development.</p>
       <p><strong>Ambient P / T / RH</strong> — site conditions. The cycle uses these for compressor inlet density and humid-air properties.</p>
       <p><strong>Load %</strong> — gas turbine load. The big number in the green box. <strong>± buttons</strong> bump by the editable <strong>Step (%)</strong> just below — default 5, persists across reloads, accepts any integer 1–50. The slider also uses this step.</p>
       <p><strong>Intercooler coolant T</strong> — only shown for LMS100PB+. Sets the HPC inlet temperature (architectural intercooler benefit).</p>
@@ -2239,7 +2238,7 @@ function HelpModal({show,onClose}){if(!show)return null;
       <p>Single-glance dashboard: cycle MW, T3, P3, T4, T_Bulk, NOx15/CO15/PX36 at the current operating point. Pulls live from Cycle and Combustor Mapping. No inputs of its own — change conditions in the sidebar.</p>
 
       {_sub("🛠️ Cycle (Gas Turbine)")}
-      <p>Anchored cycle deck for LM6000PF and LMS100PB+. <strong>Inputs</strong>: ambient, load, RH, T_cool (LMS100), combustor air fraction, T_fuel, WFR, water mode, bleed. <strong>Outputs</strong>: every station state (1, 2, 2c, 3, 4, 5), MW_gross / MW_cap / MW_net, heat rate, η_LHV, fuel-flexibility derate (MWI), warnings.</p>
+      <p>Anchored cycle deck for the LMS100PB+ DLE IC. <strong>Inputs</strong>: ambient, load, RH, intercooler coolant T, combustor air fraction, T_fuel, WFR, water mode, bleed. <strong>Outputs</strong>: every station state (1, 2, 2c, 3, 4, 5), MW_gross / MW_cap / MW_net, heat rate, η_LHV, fuel-flexibility derate (MWI), warnings. Additional engines are in development.</p>
       <p>Run <strong>Cycle</strong> → its results propagate through the linkages into every other panel.</p>
 
       {_sub("🎯 Combustor Mapping (LMS100 only)")}
@@ -5185,13 +5184,13 @@ function AssumptionsPanel(){
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ How to read this page">
       <p style={{margin:"0 0 6px"}}>Every number below is baked into the cycle and combustion solvers. They are exposed here so you can audit them, map deviations, and know exactly what the app is and is not modeling.</p>
-      <p style={{margin:"0 0 6px"}}><span style={hs.em}>In-spec for design-point anchors only.</span> LM6000PF and LMS100PB+ off-design behavior is driven by physical scaling (density lapse, humid-air R, load-line droop) anchored at a single published design point per engine.</p>
+      <p style={{margin:"0 0 6px"}}><span style={hs.em}>In-spec for design-point anchors only.</span> LMS100PB+ off-design behavior is driven by a measured 100%-load deck table (P3, T3, T4, MW vs T_amb) anchored at the published design point. Additional engines are in development.</p>
       <p style={{margin:0}}><span style={hs.warn}>Not a design tool.</span> The cycle is a reduced-order anchored correlation, not a station-by-station match of the OEM deck. Use high-fidelity tools for design, permitting, or emissions reporting.</p>
     </HelpBox>
 
     <AssumptionsGroup title="1. Ambient & Inlet" subtitle="Ambient state feeding the LP compressor inlet. No ram recovery, no inlet loss.">
       <Assumption label="Reference pressure" value="1.01325 bar" note="Sea-level ISA. Cycle input P_amb overrides for off-design."/>
-      <Assumption label="Reference temperature" value="288.706 K (60 °F)" note="LM6000 ISO anchor. LMS100 anchored at 44 °F / 80% RH."/>
+      <Assumption label="Reference temperature" value="LMS100 anchored at 44 °F / 80% RH" note="288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."/>
       <Assumption label="Relative humidity" value="User input 0–100%" note="Default 60%. Enters via humid-air R and cp."/>
       <Assumption label="Inlet pressure drop" value="0 bar" note="No filter / silencer loss modeled. T1/P1 ≡ ambient."/>
       <Assumption label="Inlet ram recovery" value="1.0" note="Stationary (aero-derivative on ground). No Mach effect."/>
@@ -5218,16 +5217,16 @@ function AssumptionsPanel(){
 
     <AssumptionsGroup title="5. Combustor" subtitle="Two states — flame zone (bulk) and combustor exit (station 4). The flame zone sees only the primary air; dilution air is added after to meet T4.">
       <Assumption label="Combustor pressure drop" value="4%" note="P4 = 0.96 · P3. Fixed. Typical DLE range is 3–5%."/>
-      <Assumption label="Combustor bypass fraction" value="LM6000: 0.683  /  LMS100: 0.747" note="Fraction of compressor discharge routed to the combustor core. Remainder is casing/HPT cooling. Private per-engine calibration so design-point MW and η land exactly."/>
+      <Assumption label="Combustor bypass fraction" value="LMS100: 0.747" note="Fraction of compressor discharge routed to the combustor core. Remainder is casing/HPT cooling. Private per-engine calibration so design-point MW and η land exactly."/>
       <Assumption label="Combustor air fraction (flame/total)" value="0.88 (both)" note="Flame zone gets 88% of combustor air; dilution zone gets 12%. FAR_Bulk = FAR4 / 0.88."/>
-      <Assumption label="T4 target" value="LM6000: 1755 K  /  LMS100: 1800 K" note="Firing temperature. Commanded by the deck, not solved. LMS100 anchor lowered from 1825 K to 1800 K (2826 °F → 2780 °F) for the PB+ uprate."/>
+      <Assumption label="T4 target" value="LMS100: 1800 K (2780 °F) at 100% load" note="Firing temperature. Commanded by the deck, not solved. The LMS100 anchor was lowered from 1825 K to 1800 K (2826 °F → 2780 °F) for the PB+ uprate. Now driven by the user-supplied 100%-load deck table at every ambient point."/>
       <Assumption label="φ4 solve" value="Cantera equilibrate(&quot;HP&quot;)" note="Back-solved so equilibrium product T at (T3, P3) equals T4. No kinetics — equilibrium only."/>
       <Assumption label="T_Bulk (flame zone)" value="Cantera equilibrate(&quot;HP&quot;) at (T3, P3, φ_Bulk)" note="Adiabatic equilibrium. Drives downstream flame-speed / blowoff / autoignition panels when linked."/>
       <Assumption label="Heat loss" value="0%" note="Adiabatic combustor. The AFT panel has a separate heat-loss option for hand analysis."/>
     </AssumptionsGroup>
 
     <AssumptionsGroup title="6. Turbine" subtitle="Turbine work comes from an actual Cantera isentropic expansion — not a prescribed η_thermal. This is the core of Option A (energy-balance cycle).">
-      <Assumption label="Isentropic efficiency η_isen,turb" value="LM6000: 0.7416  /  LMS100: 0.7640" note="Calibrated so MW_gross lands at MW_cap at the design anchor. Used for HPT + LPT combined (lumped)."/>
+      <Assumption label="Isentropic efficiency η_isen,turb" value="LMS100: 0.7805" note="Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."/>
       <Assumption label="Expansion path" value="gas.SP = s_in, P_exhaust; h_out = h_in − η·(h_in−h_out,s)" note="Equilibrium products; full Cantera enthalpy at outlet."/>
       <Assumption label="Exhaust pressure" value="1.05 bar" note="Stack + HRSG backpressure. Fixed — not a function of ambient."/>
       <Assumption label="Cooling air" value="Accounted in bypass fraction" note="No re-injection mixing — modeled as energy not delivered to the turbine."/>
@@ -5258,14 +5257,13 @@ function AssumptionsPanel(){
     </AssumptionsGroup>
 
     <AssumptionsGroup title="10. Engine Deck Anchors" subtitle="Design-point numbers each off-design scaling law is anchored at. These must match the published deck exactly.">
-      <Assumption label="LM6000PF" value="45.0 MW @ 60 °F / 60% RH" note="T3 811 K · P3 30.3 bar · T4 1755 K · η_LHV 42.4% · HR 8493 BTU/kWh · no intercooler."/>
-      <Assumption label="LMS100PB+" value="107.5 MW @ 44 °F / 80% RH" note="T3 644 K · P3 44.0 bar · T4 1800 K (2780 °F) · η_LHV 44.2% · HR 8146 kJ/kWh · with intercooler. T4 anchor and η_isen_turb co-tuned for the PB+ uprate (cooler firing, more efficient turbine)."/>
+      <Assumption label="LMS100PB+" value="109.2 MW @ 44 °F / 80% RH" note="T3 644 K · P3 44.4 bar · T4 1800 K (2780 °F) · η_LHV 44.9% · HR 8016 kJ/kWh · with intercooler. Now driven by the user-supplied 100%-load deck table (P3, T3, T4, MW vs T_amb). Additional engines are in development."/>
       <Assumption label="Anchor method" value="Calibrate combustor_bypass_frac + eta_isen_turb" note="Two per-engine knobs fit both MW and η at anchor. Everything else is physical."/>
     </AssumptionsGroup>
 
     <AssumptionsGroup title="11. Off-design Scaling" subtitle="How the deck behaves away from its anchor. Not all of this is modeled — the list below states what IS.">
       <Assumption label="Density lapse" value="mdot_air ∝ ρ_amb · VGV(T_amb)" note="VGV is a simple function of ambient — folded into an engine-specific lapse curve."/>
-      <Assumption label="LMS100 intercooler benefit" value="Architectural" note="LMS100 loses less on hot days than LM6000 because HPC inlet is fixed at T_cool_in. Verified in regression tests."/>
+      <Assumption label="LMS100 intercooler benefit" value="Architectural" note="LMS100 loses less on hot days than non-intercooled engines because HPC inlet is fixed at T_cool_in. Verified in regression tests."/>
       <Assumption label="Load line" value="Linear in rated" note="MW_net = load_pct · MW_rated_ambient · derate. Part-load T4 droops so MW_gross is super-linear at low load (diagnostic only — does not affect MW_net)."/>
       <Assumption label="Humidity" value="Via humid-air R only" note="Higher RH → lower molecular weight → more volumetric mdot at fixed corrected flow."/>
       <Assumption label="Altitude" value="Not modeled" note="Use P_amb input if needed; scales density directly."/>
@@ -5351,7 +5349,7 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <InlineBusyBanner loading={accurate&&loading}/>
     <HelpBox title="ℹ️ Gas Turbine Cycle — How It Works">
-      <p style={{margin:"0 0 6px"}}>This panel computes the full thermodynamic cycle of an <span style={hs.em}>LM6000PF</span> or <span style={hs.em}>LMS100PB+</span> aero-derivative gas turbine at the engine, ambient, and load you set.</p>
+      <p style={{margin:"0 0 6px"}}>This panel computes the full thermodynamic cycle of the <span style={hs.em}>LMS100PB+ DLE IC</span> aero-derivative gas turbine at the ambient and load you set. Additional engines are in development.</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>You change:</span> engine, ambient pressure, ambient temperature, relative humidity, load %, intercooler coolant T (LMS100), combustor air fraction, fuel composition, water injection, and compressor bleed.</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>You get:</span> station states (T1 / T2 / T3 / T4 / T5 and P1 / P2 / P3 / P_exhaust), all mass flows, gross and net power, heat rate, efficiency, fuel-flexibility derate, and the flame-zone bulk values (T_Bulk, φ_Bulk, FAR_Bulk).</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>Linkages.</span> Four toggles pipe T3, P3, φ_Bulk, and the humid-air oxidizer back into the sidebar so every other panel runs at the engine's actual flame-zone state. Each toggle has a <strong>Break link</strong> button if you need manual control.</p>
@@ -12374,10 +12372,9 @@ function EngineAmbientSidebar({
     <div style={sec}>Engine & Ambient {dim&&<span style={{fontSize:9,color:C.warm,fontWeight:600,letterSpacing:".4px",textTransform:"none",marginLeft:6}}>(Accurate Mode required)</span>}</div>
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
       <div>
-        <label style={lbl} title="Pick the gas turbine deck. LM6000PF is single-shaft, 45 MW @ ISO. LMS100PB+ is intercooled, 107.5 MW @ 44 °F / 80% RH. The choice drives engine-specific calibration constants (η_isen, MW cap, T4 firing temp, combustor bypass) and which panels are visible — Combustor Mapping is LMS100-only.">Engine</label>
+        <label style={lbl} title="Engine deck. Currently calibrated for the LMS100PB+ DLE IC (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives engine-specific calibration constants (η_isen, MW cap, T4 firing temp, combustor bypass).">Engine</label>
         <select style={S.sel} value={engine} onChange={e=>setEngine(e.target.value)}
-          title="Switch engine deck. Triggers a re-fit of MW cap, T4, and combustor bypass to match the selected engine.">
-          <option value="LM6000PF">LM6000PF DLE</option>
+          title="Engine deck selector. LMS100PB+ DLE IC is the only deck currently shipping; additional engines are in development.">
           <option value="LMS100PB+">LMS100PB+ DLE IC</option>
         </select>
       </div>
@@ -12537,7 +12534,7 @@ const APP_MODES = [
     requiresSub: true,
     accent: "accent3",
     bannerStrong: "🛠️ GAS TURBINE SIMULATOR",
-    bannerBody: "Engine-deck performance for LM6000PF and LMS100PB+. Off-design power, heat rate, T3 / T4 / P3, bleed scheduling, BR-mode ladder. Powered by Cantera HP-equilibrium combustion and Cantera turbine expansion.",
+    bannerBody: "Engine-deck performance for the LMS100PB+ DLE IC (intercooled aero-derivative). Off-design power, heat rate, T3 / T4 / P3, bleed scheduling, BR-mode ladder. Powered by Cantera HP-equilibrium combustion and Cantera turbine expansion. Additional engine decks are in development.",
   },
   {
     id: "advanced", label: "Advanced Mode", icon: "🔬",
@@ -12663,6 +12660,11 @@ export default function App(){
   // turns the toggle off and returns manual control. Links default ON because the cycle
   // panel is the first tab and its outputs are the *intent* of most subsequent analyses.
   const[cycleEngine,setCycleEngine]=useState("LMS100PB+");
+  // LM6000PF was hidden from the UI on 2026-05-02 (under development).
+  // If any saved state (Automate scenario, persisted picker) has LM6000PF
+  // as the engine, force it back to the only currently-shipping deck so
+  // the dropdown stays consistent with the available <option>s.
+  useEffect(()=>{ if(cycleEngine!=="LMS100PB+") setCycleEngine("LMS100PB+"); },[cycleEngine]);
   const[cyclePamb,setCyclePamb]=useState(1.01325);     // bar
   const[cycleTamb,setCycleTamb]=useState(288.706);     // K (60 F)
   const[cycleRH,setCycleRH]=useState(60.0);            // %
