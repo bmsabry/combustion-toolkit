@@ -129,8 +129,11 @@ const MAPPED_MAPPING_TABLES = {
     _tblRow(850, 0.70, 1.0, 0.51),
   ],
   4: [
-    ..._denseRows (0.70, 2.0, 0.43),
-    ..._sparseRows(0.70, 2.0, 0.43),
+    // BRNDMD 4 mapped: same as UNMAPPED (no rig data yet for BD4) —
+    // φ_IM bumped 0.43 → 0.47 in lockstep with the UNMAPPED change
+    // on 2026-05-02. φ_OP=0.70 and φ_IP=2.0 unchanged.
+    ..._denseRows (0.70, 2.0, 0.47),
+    ..._sparseRows(0.70, 2.0, 0.47),
   ],
   2: [
     ..._denseRows (0.85, 5.3, 0.0),
