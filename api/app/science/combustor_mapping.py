@@ -131,6 +131,31 @@ def _nox15_tflame_contribution(Tflame_F: float,
            + slope_lo * (T - brk_lo_F)
 
 
+def _px36_sel_tflame_contribution(Tflame_F: float,
+                                   Tref_F: float = 3035.0,
+                                   T_lo_F:  float = 2900.0,
+                                   T_hi_F:  float = 3060.0,
+                                   slope_per_F: float = 0.318 / 50.0) -> float:
+    """Piecewise-linear PX36_SEL contribution from T_Bulk (Tflame).
+
+    Slope is +0.318 psi per +50 °F (≈ +0.00636 psi/°F), centered on the
+    LMS100 reference Tflame_F = 3035 °F. Clamps:
+        Tflame ≤ 2900 °F  → contribution frozen at the 2900 °F value
+                            (= -0.859 psi)
+        2900 < Tflame < 3060 → linear: slope_per_F × (Tflame - 3035)
+        Tflame ≥ 3060 °F  → contribution frozen at the 3060 °F value
+                            (= +0.159 psi)
+
+    Returns the additive psi shift on PX36_SEL. Applied BEFORE the
+    (P3/638)^exp pressure scaling so it composes multiplicatively
+    with the pressure correction at the same operating point.
+    Sign convention: positive ↑ T_Bulk → positive ↑ PX36_SEL.
+    """
+    T = float(Tflame_F)
+    T_clamped = max(T_lo_F, min(T_hi_F, T))
+    return slope_per_F * (T_clamped - Tref_F)
+
+
 def _phi_OP_multiplier(phi_OP: float) -> float:
     """1.0 for φ ≥ 0.55, 0.8 for φ ≤ 0.45, linear interp between."""
     p = float(phi_OP)
@@ -332,6 +357,12 @@ def run(
         # generic linear step (which contributes 0 for NOx15, intentionally).
         if name == "NOx15":
             y += _nox15_tflame_contribution(Tflame_F)
+        # PX36_SEL gets a clamped-linear Tflame contribution (anchored at
+        # 3035 °F, slope +0.318 psi per +50 °F, frozen below 2900 °F and
+        # above 3060 °F). PX36_SEL_HI is intentionally NOT given a Tflame
+        # term — only the low-frequency trace responds to bulk flame T.
+        if name == "PX36_SEL":
+            y += _px36_sel_tflame_contribution(Tflame_F)
         y_lin[name] = y
 
         # Step 2: Phi_OP multiplier (ONLY for PX36_SEL_HI)
