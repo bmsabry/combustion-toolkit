@@ -7252,9 +7252,14 @@ function CombustorMappingPanel({
                 : (protBanner.cycleCount === 1
                     ? "STAGED DOWN TO BD 4 — ELEVATED ACOUSTICS"
                     : `ENGINE PROTECTION CYCLE ${protBanner.cycleCount} OF 3`);
+              // Sub-text always says "STAGED DOWN TO BD 4" because that IS
+              // the protective action triggered by the acoustic spike. The
+              // 4 → 6 → 7 recovery progression is shown in the detail line
+              // below ("BR=4 → BR=6 in N s"). Saying "STAGED DOWN TO BD 7"
+              // when the cycle has restaged UP to BD 7 is nonsense.
               const subText = isLocked
                 ? "CONTACT YOUR PROVIDER"
-                : (protBanner.cycleCount > 1 ? `STAGED DOWN TO BD ${protBanner.currentBR}` : null);
+                : (protBanner.cycleCount > 1 ? "STAGED DOWN TO BD 4 — ACOUSTICS RETRIGGERED" : null);
               return (
                 <div style={{
                   marginBottom:14,padding:"18px 22px",
