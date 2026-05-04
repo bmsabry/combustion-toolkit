@@ -12523,6 +12523,7 @@ function EngineAmbientSidebar({
   bleedStepPct,setBleedStepPct,
   loadStepPct,setLoadStepPct,
   emissionsMode,setEmissionsMode,
+  toggleEmissionsMode,
   accurate,
   section="top",
 }){
@@ -12662,7 +12663,14 @@ function EngineAmbientSidebar({
       {/* ── EMISSIONS MODE — toggle button (affects BRNDMD ladder) ───── */}
       <div>
         <label style={lbl} title="When enabled, the full BRNDMD ladder is active (1 → 2 → 4 → 6 → 7). When disabled, BRNDMD holds at 4 for MW > 45 — combustor stays in a simpler low-load mode rather than progressing to high-load modes.">Emissions Mode</label>
-        <button onClick={()=>setEmissionsMode(!emissionsMode)}
+        <button onClick={()=>{
+          // Atomic toggle: updates emissionsMode + brndmdOverride + φ_IP/OP/IM
+          // in a single React batch so the trip checker never sees a stale BR
+          // paired with new φ values (or vice-versa). Falls back to the plain
+          // setter if the App didn't supply the atomic callback.
+          if (typeof toggleEmissionsMode === "function") toggleEmissionsMode();
+          else setEmissionsMode(!emissionsMode);
+        }}
           title={emissionsMode
             ?"Click to DISABLE emissions mode — engine holds at BD4 (low-load mode) regardless of MW. In Live Mapping, this cancels any in-progress staging ramp."
             :"Click to ENABLE emissions mode — full DLE BD4→BD6→BD7 ladder is active. In Live Mapping, this triggers a staging ramp through the burner modes."}
@@ -13508,6 +13516,54 @@ export default function App(){
   // Cleanup any in-flight timer on unmount.
   useEffect(() => () => _clearEmStagingTimer(), []);
 
+  // ── Atomic Emissions Mode toggle ─────────────────────────────────────
+  // Single-batch handler that updates emissionsMode + brndmdOverride + the
+  // three φ values (mapPhiIP/OP/IM) all in the same React event-handler
+  // tick. React 18 batches these into ONE render commit, so the next
+  // ref-sync sees a consistent snapshot — no "BR=7 but φ_IP=2.0" race
+  // that was triggering erroneous trips from the BR=7 phi_IP gate.
+  //
+  // OFF → ON: snap φ to BR=4 mapping values + setBrndmdOverride(4) so the
+  //   FIRST tick after enable sees BR=4 + BR=4 phi values (consistent).
+  //   The existing _triggerEmissionsStaging then runs the timed BD4 → BD6
+  //   → BD7 ramp on top of the already-set override.
+  // ON → OFF: snap φ to BR=4 mapping values + setBrndmdOverride(null) so
+  //   the natural ladder caps at BR=4 (since !emissionsMode → return 4)
+  //   and φ values match. Cancels any in-flight staging.
+  const _toggleEmissionsMode = useCallback(() => {
+    const next = !emissionsMode;
+    // Compute the φ values for the destination state of this toggle.
+    // Both ENABLE and DISABLE land on BR=4 initially:
+    //   - DISABLE: natural ladder caps at 4 forever
+    //   - ENABLE:  staging starts at 4 (then ramps to 6 / 7 over ~80 s)
+    const _T3_F = cycleResult?.T3_K ? (cycleResult.T3_K - 273.15) * 9/5 + 32 : 0;
+    const tbl4 = mappingTables?.[4] || mappingTables?.[2];
+    const lookup4 = tbl4 ? interpMappingTable(tbl4, _T3_F) : null;
+    // Pre-toggle bookkeeping: cancel any in-flight staging timer + reset
+    // banner so we land in a clean state regardless of direction.
+    _clearEmStagingTimer();
+    _emStagingRef.current.state = 'idle';
+    setEmStagingBanner(null);
+    // Atomic batch — all 5 setters fire in the same event-handler tick.
+    setEmissionsMode(next);
+    if (next) {
+      // ENABLE: pin override to 4 so trip checker sees BR=4 from tick 1.
+      // _triggerEmissionsStaging will fire from the watcher useEffect after
+      // this commit and start the timed ramp, also writing setBrndmdOverride(4)
+      // (idempotent, already set here) before its first setTimeout.
+      setBrndmdOverride(4);
+    } else {
+      // DISABLE: clear any override so the natural ladder takes over
+      // (which returns 4 immediately for !emissionsMode at any MW > 45).
+      setBrndmdOverride(null);
+    }
+    if (lookup4) {
+      setMapPhiIP(lookup4.IP);
+      setMapPhiOP(lookup4.OP);
+      setMapPhiIM(lookup4.IM);
+    }
+  }, [emissionsMode, cycleResult, mappingTables]);
+
   // ── App-level mapping-table lookup + auto-fill. Runs whenever cycleResult,
   // emissionsMode, or the tables change — regardless of active tab. Pushes
   // the three circuit φ values into state so bkMap and Ops Summary always
@@ -13797,6 +13853,7 @@ export default function App(){
                   airFrac={cycleAirFrac} setAirFrac={setCycleAirFrac}
                   loadStepPct={loadStepPct} setLoadStepPct={setLoadStepPct}
                   emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
+                  toggleEmissionsMode={_toggleEmissionsMode}
                   // Bleed props — bleed UI now renders inline inside the top
                   // card, between Load and Ambient Conditions. The standalone
                   // bleedCard below is now a no-op (returns null).
