@@ -194,6 +194,50 @@ function calcBRNDMD(MW_net, emissionsMode=true, override=null){
   return 7;
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// PX36_SEL_HI BR=6 modifiers (frontend display layer)
+//
+// At BR=6 only, the displayed PX36_SEL_HI is augmented relative to the
+// raw backend correlation:
+//
+//   displayed = (corr.PX36_SEL_HI + 0.4) × _phi_ip_hi_mult(φ_IP)
+//
+// The +0.4 psi offset captures a BR=6 acoustic bias not in the linear
+// correlation. The φ_IP multiplier is a piecewise-linear lookup from
+// rig data (table below). Per user spec, this modifier is applied to
+// every "mean" PX36_SEL_HI display: System Metrics summary on the
+// Mapping panel, the Excel export, AND the Live Mapping trace target.
+// Only the trace's noise / spike events stay trace-local — the mean
+// stays consistent across all displays.
+//
+// At BR ≠ 6, returns the raw value unchanged.
+const _PX36_SEL_HI_BR6_OFFSET_PSI = 0.4;
+const _PX36_HI_MULT_TABLE = [[0.8,1.08],[0.9,1.04],[1.0,1.00],[1.1,0.94],[1.2,0.85],[1.3,0.84],[1.4,0.83]];
+function _phi_ip_hi_mult(phiIp) {
+  const tbl = _PX36_HI_MULT_TABLE;
+  if (phiIp <= tbl[0][0]) {
+    const slope = (tbl[1][1] - tbl[0][1]) / (tbl[1][0] - tbl[0][0]);
+    return tbl[0][1] + slope * (phiIp - tbl[0][0]);
+  }
+  if (phiIp >= tbl[tbl.length-1][0]) {
+    const a = tbl[tbl.length-2], b = tbl[tbl.length-1];
+    const slope = (b[1]-a[1]) / (b[0]-a[0]);
+    return b[1] + slope * (phiIp - b[0]);
+  }
+  for (let i = 0; i < tbl.length-1; i++) {
+    if (phiIp >= tbl[i][0] && phiIp <= tbl[i+1][0]) {
+      const u = (phiIp - tbl[i][0]) / (tbl[i+1][0] - tbl[i][0]);
+      return tbl[i][1] + u * (tbl[i+1][1] - tbl[i][1]);
+    }
+  }
+  return 1.0;
+}
+function applyPx36SelHiModifiers(rawCorrValue, phiIp, brndmd) {
+  if (!Number.isFinite(rawCorrValue)) return rawCorrValue;
+  if (brndmd !== 6) return rawCorrValue;
+  return (rawCorrValue + _PX36_SEL_HI_BR6_OFFSET_PSI) * _phi_ip_hi_mult(Number(phiIp) || 0);
+}
+
 /* ══════════════════════════════════════════════════════════════
    NASA POLYNOMIAL DATABASE
    ══════════════════════════════════════════════════════════════ */
@@ -1576,10 +1620,17 @@ if(_showMapping){
     // O₂-anchored slip path in the Exhaust block of the workbook (same
     // _penaltyCostPerPeriod calc — recomputed here so the value lands
     // on the same sheet as the metrics it joins).
+    // PX36_SEL_HI passes through the BR=6 modifier helper (+0.4 psi
+    // offset × φ_IP multiplier) so the Excel value matches the System
+    // Metrics summary on the Mapping panel and the Live Mapping trace.
+    // BRNDMD here uses the same calc as the Mapping panel.
     ["═══ SYSTEM METRICS (snapshot summary) ═══"],
     ["Category","Value","Unit"],
     ["Acoustics — PX36_SEL",    fmtN(mFinal.PX36_SEL,1),    "psi"],
-    ["Acoustics — PX36_SEL_HI", fmtN(mFinal.PX36_SEL_HI,1), "psi"],
+    ["Acoustics — PX36_SEL_HI",
+      fmtN(applyPx36SelHiModifiers(mFinal.PX36_SEL_HI, mapPhiIP,
+        calcBRNDMD(cycleResult?.MW_net || 0, emissionsMode, null)), 1),
+      "psi"],
     ["Emissions — NOx@15",      fmtN(mFinal.NOx15,1),       "ppmvd"],
     ["Emissions — CO@15",       fmtN(mFinal.CO15,1),        "ppmvd"],
     [`Inefficiencies — Penalty / ${costPeriod}`,
@@ -6188,29 +6239,12 @@ function CombustorMappingPanel({
       const m = meansRef.current;
       const tr = tripStateRef.current;
 
-      // ─── BRNDMD 6 multiplier on PX36_SEL_HI based on phi_IP ───────────
-      // Piecewise linear lookup. Outside [0.8, 1.4] continue with the
-      // closest segment's slope (linear extrapolation per user spec).
-      const _phi_ip_hi_mult = (phiIp) => {
-        const tbl = [[0.8,1.08],[0.9,1.04],[1.0,1.00],[1.1,0.94],[1.2,0.85],[1.3,0.84],[1.4,0.83]];
-        if (phiIp <= tbl[0][0]) {
-          // extrapolate using 0.8→0.9 slope (-0.4/unit for the multiplier)
-          const slope = (tbl[1][1] - tbl[0][1]) / (tbl[1][0] - tbl[0][0]);
-          return tbl[0][1] + slope * (phiIp - tbl[0][0]);
-        }
-        if (phiIp >= tbl[tbl.length-1][0]) {
-          const a = tbl[tbl.length-2], b = tbl[tbl.length-1];
-          const slope = (b[1]-a[1])/(b[0]-a[0]);
-          return b[1] + slope * (phiIp - b[0]);
-        }
-        for (let i=0; i<tbl.length-1; i++) {
-          if (phiIp >= tbl[i][0] && phiIp <= tbl[i+1][0]) {
-            const u = (phiIp - tbl[i][0]) / (tbl[i+1][0] - tbl[i][0]);
-            return tbl[i][1] + u * (tbl[i+1][1] - tbl[i][1]);
-          }
-        }
-        return 1.0;
-      };
+      // BRNDMD 6 PX36_SEL_HI modifier (+0.4 psi offset + φ_IP multiplier)
+      // is now defined at module scope (applyPx36SelHiModifiers) so the
+      // System Metrics summary, Excel export, and this ticker all share
+      // the same formula. The ticker calls it for the trace TARGET; noise
+      // and spike events stay trace-local on top of that target.
+
       // Helper: linearly interpolate trip band edges based on load %.
       // Clamp at the bound endpoints (no extrapolation outside).
       const _interpBand = (loadPct, bandLo, bandHi) => {
@@ -6289,10 +6323,11 @@ function CombustorMappingPanel({
           tr.phiOpSpike.active ? tr.phiOpSpike.target : corrLatest.PX36_SEL);
         _updateTarget(now, m.NOx15,    corrLatest.NOx15);
         _updateTarget(now, m.CO15,     corrLatest.CO15);
-        // PX36_SEL_HI gets the BRNDMD-6 phi_IP multiplier (only at BR=6).
+        // PX36_SEL_HI: apply the shared BR=6 modifier so the ticker's
+        // target matches the System Metrics summary and Excel mean.
         const _br = brndmdOverrideRef.current ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
-        const _hiMult = (_br === 6) ? _phi_ip_hi_mult(Number(phiIPRef.current) || 0) : 1.0;
-        _updateTarget(now, m.PX36_SEL_HI, corrLatest.PX36_SEL_HI * _hiMult);
+        _updateTarget(now, m.PX36_SEL_HI,
+          applyPx36SelHiModifiers(corrLatest.PX36_SEL_HI, phiIPRef.current, _br));
         const mwiCycle = cycLatest?.fuel_flexibility?.mwi || 0;
         if (mwiCycle > 0) {
           _updateTarget(now, m.MWI_WIM, mwiCycle * 0.99);
@@ -6788,9 +6823,15 @@ function CombustorMappingPanel({
                           // Power (MW_net) from cycleResult — same format as
                           // the Operating Snapshot inlet chip (1 decimal MW).
                           const _mwNet = cycleResult?.MW_net;
+                          // PX36_SEL_HI passes through the BR=6 modifier helper
+                          // (+0.4 psi offset × φ_IP multiplier) so the mean
+                          // shown here matches the Live Mapping trace and Excel.
+                          const _hi_mean = corr
+                            ? applyPx36SelHiModifiers(corr.PX36_SEL_HI, phiIP, brndmdVal)
+                            : null;
                           const ROWS = [
                             ["Acoustics — PX36_SEL",    corr ? `${_fmtPx1(corr.PX36_SEL)} ${pxUnit}`     : "—", C.strong],
-                            ["Acoustics — PX36_SEL_HI", corr ? `${_fmtPx1(corr.PX36_SEL_HI)} ${pxUnit}`  : "—", C.strong],
+                            ["Acoustics — PX36_SEL_HI", _hi_mean != null ? `${_fmtPx1(_hi_mean)} ${pxUnit}`  : "—", C.strong],
                             ["Emissions — NOx@15",      corr ? `${corr.NOx15.toFixed(1)} ppm`            : "—", C.good],
                             ["Emissions — CO@15",       corr ? `${corr.CO15.toFixed(1)} ppm`             : "—", C.good],
                             [`Inefficiencies — Penalty / ${_period}`, _fmtUSD(_penaltyVal),               C.orange],
