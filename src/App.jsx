@@ -13131,7 +13131,7 @@ export default function App(){
   // (a typical 2024-2026 industrial-tier U.S. NG benchmark).
   const[fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv]=useState(4.00);
   // Time period for the weekly / monthly / annual cost rollup.
-  const[costPeriod,setCostPeriod]=useState("week"); // "week" | "month" | "year"
+  const[costPeriod,setCostPeriod]=useState("month"); // "week" | "month" | "year"
   // Penalty value lifted FROM ExhaustPanel via onPenaltyUpdate callback.
   // Surfaced on the Combustor Mapping panel's Operating Snapshot summary
   // so the inefficiency dollar cost is visible alongside acoustics/emissions.
