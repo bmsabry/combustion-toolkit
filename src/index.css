@@ -1,3 +1,11 @@
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body { background: #0D1117; color: #F0F6FC; font-family: 'Barlow','Segoe UI',sans-serif; -webkit-font-smoothing: antialiased; }
+
+/* Flashing badge — used by the MWI DERATED indicator on the Mapping panel
+   System Metrics block. 1.2 s cycle, opacity dips to 0.35 to make the
+   indicator obviously alive without being epileptic. */
+@keyframes ctkflash {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}

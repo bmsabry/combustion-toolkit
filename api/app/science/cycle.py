@@ -647,11 +647,14 @@ _FUEL_PROPS_60F: Dict[str, Dict[str, float]] = {
 
 # Modified Wobbe Index bands for GE DLE combustors (typical guidance).
 # MWI = LHV_vol / √(SG × T_fuel_absolute[°R]), units = BTU/scf·√°R.
-# In-spec 40–54 BTU/scf·√°R (zero derate).
-# Marginal: 35–40 or 54–60 → 5 % performance derate.
+# In-spec 40–56 BTU/scf·√°R (zero derate).
+# Marginal: 35–40 or 56–60 → 5 % performance derate.
 # Out-of-spec: < 35 or > 60 → 20 % performance derate.
 _MWI_IN_SPEC_LO = 40.0
-_MWI_IN_SPEC_HI = 54.0
+_MWI_IN_SPEC_HI = 56.0     # widened from 54.0 on 2026-05-04 — typical
+                            # pipeline NG with up to 7.5% C2 + 1.8% C3 lands
+                            # at MWI ≈ 54.4 which the field experience does
+                            # not derate.
 _MWI_MARGINAL_LO = 35.0
 _MWI_MARGINAL_HI = 60.0
 _MWI_DERATE_MARGINAL = 0.05
@@ -750,6 +753,7 @@ def run(
     water_mode: str = "liquid",
     T_water_K: Optional[float] = None,
     bleed_air_frac: float = 0.0,
+    mwi_derate_override: bool = False,
 ) -> Dict[str, Any]:
     """Solve the cycle at the requested operating point.
 
@@ -1190,7 +1194,17 @@ def run(
 
     # --- Option B: fuel-flexibility derate ---------------------------------
     fuel_flex = _fuel_flexibility(fuel_x, T_fuel_K)
-    derate_factor = 1.0 - fuel_flex["mwi_derate_pct"] / 100.0
+    # `mwi_derate_pct` carries the model's recommendation. The operator can
+    # override it (the field experience is that LMS100 does not actually
+    # derate within the published OEM band even when MWI is marginal). The
+    # response carries both the recommended derate and the override flag so
+    # the UI can show a "DERATED" badge when the derate is actually being
+    # applied, and a different state when the operator has overridden.
+    derate_recommended_pct = float(fuel_flex["mwi_derate_pct"])
+    if mwi_derate_override:
+        derate_factor = 1.0
+    else:
+        derate_factor = 1.0 - derate_recommended_pct / 100.0
 
     # --- Net power: OEM-anchored cap × fuel-flexibility derate --------------
     # MW_max_ambient × load_frac is the OEM nameplate cap (what the engine
@@ -1309,7 +1323,14 @@ def run(
             "sg_air": float(fuel_flex["sg_air"]),
             "mwi": float(fuel_flex["mwi"]),
             "mwi_status": fuel_flex["mwi_status"],
-            "mwi_derate_pct": float(fuel_flex["mwi_derate_pct"]),
+            # Recommended derate from the model — what would be applied without
+            # the operator override. The UI uses this to decide whether to
+            # display the DERATED badge.
+            "mwi_derate_pct_recommended": float(derate_recommended_pct),
+            # Effective derate actually used in MW_net (0 when override is on).
+            "mwi_derate_pct": float((1.0 - derate_factor) * 100.0),
+            # Whether the operator has overridden the recommended derate.
+            "mwi_derate_override": bool(mwi_derate_override),
             "h2_frac_pct": float(fuel_flex["h2_frac_pct"]),
             "warnings": list(fuel_flex["warnings"]),
         },

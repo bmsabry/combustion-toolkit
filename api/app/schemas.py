@@ -512,6 +512,14 @@ class CycleRequest(BaseModel):
             "turbine; T4 elevates iteratively to hold gross power."
         ),
     )
+    mwi_derate_override: bool = Field(
+        default=False,
+        description=(
+            "When True, force the MWI fuel-flexibility derate to zero — i.e. "
+            "MW_net = MW_cap regardless of MWI band. Used by the operator-"
+            "facing 'override derate' button on the Mapping panel."
+        ),
+    )
 
 
 class FuelFlexibility(BaseModel):
@@ -522,8 +530,16 @@ class FuelFlexibility(BaseModel):
     mwi: float = 0.0
     # Classification band: 'in_spec' | 'marginal' | 'out_of_spec'
     mwi_status: str = "in_spec"
-    # Performance derate (%): 0 / 5 / 20 for in-spec / marginal / out-of-spec
+    # Performance derate (%): 0 / 5 / 20 for in-spec / marginal / out-of-spec.
+    # This is the EFFECTIVE derate actually applied to MW_net (so it is 0
+    # when mwi_derate_override is True).
     mwi_derate_pct: float = 0.0
+    # The MODEL's recommended derate, ignoring any override. The UI uses this
+    # to decide whether to show the DERATED badge / make the override button
+    # available.
+    mwi_derate_pct_recommended: float = 0.0
+    # Whether the operator has overridden the derate.
+    mwi_derate_override: bool = False
     h2_frac_pct: float = 0.0
     warnings: List[str] = Field(default_factory=list)
 

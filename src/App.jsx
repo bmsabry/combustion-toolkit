@@ -1511,7 +1511,9 @@ if(cycleResult && _showCycle){
     ["SG (fuel / air)",fmtN(ff.sg_air,4),"—"],
     ["Modified Wobbe Index (MWI)",fmtN(ff.mwi,2),"BTU/scf·√°R"],
     ["MWI Status",ff.mwi_status||"—","—"],
-    ["MWI Derate",fmtN(ff.mwi_derate_pct,2),"%"],
+    ["MWI Derate (recommended by model)",fmtN(ff.mwi_derate_pct_recommended ?? ff.mwi_derate_pct,2),"%"],
+    ["MWI Derate Override (operator)",ff.mwi_derate_override?"ON (model derate ignored, MW_net = MW_cap)":"OFF (model derate applied)","—"],
+    ["MWI Derate Effective (applied to MW_net)",fmtN(ff.mwi_derate_pct,2),"%"],
     ["H₂ Fraction in Fuel",fmtN(ff.h2_frac_pct,2),"%"],
     [],
     ["═══ WARNINGS ═══"],
@@ -5454,12 +5456,13 @@ function AssumptionsPanel(){
 
     <AssumptionsGroup title="9. Fuel Flexibility — MWI Derate (Option B)" subtitle="Modified Wobbe Index uses the absolute fuel temperature in the denominator. Derate reflects GE DLE combustor limits.">
       <Assumption label="Definition" value="MWI = LHV_vol / √(SG · T_fuel_°R)" note="LHV_vol in BTU/scf; T_fuel in absolute Rankine. Higher MWI → higher volumetric energy density."/>
-      <Assumption label="In-spec band" value="40 ≤ MWI ≤ 54" note="Nominal GE DLE range. No derate applied. Default pure-CH4 at 60 °F gives MWI ≈ 53.6."/>
-      <Assumption label="Marginal band" value="35–40 or 54–60" note="Derate 5%. Hardware will run but combustor may need tuning / liner life may be affected."/>
+      <Assumption label="In-spec band" value="40 ≤ MWI ≤ 56" note="Nominal GE DLE range, widened on 2026-05-04 from 40–54 to 40–56 because typical pipeline NG with up to ~7.5% C₂ + 1.8% C₃ lands near MWI 54.4 and field experience shows no actual derate within this band. No derate applied. Default pure-CH4 at 60 °F gives MWI ≈ 53.6."/>
+      <Assumption label="Marginal band" value="35–40 or 56–60" note="Derate 5%. Hardware will run but combustor may need tuning / liner life may be affected."/>
       <Assumption label="Out-of-spec" value="MWI &lt; 35 or &gt; 60" note="Derate 20%. Typical of very dilute or very heavy fuels."/>
       <Assumption label="H2 warning" value="x_H2 &gt; 30%" note="Flashback risk in DLE premixer — emitted as a warning regardless of MWI."/>
       <Assumption label="Low LHV warning" value="LHV_vol &lt; 800 BTU/scf" note="Dilute fuel; fuel flow roughly doubles. Emitted as a warning."/>
       <Assumption label="Derate application" value="MW_net = MW_cap · (1 − derate_pct/100)" note="Applied directly to the deck-anchored cap. Derate stacks with part-load and ambient droop (which both already live inside MW_cap)."/>
+      <Assumption label="Operator override" value="DERATED badge on Mapping panel — click to toggle" note="When the model recommends a non-zero derate, a flashing green DERATED badge appears next to the Power row in the System Metrics summary. Clicking the badge sets MW_net = MW_cap regardless of MWI band (use when field experience contradicts the model's recommendation). Clicking again restores the recommended derate. Excel export records both the recommended derate and whether the override was active."/>
     </AssumptionsGroup>
 
     <AssumptionsGroup title="10. Engine Deck Anchors" subtitle="Design-point numbers each off-design scaling law is anchored at. These must match the published deck exactly.">
@@ -5805,6 +5808,9 @@ function CombustorMappingPanel({
   // Live Mapping protection / trip handlers so the staging timer doesn't
   // overwrite the protection cycle's brndmdOverride mid-flight.
   cancelEmissionsStaging,
+  // MWI fuel-flexibility derate override: when true, MW_net = MW_cap
+  // regardless of MWI band. Toggled by the DERATED badge button below.
+  mwiDerateOverride, setMwiDerateOverride,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
@@ -6858,6 +6864,17 @@ function CombustorMappingPanel({
                           // Power (MW_net) from cycleResult — same format as
                           // the Operating Snapshot inlet chip (1 decimal MW).
                           const _mwNet = cycleResult?.MW_net;
+                          // MWI derate state — recommended (model) vs effective
+                          // (after operator override). Show the DERATED badge
+                          // when the model recommends a non-zero derate; the
+                          // badge text reads "DERATED" when active or
+                          // "DERATE OFF" when the operator has overridden.
+                          const _ffx = cycleResult?.fuel_flexibility;
+                          const _derateRec = _ffx?.mwi_derate_pct_recommended ?? _ffx?.mwi_derate_pct ?? 0;
+                          const _derateActive = _derateRec > 0 && !mwiDerateOverride;
+                          const _derateOverridden = _derateRec > 0 && mwiDerateOverride;
+                          const _mwiVal = _ffx?.mwi;
+                          const _mwiStatus = _ffx?.mwi_status || "in_spec";
                           // PX36_SEL_HI passes through the BR=6 modifier helper
                           // (+0.4 psi offset × φ_IP multiplier) so the mean
                           // shown here matches the Live Mapping trace and Excel.
@@ -6870,7 +6887,30 @@ function CombustorMappingPanel({
                             ["Emissions — NOx@15",      corr ? `${corr.NOx15.toFixed(1)} ppm`            : "—", C.good],
                             ["Emissions — CO@15",       corr ? `${corr.CO15.toFixed(1)} ppm`             : "—", C.good],
                             [`Inefficiencies — Penalty / ${_period}`, _fmtUSD(_penaltyVal),               C.orange],
-                            ["Power",                   Number.isFinite(_mwNet) ? `${_mwNet.toFixed(1)} MW` : "—", C.good],
+                            // Power row carries its value as a JSX node so the
+                            // DERATED badge (when active) can render inline.
+                            ["Power", (
+                              <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
+                                {(_derateActive || _derateOverridden) && (
+                                  <button
+                                    onClick={()=>setMwiDerateOverride && setMwiDerateOverride(!mwiDerateOverride)}
+                                    title={_derateActive
+                                      ? `Power is being derated by ${_derateRec.toFixed(0)}% due to fuel composition (MWI = ${Number.isFinite(_mwiVal)?_mwiVal.toFixed(1):"—"}, ${_mwiStatus.replace("_"," ")}). Click to override the derate and run at full MW_cap.`
+                                      : `Derate has been overridden by the operator. MW_net = MW_cap regardless of MWI band. Click to restore the recommended ${_derateRec.toFixed(0)}% derate.`}
+                                    style={{padding:"2px 8px",fontSize:10,fontWeight:700,
+                                      letterSpacing:".5px",fontFamily:"'Barlow Condensed',sans-serif",
+                                      color:C.bg,
+                                      background:_derateActive?C.good:C.txtMuted,
+                                      border:`1px solid ${_derateActive?C.good:C.txtMuted}`,
+                                      borderRadius:3,cursor:"pointer",
+                                      animation:_derateActive?"ctkflash 1.2s ease-in-out infinite":"none",
+                                      whiteSpace:"nowrap"}}>
+                                    {_derateActive ? "● DERATED" : "DERATE OFF"}
+                                  </button>
+                                )}
+                                <span>{Number.isFinite(_mwNet) ? `${_mwNet.toFixed(1)} MW` : "—"}</span>
+                              </span>
+                            ), C.good],
                           ];
                           return (
                             <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"monospace",fontSize:14}}>
@@ -13065,6 +13105,11 @@ export default function App(){
   // it auto-stages the engine due to elevated PX36_SEL acoustics. When
   // non-null, this value wins over the natural ladder in calcBRNDMD.
   const[brndmdOverride,setBrndmdOverride]=useState(null);  // null | 4 | 6 | 7
+  // Operator override for the MWI fuel-flexibility derate. When true, the
+  // backend forces MW_net = MW_cap regardless of the MWI band classification.
+  // Toggled by the DERATED badge button in the Mapping panel's System Metrics
+  // block. Default false = the recommended derate is applied.
+  const[mwiDerateOverride,setMwiDerateOverride]=useState(false);
   // ── Emissions-mode staging (App level so it fires from any tab) ─────
   // Mirrors the Live Mapping protection staging timing (BD4 → 50s → BD6 →
   // 30s → BD7) but triggers on the Emissions Mode toggle. The endpoint
@@ -13579,6 +13624,10 @@ export default function App(){
     // Compressor-discharge bleed dumped to ambient. Reduces air to combustor
     // + turbine; backend iteratively elevates T4 to hold gross power.
     bleed_air_frac:bleedAirFrac,
+    // Operator override for the MWI fuel-flexibility derate. When true,
+    // MW_net = MW_cap regardless of MWI band. Toggled by the DERATED
+    // badge on the Mapping panel.
+    mwi_derate_override:mwiDerateOverride,
   // Cycle endpoint is only ever rendered in gts / advanced modes — gate the
   // call so Free / Combustion Toolkit don't fire (and don't surface a misleading
   // "Solving gas-turbine cycle…" line in the global busy banner when the user
@@ -14195,6 +14244,8 @@ export default function App(){
               exhaustPenalty={exhaustPenalty}
               emStagingBanner={emStagingBanner}
               cancelEmissionsStaging={_cancelEmissionsStaging}
+              mwiDerateOverride={mwiDerateOverride}
+              setMwiDerateOverride={setMwiDerateOverride}
               w36w3={mapW36w3} setW36w3={setMapW36w3}
               fracIP={mapFracIP} setFracIP={setMapFracIP}
               fracOP={mapFracOP} setFracOP={setMapFracOP}

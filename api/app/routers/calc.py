@@ -482,6 +482,7 @@ def calc_cycle(body: CycleRequest, _: User = Depends(require_full_subscription))
         body.water_mode,
         body.T_water_K,
         body.bleed_air_frac,
+        body.mwi_derate_override,
     ))
     return CycleResponse(**result)
 
@@ -699,6 +700,7 @@ def _do_cycle(body: CycleRequest) -> dict:
         cycle.run, body.engine, body.P_amb_bar, body.T_amb_K, body.RH_pct,
         body.load_pct, body.T_cool_in_K, body.fuel_pct, body.combustor_air_frac,
         body.T_fuel_K, body.WFR, body.water_mode, body.T_water_K, body.bleed_air_frac,
+        body.mwi_derate_override,
     ))
 
 
