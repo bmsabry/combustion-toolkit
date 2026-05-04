@@ -12628,7 +12628,7 @@ const TABS_BASE=[
   {id:"cycle",       label:"Cycle",               icon:"🛠️", modes:["gts","advanced"]},
   {id:"mapping",     label:"Combustor Mapping",   icon:"🎯", engines:["LMS100PB+"], modes:["gts","advanced"]},
   {id:"aft",         label:"Flame Temp & Properties", icon:"🔥", modes:["free","ctk","advanced"]},
-  {id:"exhaust",     label:"Exhaust Analysis",    icon:"🔬", modes:["free","ctk","advanced"]},
+  {id:"exhaust",     label:"Exhaust Analysis",    icon:"🔬", modes:["free","ctk","gts","advanced"]},
   {id:"combustor",   label:"Combustor PSR→PFR",   icon:"🏭", modes:["free","ctk","advanced"]},
   {id:"flame",       label:"Flame Speed & Blowoff", icon:"⚡", modes:["ctk","advanced"]},
   {id:"automate",    label:"Automate",            icon:"🧪", modes:["ctk","advanced"]},
