@@ -4343,7 +4343,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
     </>}
   </div>);}
 
-function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,measH2,setMeasH2,fuelFlowKgs,setFuelFlowKgs,fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv,costPeriod,setCostPeriod,linkFuelFlow,setLinkFuelFlow,linkBreakable,combMode,setCombMode,cycleResult,bkMap,linkExhaustCO,setLinkExhaustCO,linkExhaustUHC,setLinkExhaustUHC}){
+function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,measH2,setMeasH2,fuelFlowKgs,setFuelFlowKgs,fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv,costPeriod,setCostPeriod,linkFuelFlow,setLinkFuelFlow,linkBreakable,combMode,setCombMode,cycleResult,bkMap,linkExhaustCO,setLinkExhaustCO,linkExhaustUHC,setLinkExhaustUHC,onPenaltyUpdate}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   const Tair=T0;
@@ -4568,6 +4568,17 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
   const totalCostPerPeriod   = Number.isFinite(totalCostPerHr) ? totalCostPerHr * _hoursPerPeriod : NaN;
   // Penalty = fraction of fuel cost wasted on slip = total × (1 − η_c).
   const penaltyCostPerPeriod = Number.isFinite(totalCostPerPeriod) ? totalCostPerPeriod * (1 - eta_c_money) : NaN;
+  // Lift penalty + period to App so the Mapping panel's Operating Snapshot
+  // can show "Inefficiencies — Penalty / {period}" alongside acoustics
+  // and emissions. NaN → null so consumers can render "—" cleanly.
+  useEffect(()=>{
+    if(typeof onPenaltyUpdate !== "function") return;
+    if(Number.isFinite(penaltyCostPerPeriod)){
+      onPenaltyUpdate({value: penaltyCostPerPeriod, period: costPeriod});
+    } else {
+      onPenaltyUpdate({value: null, period: costPeriod});
+    }
+  }, [penaltyCostPerPeriod, costPeriod, onPenaltyUpdate]);
   // Display formatters: thousand-separated USD with 0 decimals (penalty
   // always shown in the same precision as total so the two are visually
   // comparable; small penalty values still read cleanly).
@@ -5670,6 +5681,10 @@ function CombustorMappingPanel({
   mappingTables, setMappingTables,
   emissionsMode, setEmissionsMode,
   brndmdOverride, setBrndmdOverride,
+  // Penalty value lifted FROM ExhaustPanel via App-level state. Object of
+  // {value: USD/period or null, period: "week"|"month"|"year"}. Surfaced
+  // in the Operating Snapshot summary alongside acoustics/emissions.
+  exhaustPenalty,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
@@ -6733,12 +6748,10 @@ function CombustorMappingPanel({
                   <th style={{padding:"7px 10px",textAlign:"left",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Circuit</th>
                   <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Air flow ({mdotU})</th>
                   <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>φ</th>
-                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,borderLeft:`2px solid ${C.warm}45`,color:C.warm}}>Acoustics — PX36_SEL ({pxUnit})</th>
-                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,color:C.violet}}>Acoustics — PX36_SEL_HI ({pxUnit})</th>
-                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,borderLeft:`2px solid ${C.accent}45`,color:C.accent}}>Emissions — NOx@15</th>
-                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,color:C.accent2,borderRight:`2px solid ${C.border}`}}>Emissions — CO@15</th>
                   <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>M_Fuel ({mdotU})</th>
+                  <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Fuel_Split (%)</th>
                   <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>T_AFT ({uu(units,"T")})</th>
+                  <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,borderLeft:`2px solid ${C.border}`,color:C.txtDim}}>System Metrics</th>
                 </tr>
               </thead>
               <tbody>
@@ -6759,27 +6772,49 @@ function CombustorMappingPanel({
                         ? <PhiEditor val={phiV} setVal={setPhi} step={step} color={color}/>
                         : <PhiDisabled val={phiV} color={color}/>}
                     </td>
-                    {/* Acoustics + Emissions: SYSTEM-WIDE, rendered once spanning all 4 rows */}
-                    {idx===0&&(<>
-                      <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",borderLeft:`2px solid ${C.warm}45`,background:`${C.warm}08`}}>
-                        <div style={{fontSize:18,color:C.warm,fontFamily:"monospace",fontWeight:700,lineHeight:1,fontVariantNumeric:"tabular-nums"}}>{corr?fmtPx(corr.PX36_SEL):"—"}</div>
-                        <div style={{fontSize:9.5,color:C.txtMuted,marginTop:3}}>low-freq · {pxUnit}</div>
-                      </td>
-                      <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",background:`${C.violet}08`}}>
-                        <div style={{fontSize:18,color:C.violet,fontFamily:"monospace",fontWeight:700,lineHeight:1,fontVariantNumeric:"tabular-nums"}}>{corr?fmtPx(corr.PX36_SEL_HI):"—"}</div>
-                        <div style={{fontSize:9.5,color:C.txtMuted,marginTop:3}}>high-freq · {pxUnit}</div>
-                      </td>
-                      <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",borderLeft:`2px solid ${C.accent}45`,background:`${C.accent}08`}}>
-                        <div style={{fontSize:18,color:C.accent,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr?corr.NOx15.toFixed(2):"—"}</div>
-                        <div style={{fontSize:9,color:C.txtMuted,marginTop:2}}>ppm</div>
-                      </td>
-                      <td rowSpan={4} style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",background:`${C.accent2}08`,borderRight:`2px solid ${C.border}`}}>
-                        <div style={{fontSize:18,color:C.accent2,fontFamily:"monospace",fontWeight:700,lineHeight:1}}>{corr?corr.CO15.toFixed(2):"—"}</div>
-                        <div style={{fontSize:9,color:C.txtMuted,marginTop:2}}>ppm</div>
-                      </td>
-                    </>)}
                     <td style={{padding:"8px 10px",textAlign:"right",color:C.accent2,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{row?fmtMdot(row.m_fuel_kg_s):"—"}</td>
+                    <td style={{padding:"8px 10px",textAlign:"right",color:C.txt,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{
+                      // Fuel split = m_fuel_circuit / m_fuel_total × 100, rounded
+                      // to 2 decimals. Shows "—" if either flow is missing/zero.
+                      (row && Number.isFinite(row.m_fuel_kg_s) && Number.isFinite(m_fuel_total) && m_fuel_total > 0)
+                        ? (row.m_fuel_kg_s / m_fuel_total * 100).toFixed(2) + " %"
+                        : "—"
+                    }</td>
                     <td style={{padding:"8px 10px",textAlign:"right",color:C.orange,fontWeight:700,borderBottom:`1px solid ${C.border}40`}}>{row?fmtT(row.T_AFT_complete_K):"—"}</td>
+                    {/* System-wide metrics: rendered once spanning all 4 rows.
+                        5-row × 2-col Category|Value table — Acoustics × 2 +
+                        Emissions × 2 + Inefficiencies (Penalty $/period from
+                        ExhaustPanel via the App-level exhaustPenalty lift). */}
+                    {idx===0&&(
+                      <td rowSpan={4} style={{padding:"6px 10px",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",borderLeft:`2px solid ${C.border}`,background:C.bg2,minWidth:260}}>
+                        {(()=>{
+                          const _period = exhaustPenalty?.period || "week";
+                          const _penaltyVal = exhaustPenalty?.value;
+                          const _fmtUSD = (v) => Number.isFinite(v)
+                            ? "$" + v.toLocaleString("en-US", {minimumFractionDigits: 0, maximumFractionDigits: 0})
+                            : "—";
+                          const ROWS = [
+                            ["Acoustics — PX36_SEL",    corr ? `${fmtPx(corr.PX36_SEL)} ${pxUnit}`     : "—", C.warm],
+                            ["Acoustics — PX36_SEL_HI", corr ? `${fmtPx(corr.PX36_SEL_HI)} ${pxUnit}`  : "—", C.violet],
+                            ["Emissions — NOx@15",      corr ? `${corr.NOx15.toFixed(2)} ppm`          : "—", C.accent],
+                            ["Emissions — CO@15",       corr ? `${corr.CO15.toFixed(2)} ppm`           : "—", C.accent2],
+                            [`Inefficiencies — Penalty / ${_period}`, _fmtUSD(_penaltyVal), C.warm],
+                          ];
+                          return (
+                            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"monospace",fontSize:11}}>
+                              <tbody>
+                                {ROWS.map(([cat, val, color], i) => (
+                                  <tr key={cat} style={{background:`${color}08`}}>
+                                    <td style={{padding:"5px 8px",color:C.txtDim,letterSpacing:".3px",fontSize:10.5,borderBottom:i<ROWS.length-1?`1px solid ${C.border}40`:"none"}}>{cat}</td>
+                                    <td style={{padding:"5px 8px",textAlign:"right",color,fontWeight:700,fontVariantNumeric:"tabular-nums",borderBottom:i<ROWS.length-1?`1px solid ${C.border}40`:"none"}}>{val}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          );
+                        })()}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -13091,6 +13126,11 @@ export default function App(){
   const[fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv]=useState(4.00);
   // Time period for the weekly / monthly / annual cost rollup.
   const[costPeriod,setCostPeriod]=useState("week"); // "week" | "month" | "year"
+  // Penalty value lifted FROM ExhaustPanel via onPenaltyUpdate callback.
+  // Surfaced on the Combustor Mapping panel's Operating Snapshot summary
+  // so the inefficiency dollar cost is visible alongside acoustics/emissions.
+  // null = no value yet (Exhaust panel hasn't run, no slip, no fuel flow).
+  const[exhaustPenalty,setExhaustPenalty]=useState(null); // {value:Number, period:"week"|"month"|"year"} | null
   const[combMode,setCombMode]=useState("complete"); // "complete" or "equilibrium"
   const[showHelp,setShowHelp]=useState(false);
   const[showPricing,setShowPricing]=useState(false);
@@ -13888,6 +13928,7 @@ export default function App(){
               WFR={WFR} waterMode={waterMode} T_water={T_water}
               cycleResult={cycleResult} bkCycle={bkCycle}
               bkMap={bkMap}
+              exhaustPenalty={exhaustPenalty}
               w36w3={mapW36w3} setW36w3={setMapW36w3}
               fracIP={mapFracIP} setFracIP={setMapFracIP}
               fracOP={mapFracOP} setFracOP={setMapFracOP}
@@ -13940,7 +13981,8 @@ export default function App(){
             {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} fuelFlowKgs={fuelFlowKgs} setFuelFlowKgs={setFuelFlowKgs} fuelCostUsdPerMmbtuLhv={fuelCostUsdPerMmbtuLhv} setFuelCostUsdPerMmbtuLhv={setFuelCostUsdPerMmbtuLhv} costPeriod={costPeriod} setCostPeriod={setCostPeriod} linkFuelFlow={linkFuelFlow} setLinkFuelFlow={setLinkFuelFlow} linkBreakable={_linkBreakable} combMode={combMode} setCombMode={setCombMode}
               cycleResult={cycleResult} bkMap={bkMap}
               linkExhaustCO={linkExhaustCO} setLinkExhaustCO={setLinkExhaustCO}
-              linkExhaustUHC={linkExhaustUHC} setLinkExhaustUHC={setLinkExhaustUHC}/>}
+              linkExhaustUHC={linkExhaustUHC} setLinkExhaustUHC={setLinkExhaustUHC}
+              onPenaltyUpdate={setExhaustPenalty}/>}
             {/* AutomatePanel is always mounted (just hidden when not the
                 active tab) so an in-progress run, captured results, the
                 wizard state, and the Plot Data panel survive tab switches.
