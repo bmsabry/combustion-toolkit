@@ -13984,11 +13984,22 @@ export default function App(){
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}
               psrActive={psrActive} setPsrActive={setPsrActive}
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
-            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} fuelFlowKgs={fuelFlowKgs} setFuelFlowKgs={setFuelFlowKgs} fuelCostUsdPerMmbtuLhv={fuelCostUsdPerMmbtuLhv} setFuelCostUsdPerMmbtuLhv={setFuelCostUsdPerMmbtuLhv} costPeriod={costPeriod} setCostPeriod={setCostPeriod} linkFuelFlow={linkFuelFlow} setLinkFuelFlow={setLinkFuelFlow} linkBreakable={_linkBreakable} combMode={combMode} setCombMode={setCombMode}
-              cycleResult={cycleResult} bkMap={bkMap}
-              linkExhaustCO={linkExhaustCO} setLinkExhaustCO={setLinkExhaustCO}
-              linkExhaustUHC={linkExhaustUHC} setLinkExhaustUHC={setLinkExhaustUHC}
-              onPenaltyUpdate={setExhaustPenalty}/>}
+            {/* ExhaustPanel is always mounted (just hidden when not the
+                active tab) so its slip-correction + η_c + Penalty
+                calculations keep refreshing as upstream inputs change
+                (Operating Conditions, Cycle outputs, Mapping φ_IP/OP/IM
+                via bkMap.data.correlations.CO15). The lifted
+                exhaustPenalty state — shown in the Mapping panel's
+                System Metrics mini-table — would otherwise go stale
+                whenever the user is on a different tab. Same pattern as
+                AutomatePanel below. */}
+            <div style={{display: tab==="exhaust" ? "block" : "none"}}>
+              <ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} fuelFlowKgs={fuelFlowKgs} setFuelFlowKgs={setFuelFlowKgs} fuelCostUsdPerMmbtuLhv={fuelCostUsdPerMmbtuLhv} setFuelCostUsdPerMmbtuLhv={setFuelCostUsdPerMmbtuLhv} costPeriod={costPeriod} setCostPeriod={setCostPeriod} linkFuelFlow={linkFuelFlow} setLinkFuelFlow={setLinkFuelFlow} linkBreakable={_linkBreakable} combMode={combMode} setCombMode={setCombMode}
+                cycleResult={cycleResult} bkMap={bkMap}
+                linkExhaustCO={linkExhaustCO} setLinkExhaustCO={setLinkExhaustCO}
+                linkExhaustUHC={linkExhaustUHC} setLinkExhaustUHC={setLinkExhaustUHC}
+                onPenaltyUpdate={setExhaustPenalty}/>
+            </div>
             {/* AutomatePanel is always mounted (just hidden when not the
                 active tab) so an in-progress run, captured results, the
                 wizard state, and the Plot Data panel survive tab switches.
