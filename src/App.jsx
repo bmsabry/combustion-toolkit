@@ -6471,11 +6471,25 @@ function CombustorMappingPanel({
       //                    (existing _triggerProtection cycle; 3-strike LOCK
       //                    at BD4 after the third cycle)
       //   BR = 1 or 2    → no action (startup / low-MW modes)
-      if (!tr.tripped) {
+      //
+      // BR-change ordering rule (per user spec): when BRNDMD changes, the
+      // sequence is set-point → new mean → variation. The set-point change
+      // is the brndmdOverride update; the mean catches up via _updateTarget
+      // + smoothstep on the SAME tick the new corrLatest arrives. The
+      // variation (noise) is layered on top — but on the FIRST tick after
+      // a BR change, the mean target hasn't yet been pushed with the new
+      // BR's correlation result, so noise rides on the OLD mean while the
+      // BR-routing already says NEW. Skip the trip check on that one
+      // transition tick so the trip never fires on a stale mean + new BR.
+      // _lastBRTickRef tracks the BR seen on the previous tick.
+      const _br_this_tick = brndmdOverrideRef.current
+        ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
+      const _br_changed_this_tick = (tr._lastBR !== undefined && tr._lastBR !== _br_this_tick);
+      tr._lastBR = _br_this_tick;
+      if (!tr.tripped && !_br_changed_this_tick) {
         const _px_trigger = (px36Val > 5.5) || (px36HiVal > 2.5);
         if (_px_trigger) {
-          const _br_now = brndmdOverrideRef.current
-            ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
+          const _br_now = _br_this_tick;
           // Tag which sensor crossed first — used by the banner copy below.
           const _cause = (px36Val > 5.5) ? 'px36_sel' : 'px36_sel_hi';
           const _causeValue = (px36Val > 5.5) ? px36Val : px36HiVal;
