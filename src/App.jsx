@@ -6786,27 +6786,33 @@ function CombustorMappingPanel({
                         Emissions × 2 + Inefficiencies (Penalty $/period from
                         ExhaustPanel via the App-level exhaustPenalty lift). */}
                     {idx===0&&(
-                      <td rowSpan={4} style={{padding:"6px 10px",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",borderLeft:`2px solid ${C.border}`,background:C.bg2,minWidth:260}}>
+                      <td rowSpan={4} style={{padding:"6px 10px",borderBottom:`1px solid ${C.border}40`,verticalAlign:"middle",borderLeft:`2px solid ${C.border}`,background:C.bg2,minWidth:300}}>
                         {(()=>{
                           const _period = exhaustPenalty?.period || "week";
                           const _penaltyVal = exhaustPenalty?.value;
                           const _fmtUSD = (v) => Number.isFinite(v)
                             ? "$" + v.toLocaleString("en-US", {minimumFractionDigits: 0, maximumFractionDigits: 0})
                             : "—";
+                          // 1-decimal pressure formatter (psi or mbar) — bypasses
+                          // the panel-wide fmtPx which uses 3 decimals.
+                          const _fmtPx1 = (v) => units==="SI" ? (v*68.9476).toFixed(1) : v.toFixed(1);
+                          // Color rule per user: PX36 → red, NOx/CO → green,
+                          // Inefficiencies → orange. C.strong is the canonical
+                          // red, C.good the canonical green.
                           const ROWS = [
-                            ["Acoustics — PX36_SEL",    corr ? `${fmtPx(corr.PX36_SEL)} ${pxUnit}`     : "—", C.warm],
-                            ["Acoustics — PX36_SEL_HI", corr ? `${fmtPx(corr.PX36_SEL_HI)} ${pxUnit}`  : "—", C.violet],
-                            ["Emissions — NOx@15",      corr ? `${corr.NOx15.toFixed(2)} ppm`          : "—", C.accent],
-                            ["Emissions — CO@15",       corr ? `${corr.CO15.toFixed(2)} ppm`           : "—", C.accent2],
-                            [`Inefficiencies — Penalty / ${_period}`, _fmtUSD(_penaltyVal), C.warm],
+                            ["Acoustics — PX36_SEL",    corr ? `${_fmtPx1(corr.PX36_SEL)} ${pxUnit}`     : "—", C.strong],
+                            ["Acoustics — PX36_SEL_HI", corr ? `${_fmtPx1(corr.PX36_SEL_HI)} ${pxUnit}`  : "—", C.strong],
+                            ["Emissions — NOx@15",      corr ? `${corr.NOx15.toFixed(1)} ppm`            : "—", C.good],
+                            ["Emissions — CO@15",       corr ? `${corr.CO15.toFixed(1)} ppm`             : "—", C.good],
+                            [`Inefficiencies — Penalty / ${_period}`, _fmtUSD(_penaltyVal),               C.orange],
                           ];
                           return (
-                            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"monospace",fontSize:11}}>
+                            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"monospace",fontSize:14}}>
                               <tbody>
                                 {ROWS.map(([cat, val, color], i) => (
                                   <tr key={cat} style={{background:`${color}08`}}>
-                                    <td style={{padding:"5px 8px",color:C.txtDim,letterSpacing:".3px",fontSize:10.5,borderBottom:i<ROWS.length-1?`1px solid ${C.border}40`:"none"}}>{cat}</td>
-                                    <td style={{padding:"5px 8px",textAlign:"right",color,fontWeight:700,fontVariantNumeric:"tabular-nums",borderBottom:i<ROWS.length-1?`1px solid ${C.border}40`:"none"}}>{val}</td>
+                                    <td style={{padding:"7px 10px",color:C.txtDim,letterSpacing:".3px",fontSize:13,borderBottom:i<ROWS.length-1?`1px solid ${C.border}40`:"none"}}>{cat}</td>
+                                    <td style={{padding:"7px 10px",textAlign:"right",color,fontWeight:700,fontSize:14,fontVariantNumeric:"tabular-nums",borderBottom:i<ROWS.length-1?`1px solid ${C.border}40`:"none"}}>{val}</td>
                                   </tr>
                                 ))}
                               </tbody>
