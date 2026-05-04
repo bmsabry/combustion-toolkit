@@ -5747,6 +5747,13 @@ function CombustorMappingPanel({
   // {value: USD/period or null, period: "week"|"month"|"year"}. Surfaced
   // in the Operating Snapshot summary alongside acoustics/emissions.
   exhaustPenalty,
+  // Emissions-staging banner state lifted to App level. Object of
+  // {currentBR, nextBR, timerEndsAt} or null.
+  emStagingBanner,
+  // Callback to cancel any in-progress emissions staging — called by the
+  // Live Mapping protection / trip handlers so the staging timer doesn't
+  // overwrite the protection cycle's brndmdOverride mid-flight.
+  cancelEmissionsStaging,
 }){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
@@ -6087,7 +6094,7 @@ function CombustorMappingPanel({
   // any non-protective state).
   const _triggerProtection = (px36Val) => {
     // PX36 protection wins — abort any in-flight emissions-mode staging.
-    _cancelEmissionsStaging();
+    if (cancelEmissionsStaging) cancelEmissionsStaging();
     protRef.current.cycleCount++;
     if (protRef.current.cycleCount > 3) {
       // LOCK at BD4, no more auto-staging
@@ -6127,95 +6134,12 @@ function CombustorMappingPanel({
   // Cleanup timer on unmount
   useEffect(() => () => _clearProtTimer(), []);
 
-  // ── EMISSIONS-MODE STAGING ──────────────────────────────────────────
-  // Mirrors the protection staging timing (BD4 → 50s → BD6 → 30s → BD7)
-  // but triggers when the user enables Emissions Mode. The staging
-  // endpoint adapts to current MW: at low load (BR_max=4) we skip
-  // staging entirely; at mid load (BR_max=6) we stop at BD6; at high
-  // load (BR_max=7) we run the full sequence.
-  const emStagingRef = useRef({
-    state: 'idle',     // 'idle' | 'at4' | 'at6' | 'done'
-    targetMaxBR: 4,    // the natural ladder cap when staging started
-    timer: null,
-  });
-  const [emStagingBanner, setEmStagingBanner] = useState(null);
-  // {currentBR, nextBR, timerEndsAt}
-  const _clearEmTimer = () => {
-    if (emStagingRef.current.timer) {
-      clearTimeout(emStagingRef.current.timer);
-      emStagingRef.current.timer = null;
-    }
-  };
-  const _cancelEmissionsStaging = () => {
-    _clearEmTimer();
-    emStagingRef.current.state = 'idle';
-    if (setBrndmdOverride) setBrndmdOverride(null);
-    setEmStagingBanner(null);
-  };
-  const _triggerEmissionsStaging = () => {
-    // Determine natural max BR at current MW (ladder with emissionsMode=true,
-    // no override) — this defines where the staging stops.
-    const mw = cycleResult?.MW_net || 0;
-    const targetMaxBR = calcBRNDMD(mw, true, null);
-    // Skip staging entirely when natural ladder caps at ≤4 (low load,
-    // engine would just run at BD4 anyway).
-    if (targetMaxBR <= 4) return;
-    _clearEmTimer();
-    emStagingRef.current.state = 'at4';
-    emStagingRef.current.targetMaxBR = targetMaxBR;
-    if (setBrndmdOverride) setBrndmdOverride(4);
-    setEmStagingBanner({
-      currentBR: 4, nextBR: 6, timerEndsAt: (Date.now()/1000) + 50,
-    });
-    emStagingRef.current.timer = setTimeout(() => {
-      // Phase 2: BR=6
-      emStagingRef.current.state = 'at6';
-      if (setBrndmdOverride) setBrndmdOverride(6);
-      if (emStagingRef.current.targetMaxBR === 6) {
-        // Mid-load: stop at BD6, don't progress to BD7.
-        // Release override (ladder gives BR=6 naturally at this MW range).
-        emStagingRef.current.timer = setTimeout(() => {
-          emStagingRef.current.state = 'done';
-          emStagingRef.current.timer = null;
-          if (setBrndmdOverride) setBrndmdOverride(null);
-          setEmStagingBanner(null);
-        }, 100);  // brief settle, then release
-        // Show "stopping at BD6" banner during the brief window
-        setEmStagingBanner({ currentBR: 6, nextBR: null, timerEndsAt: null });
-      } else {
-        // High-load: continue to BR=7 after 30 s
-        setEmStagingBanner({
-          currentBR: 6, nextBR: 7, timerEndsAt: (Date.now()/1000) + 30,
-        });
-        emStagingRef.current.timer = setTimeout(() => {
-          // Phase 3: release override; ladder gives BR=7 naturally
-          emStagingRef.current.state = 'done';
-          emStagingRef.current.timer = null;
-          if (setBrndmdOverride) setBrndmdOverride(null);
-          setEmStagingBanner(null);
-        }, 30 * 1000);
-      }
-    }, 50 * 1000);
-  };
-  // Detect Emissions Mode toggle and react accordingly.
-  const _prevEmissionsModeRef = useRef(emissionsMode);
-  useEffect(() => {
-    const prev = _prevEmissionsModeRef.current;
-    _prevEmissionsModeRef.current = emissionsMode;
-    if (!mappingActive) return;
-    if (tripStateRef.current.tripped) return;
-    // Ignore toggle while a protection cycle is in flight (protection wins).
-    if (protRef.current.state !== 'idle' && protRef.current.state !== 'locked') return;
-    if (prev === emissionsMode) return;
-    if (!prev && emissionsMode) {
-      _triggerEmissionsStaging();
-    } else if (prev && !emissionsMode) {
-      _cancelEmissionsStaging();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emissionsMode, mappingActive]);
-  // Cleanup on unmount
-  useEffect(() => () => _clearEmTimer(), []);
+  // ── EMISSIONS-MODE STAGING (lifted to App level) ────────────────────
+  // The trigger/cancel logic + timer state + banner state used to live here
+  // gated behind `mappingActive`, which meant the staging only fired when
+  // Live Mapping was actively recording. It's now in App so a click on the
+  // sidebar Emissions Mode toggle fires the staging from any tab.
+  // The banner UI below still reads from the lifted `emStagingBanner` prop.
 
   // smoothstep: 3u² − 2u³. Smooth tangent at 0 and 1, exact arrival at u=1.
   const _smoothstep = u => u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
@@ -6405,7 +6329,7 @@ function CombustorMappingPanel({
                 phiIp: pIp, phiOp: Number(phiOPRef.current)||0, phiIm: Number(phiIMRef.current)||0,
               });
               _resetProtection();  // cancel any in-progress protection cycle
-              _cancelEmissionsStaging();  // cancel any in-progress emissions ramp
+              if (cancelEmissionsStaging) cancelEmissionsStaging();  // cancel any in-progress emissions ramp
             }
           } else {
             // phi dropped out of band — clear so next entry re-rolls
@@ -6432,7 +6356,7 @@ function CombustorMappingPanel({
                 phiIp: Number(phiIPRef.current)||0, phiOp: pOp, phiIm: Number(phiIMRef.current)||0,
               });
               _resetProtection();
-              _cancelEmissionsStaging();
+              if (cancelEmissionsStaging) cancelEmissionsStaging();
             }
           } else {
             tr.phiOp.inBand = false; tr.phiOp.thresh = null;
@@ -13040,6 +12964,68 @@ export default function App(){
   // it auto-stages the engine due to elevated PX36_SEL acoustics. When
   // non-null, this value wins over the natural ladder in calcBRNDMD.
   const[brndmdOverride,setBrndmdOverride]=useState(null);  // null | 4 | 6 | 7
+  // ── Emissions-mode staging (App level so it fires from any tab) ─────
+  // Mirrors the Live Mapping protection staging timing (BD4 → 50s → BD6 →
+  // 30s → BD7) but triggers on the Emissions Mode toggle. The endpoint
+  // adapts to current MW_net: low load (BR_max=4) skips entirely; mid load
+  // (BR_max=6) stops at BD6; high load (BR_max=7) runs the full sequence.
+  // OFF → ON triggers staging; ON → OFF cancels timers + releases override
+  // so the natural ladder snaps to BD4 with no wait.
+  const _emStagingRef = useRef({ state: 'idle', targetMaxBR: 4, timer: null });
+  const [emStagingBanner, setEmStagingBanner] = useState(null);
+  // Stable refs for the values the staging closures need to read at fire-
+  // time (cycleResult, setBrndmdOverride). useEffect dependency on
+  // emissionsMode below is the only retrigger.
+  const _cycleResultStagingRef = useRef(null);
+  const _clearEmStagingTimer = () => {
+    if (_emStagingRef.current.timer) {
+      clearTimeout(_emStagingRef.current.timer);
+      _emStagingRef.current.timer = null;
+    }
+  };
+  const _cancelEmissionsStaging = () => {
+    _clearEmStagingTimer();
+    _emStagingRef.current.state = 'idle';
+    setBrndmdOverride(null);
+    setEmStagingBanner(null);
+  };
+  const _triggerEmissionsStaging = () => {
+    const mw = _cycleResultStagingRef.current?.MW_net || 0;
+    const targetMaxBR = calcBRNDMD(mw, true, null);
+    // Skip staging entirely when natural ladder caps at ≤ 4 (low load,
+    // engine would just run at BD4 anyway).
+    if (targetMaxBR <= 4) return;
+    _clearEmStagingTimer();
+    _emStagingRef.current.state = 'at4';
+    _emStagingRef.current.targetMaxBR = targetMaxBR;
+    setBrndmdOverride(4);
+    setEmStagingBanner({ currentBR: 4, nextBR: 6, timerEndsAt: (Date.now()/1000) + 50 });
+    _emStagingRef.current.timer = setTimeout(() => {
+      // Phase 2: BR=6
+      _emStagingRef.current.state = 'at6';
+      setBrndmdOverride(6);
+      if (_emStagingRef.current.targetMaxBR === 6) {
+        // Mid-load: stop at BD6, don't progress to BD7. Release override
+        // (ladder gives BR=6 naturally at this MW range).
+        _emStagingRef.current.timer = setTimeout(() => {
+          _emStagingRef.current.state = 'done';
+          _emStagingRef.current.timer = null;
+          setBrndmdOverride(null);
+          setEmStagingBanner(null);
+        }, 100);
+        setEmStagingBanner({ currentBR: 6, nextBR: null, timerEndsAt: null });
+      } else {
+        // High-load: continue to BR=7 after 30 s
+        setEmStagingBanner({ currentBR: 6, nextBR: 7, timerEndsAt: (Date.now()/1000) + 30 });
+        _emStagingRef.current.timer = setTimeout(() => {
+          _emStagingRef.current.state = 'done';
+          _emStagingRef.current.timer = null;
+          setBrndmdOverride(null);
+          setEmStagingBanner(null);
+        }, 30 * 1000);
+      }
+    }, 50 * 1000);
+  };
   const[cycleTcool,setCycleTcool]=useState(288.15);    // K (15 C) — LMS100 IC supply
   // Combustor-air fraction is the FLAME-ZONE share of combustor airflow
   // (m_flame / m_comb_air). It is a pure intra-combustor split and does NOT
@@ -13498,6 +13484,29 @@ export default function App(){
   // doesn't have a Cycle panel at all).
   },accurate&&hasOnline&&(mode==="gts"||mode==="advanced"));
   const cycleResult=bkCycle.data;
+
+  // Keep the emissions-staging closure's view of cycleResult fresh — the
+  // closures below read MW_net via _cycleResultStagingRef.current to decide
+  // whether to skip / stop-at-6 / run-full when the user clicks the toggle.
+  useEffect(() => { _cycleResultStagingRef.current = cycleResult; }, [cycleResult]);
+  // Watch the Emissions Mode toggle and fire staging on OFF→ON, cancel on
+  // ON→OFF. Runs at App level so a click on the sidebar button stages the
+  // engine from any tab — not just inside Live Mapping. Uses a ref to
+  // remember the previous value across renders.
+  const _prevEmissionsModeAppRef = useRef(emissionsMode);
+  useEffect(() => {
+    const prev = _prevEmissionsModeAppRef.current;
+    _prevEmissionsModeAppRef.current = emissionsMode;
+    if (prev === emissionsMode) return;
+    if (!prev && emissionsMode) {
+      _triggerEmissionsStaging();
+    } else if (prev && !emissionsMode) {
+      _cancelEmissionsStaging();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emissionsMode]);
+  // Cleanup any in-flight timer on unmount.
+  useEffect(() => () => _clearEmStagingTimer(), []);
 
   // ── App-level mapping-table lookup + auto-fill. Runs whenever cycleResult,
   // emissionsMode, or the tables change — regardless of active tab. Pushes
@@ -14034,6 +14043,8 @@ export default function App(){
               cycleResult={cycleResult} bkCycle={bkCycle}
               bkMap={bkMap}
               exhaustPenalty={exhaustPenalty}
+              emStagingBanner={emStagingBanner}
+              cancelEmissionsStaging={_cancelEmissionsStaging}
               w36w3={mapW36w3} setW36w3={setMapW36w3}
               fracIP={mapFracIP} setFracIP={setMapFracIP}
               fracOP={mapFracOP} setFracOP={setMapFracOP}
