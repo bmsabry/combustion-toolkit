@@ -935,7 +935,7 @@ function exportToExcel(fuel,ox,phi,T0,P,_unitsIgnored,ps){
 function _buildExportWorkbook(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,measCO=0,measUHC=0,measH2=0,fuelFlowKgs=0,fuelCostUsdPerMmbtuLhv=4.00,costPeriod="week",combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult,mappingTables,
   emissionsMode=true,mapW36w3=0.75,mapFracIP=2.3,mapFracOP=2.2,mapFracIM=39.9,mapFracOM=55.6,
   mapPhiIP=0.25,mapPhiOP=0.65,mapPhiIM=0.50,mapResult=null,emTfMults=null,
-  linkT3=true,linkP3=true,linkFAR=true,linkFuelFlow=true,loadStepPct=5,bleedStepPct=15,
+  linkT3=true,linkP3=true,linkFAR=true,linkFuelFlow=true,linkExhaustCO=false,linkExhaustUHC=false,loadStepPct=5,bleedStepPct=15,
   appMode="advanced",
   // Lifted Cantera flame results (null in free mode or before activation).
   flameBk=null,flameBkIgn=null,flameCanteraSweeps=null
@@ -1321,8 +1321,8 @@ const _heatUnit=(u==="SI")?"MW":"MMBTU/hr";
 const _slipFuelRows=[
   [],["═══ SLIP MEASUREMENTS (entered) ═══"],
   ["Parameter","Value","Unit"],
-  ["Measured CO (dry)",+(+measCO).toFixed(2),"ppmvd"],
-  ["Measured UHC as CH₄ (dry)",+(+measUHC).toFixed(2),"ppmvd"],
+  ["Measured CO (dry)",+(+measCO).toFixed(2),linkExhaustCO?"ppmvd · LINKED to Mapping CO15":"ppmvd · MANUAL"],
+  ["Measured UHC as CH₄ (dry)",+(+measUHC).toFixed(2),linkExhaustUHC?"ppmvd · LINKED to Mapping CO15 (÷3)":"ppmvd · MANUAL"],
   ["Measured H₂ (dry)",+(+measH2).toFixed(2),"ppmvd"],[],
   ["═══ SLIP-CORRECTED CHEMICAL EQUILIBRIUM (FROM O₂) ═══"],
   ["Parameter","Value","Unit"],
@@ -1348,6 +1348,8 @@ const _slipFuelRows=[
   ["Total Fuel Cost (per "+costPeriod+")",Number.isFinite(_totalCostPerPeriod)?+(_totalCostPerPeriod).toFixed(0):"n/a","USD"],
   ["Penalty (= Total · (1 − η_c), money lost to slip per "+costPeriod+")",Number.isFinite(_penaltyCostPerPeriod)?+(_penaltyCostPerPeriod).toFixed(0):"n/a","USD"],
   ["Linkage to Cycle ṁ_fuel",linkFuelFlow?"ON (Cycle drives Fuel Flow)":"OFF","—"],
+  ["Linkage CO ← Mapping CO15",linkExhaustCO?"ON (Mapping CO15 → CO at actual O₂ via Phi_Exhaust)":"OFF","—"],
+  ["Linkage UHC ← Mapping CO15",linkExhaustUHC?"ON (UHC = CO_linked / 3)":"OFF","—"],
 ];
 const s5=[["═══ EXHAUST ANALYSIS — INPUTS ═══"],[],["Parameter","Value","Unit"],["Measured O₂ (dry)",+measO2.toFixed(2),"%"],["Measured CO₂ (dry)",+measCO2.toFixed(2),"%"],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["T_mixed @ φ(O₂ case)",+uv(u,"T",T_mix_O2).toFixed(2),uu(u,"T")],["T_mixed @ φ(CO₂ case)",+uv(u,"T",T_mix_CO2).toFixed(2),uu(u,"T")],["Water/Fuel Mass Ratio (WFR)",+(+WFR).toFixed(3),"kg_water/kg_fuel"],["Water Injection Mode",WFR>0?(waterMode==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],[],["═══ FROM MEASURED O₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ FROM MEASURED CO₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rCO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rCO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rCO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rCO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rCO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rCO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ Adiabatic Temperature vs Exhaust O₂ ═══"],["Exhaust O₂ (%)","Flame Temperature ("+uu(u,"T")+")","Equivalence Ratio (φ)","Fuel/Air Ratio (mass)"],...Array.from({length:30},(_,i)=>{const o2=0.5+i*0.5;const r0=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,0.6,T_fuel??T0,T_air??T0),P,combMode);const r=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,r0.phi,T_fuel??T0,T_air??T0),P,combMode);return[+o2.toFixed(1),+uv(u,"T",r.T_ad).toFixed(1),+r.phi.toFixed(4),+r.FAR_mass.toFixed(6)]})];s5.push(..._slipFuelRows);const ws5=XLSX.utils.aoa_to_sheet(s5);ws5["!cols"]=[{wch:38},{wch:20},{wch:16},{wch:16}];if(_showCombustion)XLSX.utils.book_append_sheet(wb,ws5,"Exhaust Analysis");
 const s4=[["═══ THERMO DATABASE ═══"],["NASA 7-coefficient polynomials"],[]];for(const sp of["CH4","C2H6","C3H8","H2","CO","O2","N2","H2O","CO2","OH","NO","Ar"]){if(!SP[sp])continue;s4.push([SP[sp].nm+" ("+fmt(sp)+")","Molecular Weight: "+SP[sp].MW,"ΔHf: "+(SP[sp].Hf/1000).toFixed(2)+" kJ/mol"]);s4.push(["Temperature (K)","Heat Capacity Cp (J/mol·K)","Enthalpy H (kJ/mol)","Entropy S (J/mol·K)","Gibbs Energy G (kJ/mol)"]);for(let T=200;T<=3000;T+=100){const H=h_mol(sp,T)/1000;const Sv=sR(sp,T)*R_u;s4.push([T,+cp_mol(sp,T).toFixed(4),+H.toFixed(4),+Sv.toFixed(4),+((H*1000-T*Sv)/1000).toFixed(4)]);}s4.push([]);}const ws4=XLSX.utils.aoa_to_sheet(s4);ws4["!cols"]=[{wch:28},{wch:18},{wch:18},{wch:18},{wch:18}];if(_showCombustion)XLSX.utils.book_append_sheet(wb,ws4,"Thermo Database");
@@ -4341,7 +4343,7 @@ function CombustorPanel({fuel,ox,phi,T0,P,tau,setTau,Lpfr,setL,Vpfr,setV,Tfuel,s
     </>}
   </div>);}
 
-function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,measH2,setMeasH2,fuelFlowKgs,setFuelFlowKgs,fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv,costPeriod,setCostPeriod,linkFuelFlow,setLinkFuelFlow,linkBreakable,combMode,setCombMode}){
+function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMeasO2,measCO2,setMeasCO2,measCO,setMeasCO,measUHC,setMeasUHC,measH2,setMeasH2,fuelFlowKgs,setFuelFlowKgs,fuelCostUsdPerMmbtuLhv,setFuelCostUsdPerMmbtuLhv,costPeriod,setCostPeriod,linkFuelFlow,setLinkFuelFlow,linkBreakable,combMode,setCombMode,cycleResult,bkMap,linkExhaustCO,setLinkExhaustCO,linkExhaustUHC,setLinkExhaustUHC}){
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
   const Tair=T0;
@@ -4357,6 +4359,65 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
     const Tmix1=mixT(fuel,ox,first.phi,Tfuel,Tair);
     return fn(fuel,ox,measured,Tmix1,P,combMode);
   };
+  // ── Phi_Exhaust + linked CO/UHC from Mapping CO15 ───────────────────────
+  // Phi_Exhaust uses the cycle's air & fuel mass flows directly:
+  //   FAR     = ṁ_fuel / ṁ_air_post_bleed
+  //   Φ_Exh   = FAR / FAR_stoich
+  // (NOT cycle.phi4 — the user explicitly asked for a flow-derived Φ on this
+  // panel.) Linked CO scales mapping CO15 from the 15% O₂ basis to the actual
+  // O₂ basis at Φ_Exh; linked UHC = CO/3 (LMS100 mapping convention).
+  const _mappingCO15      = bkMap?.data?.correlations?.CO15 || 0;
+  const _mdotFuelCycle    = cycleResult?.mdot_fuel_kg_s;
+  const _mdotAirCycle     = cycleResult?.mdot_air_post_bleed_kg_s;
+  const _FAR_stoich_panel = useMemo(()=>{
+    const fp = calcFuelProps(fuel, ox);
+    return 1 / (fp.AFR_mass || 1e-12);
+  }, [fuel, ox]);
+  const phiExhaust = useMemo(()=>{
+    if (!Number.isFinite(_mdotFuelCycle) || !Number.isFinite(_mdotAirCycle)
+        || _mdotAirCycle <= 0) return NaN;
+    const FAR = _mdotFuelCycle / _mdotAirCycle;
+    return FAR / _FAR_stoich_panel;
+  }, [_mdotFuelCycle, _mdotAirCycle, _FAR_stoich_panel]);
+  // O₂ at Φ_Exh on a dry basis (complete combustion — products are stoich).
+  // calcAFT returns mole percents wet; convert to dry by 1/(1 − X_H2O).
+  const o2DryAtPhiExhaust = useMemo(()=>{
+    if (!Number.isFinite(phiExhaust) || phiExhaust <= 0 || phiExhaust >= 1) return NaN;
+    const Tmix = mixT(fuel, ox, phiExhaust, Tfuel, Tair);
+    const r = calcAFT(fuel, ox, phiExhaust, Tmix);
+    const o2_wet  = r.products?.O2  || 0;
+    const h2o_wet = r.products?.H2O || 0;
+    const denom = 1 - h2o_wet/100;
+    if (denom <= 0) return NaN;
+    return o2_wet / denom;
+  }, [phiExhaust, fuel, ox, Tfuel, Tair]);
+  // Linked CO (ppmvd at actual O₂):
+  //   CO_actual = CO15 × (20.9 − O2_dry%) / (20.9 − 15)
+  // valid only when O2_dry < 20.9. UHC_linked = CO_linked / 3.
+  const linkedCO = useMemo(()=>{
+    if (!Number.isFinite(_mappingCO15) || _mappingCO15 <= 0) return NaN;
+    if (!Number.isFinite(o2DryAtPhiExhaust) || o2DryAtPhiExhaust >= 20.9) return NaN;
+    return _mappingCO15 * (20.9 - o2DryAtPhiExhaust) / 5.9;
+  }, [_mappingCO15, o2DryAtPhiExhaust]);
+  const linkedUHC = useMemo(()=>{
+    if (!Number.isFinite(linkedCO)) return NaN;
+    return linkedCO / 3;
+  }, [linkedCO]);
+  // Push the linked values into measCO / measUHC state when the link is
+  // active and a finite linked value is available. The slip-correction
+  // block downstream reads measCO / measUHC, so this keeps the entire
+  // η_c calculation downstream of one source of truth.
+  useEffect(()=>{
+    if (linkExhaustCO && Number.isFinite(linkedCO)) {
+      setMeasCO(linkedCO);
+    }
+  }, [linkExhaustCO, linkedCO, setMeasCO]);
+  useEffect(()=>{
+    if (linkExhaustUHC && Number.isFinite(linkedUHC)) {
+      setMeasUHC(linkedUHC);
+    }
+  }, [linkExhaustUHC, linkedUHC, setMeasUHC]);
+
   const localRO2=useMemo(()=>solveExhaustLocal(measO2,"O2"),[fuel,ox,measO2,Tfuel,Tair,P,combMode]);
   const localRCO2=useMemo(()=>solveExhaustLocal(measCO2,"CO2"),[fuel,ox,measCO2,Tfuel,Tair,P,combMode]);
   const bkO2=useBackendCalc("exhaust",{fuel:nonzero(fuel),oxidizer:nonzero(ox),T0,P:atmToBar(P),measured_O2_pct_dry:measO2,combustion_mode:combMode,T_fuel_K:Tfuel,T_air_K:Tair,WFR,water_mode:waterMode},accurate);
@@ -4535,29 +4596,45 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
         fontFamily:"'Barlow Condensed',sans-serif"}}>
         Optional slip measurements
       </div>
-      <div style={{display:"flex",alignItems:"center",gap:6}}>
-        <Tip text="Measured CO concentration in exhaust (dry, on the actual O₂ basis — NOT 15% O₂ corrected). Set to zero if not measured. Used in the energy-loss formula to compute combustion efficiency η_c.">
-          <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
-            Measured CO (ppmvd dry, actual) ⓘ:
-          </label>
-        </Tip>
-        <NumField value={measCO} decimals={1}
-          onCommit={v=>setMeasCO(Math.max(0,+v))}
-          style={{width:80,padding:"4px 6px",fontFamily:"monospace",
-            color:C.violet,fontSize:12,fontWeight:700,background:C.bg,
-            border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center"}}/>
+      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <Tip text={`Measured CO concentration in exhaust (dry, on the actual O₂ basis — NOT 15% O₂ corrected). Set to zero if not measured. Used in the energy-loss formula to compute combustion efficiency η_c.${linkExhaustCO?" Currently linked to Mapping CO15 (corrected to actual-O₂ basis via Phi_Exhaust). Break the link below to type a manual value.":""}`}>
+            <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
+              Measured CO (ppmvd dry, actual) ⓘ:
+            </label>
+          </Tip>
+          <NumField value={measCO} decimals={1}
+            onCommit={v=>setMeasCO(Math.max(0,+v))}
+            disabled={linkExhaustCO}
+            title={linkExhaustCO?"Linked to Mapping CO15 (corrected to actual-O₂ basis via Phi_Exhaust) — break the link below to type a manual value":undefined}
+            style={{width:80,padding:"4px 6px",fontFamily:"monospace",
+              color:linkExhaustCO?C.txtMuted:C.violet,fontSize:12,fontWeight:700,
+              background:linkExhaustCO?C.bg2:C.bg,
+              border:`1px solid ${linkExhaustCO?C.border:`${C.violet}50`}`,
+              borderRadius:4,textAlign:"center",
+              cursor:linkExhaustCO?"not-allowed":"text"}}/>
+        </div>
+        {linkExhaustCO && <LinkChip onBreak={linkBreakable?()=>setLinkExhaustCO(false):null} label="Linked to Mapping CO15"/>}
       </div>
-      <div style={{display:"flex",alignItems:"center",gap:6}}>
-        <Tip text="Measured unburned hydrocarbons in exhaust, expressed as ppmvd CH₄ (dry, actual O₂ basis — NOT 15% O₂ corrected). Speciated FTIR readings should be totaled and reported on a CH₄ basis. Used in the energy-loss formula via LHV_CH₄ = 802.31 kJ/mol.">
-          <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
-            Measured UHC as CH₄ (ppmvd dry, actual) ⓘ:
-          </label>
-        </Tip>
-        <NumField value={measUHC} decimals={1}
-          onCommit={v=>setMeasUHC(Math.max(0,+v))}
-          style={{width:80,padding:"4px 6px",fontFamily:"monospace",
-            color:C.violet,fontSize:12,fontWeight:700,background:C.bg,
-            border:`1px solid ${C.violet}50`,borderRadius:4,textAlign:"center"}}/>
+      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <Tip text={`Measured unburned hydrocarbons in exhaust, expressed as ppmvd CH₄ (dry, actual O₂ basis — NOT 15% O₂ corrected). Speciated FTIR readings should be totaled and reported on a CH₄ basis. Used in the energy-loss formula via LHV_CH₄ = 802.31 kJ/mol.${linkExhaustUHC?" Currently linked to Mapping CO15 (UHC = CO/3 per LMS100 mapping convention). Break the link below to type a manual value.":""}`}>
+            <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
+              Measured UHC as CH₄ (ppmvd dry, actual) ⓘ:
+            </label>
+          </Tip>
+          <NumField value={measUHC} decimals={1}
+            onCommit={v=>setMeasUHC(Math.max(0,+v))}
+            disabled={linkExhaustUHC}
+            title={linkExhaustUHC?"Linked to Mapping CO15 (UHC = CO_linked / 3) — break the link below to type a manual value":undefined}
+            style={{width:80,padding:"4px 6px",fontFamily:"monospace",
+              color:linkExhaustUHC?C.txtMuted:C.violet,fontSize:12,fontWeight:700,
+              background:linkExhaustUHC?C.bg2:C.bg,
+              border:`1px solid ${linkExhaustUHC?C.border:`${C.violet}50`}`,
+              borderRadius:4,textAlign:"center",
+              cursor:linkExhaustUHC?"not-allowed":"text"}}/>
+        </div>
+        {linkExhaustUHC && <LinkChip onBreak={linkBreakable?()=>setLinkExhaustUHC(false):null} label="Linked to Mapping CO15 (÷3)"/>}
       </div>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
         <Tip text="Measured H₂ in exhaust (dry, actual O₂ basis — NOT 15% O₂ corrected). Relevant for syngas, H₂-blended fuels, or partial oxidation upsets. Used in the energy-loss formula via LHV_H₂ = 241.83 kJ/mol. Set to zero for natural-gas combustion (H₂ slip is typically negligible there).">
@@ -12856,6 +12933,13 @@ export default function App(){
   // Fifth linkage: Fuel Flow ← cycle ṁ_fuel. Same mode-derivation as the
   // others (forced ON in GTS, user-controlled in Advanced, hidden in Free/CTK).
   const[linkFuelFlowRaw,setLinkFuelFlow]=useState(true);
+  // Sixth + seventh linkages: Exhaust CO / UHC ← Mapping CO15 (corrected from
+  // 15% O₂ basis to actual O₂ basis using a Phi_Exhaust derived from THIS
+  // panel's fuel/air flows — NOT cycle.phi4). UHC = CO/3 per LMS100 mapping
+  // convention. Same mode-derivation as the other linkages: forced ON in GTS,
+  // user-controlled in Advanced, hidden in Free / Combustion-Toolkit.
+  const[linkExhaustCORaw,setLinkExhaustCO]=useState(true);
+  const[linkExhaustUHCRaw,setLinkExhaustUHC]=useState(true);
   // Flame Speed & Blowoff panel sidebar/panel-local defaults.
   // Set to industrial-gas-turbine premixer values (per Phase 0 of the
   // Flame Speed redesign plan): 50 m/s reference velocity, 25 mm L_char,
@@ -13043,6 +13127,11 @@ export default function App(){
   const linkFAR = (mode === "advanced") ? linkFARRaw : (mode === "gts");
   const linkOx  = (mode === "advanced") ? linkOxRaw  : (mode === "gts");
   const linkFuelFlow = (mode === "advanced") ? linkFuelFlowRaw : (mode === "gts");
+  // Exhaust CO/UHC linkages (only meaningful when a cycle is running, so
+  // free/ctk evaluate to false naturally — no Mapping panel + no cycleResult
+  // means there's nothing to link FROM).
+  const linkExhaustCO  = (mode === "advanced") ? linkExhaustCORaw  : (mode === "gts");
+  const linkExhaustUHC = (mode === "advanced") ? linkExhaustUHCRaw : (mode === "gts");
   // The sidebar BREAK button is only meaningful in Advanced. We pass
   // null for onBreak in non-Advanced modes so LinkChip suppresses
   // the button (showing the chip as a read-only status indicator).
@@ -13335,6 +13424,8 @@ export default function App(){
     emTfMults,
     // ── Linkage toggles (Cycle → sidebar) ──
     linkT3,linkP3,linkFAR,linkFuelFlow,
+    // ── Exhaust CO/UHC linkages (Mapping CO15 → measured CO/UHC) ──
+    linkExhaustCO,linkExhaustUHC,
     // ── UI sidebar controls ──
     loadStepPct,bleedStepPct,
     // ── Active Application Mode (free / ctk / gts / advanced) ──
@@ -13846,7 +13937,10 @@ export default function App(){
             {tab==="combustor"&&<CombustorPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} tau={tau_psr} setTau={setTauPsr} Lpfr={L_pfr} setL={setLpfr} Vpfr={V_pfr} setV={setVpfr} Tfuel={T_fuel} setTfuel={setTfuel} WFR={WFR} waterMode={waterMode} psrSeed={psrSeed} setPsrSeed={setPsrSeed} eqConstraint={eqConstraint} setEqConstraint={setEqConstraint} integration={integration} setIntegration={setIntegration} heatLossFrac={heatLossFrac} setHeatLossFrac={setHeatLossFrac} mechanism={mechanism} setMechanism={setMechanism}
               psrActive={psrActive} setPsrActive={setPsrActive}
               keepActivated={keepPsrActivated} setKeepActivated={setKeepPsrActivated}/>}
-            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} fuelFlowKgs={fuelFlowKgs} setFuelFlowKgs={setFuelFlowKgs} fuelCostUsdPerMmbtuLhv={fuelCostUsdPerMmbtuLhv} setFuelCostUsdPerMmbtuLhv={setFuelCostUsdPerMmbtuLhv} costPeriod={costPeriod} setCostPeriod={setCostPeriod} linkFuelFlow={linkFuelFlow} setLinkFuelFlow={setLinkFuelFlow} linkBreakable={_linkBreakable} combMode={combMode} setCombMode={setCombMode}/>}
+            {tab==="exhaust"&&<ExhaustPanel fuel={fuel} ox={ox} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} measO2={measO2} setMeasO2={setMeasO2} measCO2={measCO2} setMeasCO2={setMeasCO2} measCO={measCO} setMeasCO={setMeasCO} measUHC={measUHC} setMeasUHC={setMeasUHC} measH2={measH2} setMeasH2={setMeasH2} fuelFlowKgs={fuelFlowKgs} setFuelFlowKgs={setFuelFlowKgs} fuelCostUsdPerMmbtuLhv={fuelCostUsdPerMmbtuLhv} setFuelCostUsdPerMmbtuLhv={setFuelCostUsdPerMmbtuLhv} costPeriod={costPeriod} setCostPeriod={setCostPeriod} linkFuelFlow={linkFuelFlow} setLinkFuelFlow={setLinkFuelFlow} linkBreakable={_linkBreakable} combMode={combMode} setCombMode={setCombMode}
+              cycleResult={cycleResult} bkMap={bkMap}
+              linkExhaustCO={linkExhaustCO} setLinkExhaustCO={setLinkExhaustCO}
+              linkExhaustUHC={linkExhaustUHC} setLinkExhaustUHC={setLinkExhaustUHC}/>}
             {/* AutomatePanel is always mounted (just hidden when not the
                 active tab) so an in-progress run, captured results, the
                 wizard state, and the Plot Data panel survive tab switches.
