@@ -12405,10 +12405,13 @@ function EngineAmbientSidebar({
   const lbl={fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3};
   const sec={fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:6};
   const subSec={fontSize:9.5,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1.2px",marginTop:10,marginBottom:6,paddingTop:8,borderTop:`1px solid ${C.border}50`};
-  // ── BLEED-ONLY render (separate sidebar card) ─────────────────────────
-  if (section === "bleed") {
-    return (<div style={wrap}>
-      <div style={sec}>Compressor Bleed {dim&&<span style={{fontSize:9,color:C.warm,fontWeight:600,letterSpacing:".4px",textTransform:"none",marginLeft:6}}>(Accurate Mode required)</span>}</div>
+  // ── Compressor Bleed JSX block — defined here so it can be rendered both
+  //   inline in the section="top" card (between Load and Ambient — its
+  //   permanent home as of 2026-05-02) and as a no-op for section="bleed"
+  //   (legacy — kept null so existing call sites don't double-render). ──
+  const bleedBlock = (
+    <div data-card="compressor-bleed">
+      <div style={subSec}>Compressor Bleed</div>
       <div>
         <label style={lbl} title="Maximum bleed split %: the hard upper bound on how much compressor air the bleed valve can dump at 100% open. A function of valve/line size (bigger valve → more bleed possible). Free-type any value.">Max Bleed split % (valve/line size)</label>
         <NumField value={bleedValveSizePct} decimals={2} onCommit={v=>setBleedValveSizePct(Math.max(0,Math.min(100,+v)))} style={S.inp}/>
@@ -12496,10 +12499,15 @@ function EngineAmbientSidebar({
           {" · "}lost air = <strong style={{color:C.accent2}}>{(bleedAirFrac*100).toFixed(2)}%</strong>
         </div>
       </div>
-    </div>);
-  }
+    </div>
+  );
 
-  // ── TOP-GROUP render: Engine / Emissions / Load / Ambient ─────────────
+  // The bleed UI now lives INSIDE the section="top" card (between Load and
+  // Ambient). Returning null here so any caller still passing
+  // section="bleed" produces nothing instead of a duplicate card.
+  if (section === "bleed") return null;
+
+  // ── TOP-GROUP render: Engine / Emissions / Load / Bleed / Ambient ─────
   return(<div style={wrap}>
     <div style={sec}>Engine & Ambient {dim&&<span style={{fontSize:9,color:C.warm,fontWeight:600,letterSpacing:".4px",textTransform:"none",marginLeft:6}}>(Accurate Mode required)</span>}</div>
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -12560,6 +12568,11 @@ function EngineAmbientSidebar({
           <span style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",marginLeft:"auto"}}>persists</span>
         </div>
       </div>
+
+      {/* ── COMPRESSOR BLEED — moved here on 2026-05-02 to sit directly
+          under the Load card and ABOVE Ambient Conditions, where the
+          operator naturally looks after adjusting load. ── */}
+      {bleedBlock}
 
       {/* ── AMBIENT CONDITIONS ───────────────────────────────────────── */}
       <div style={{fontSize:9,fontWeight:700,color:C.txtDim,textTransform:"uppercase",letterSpacing:"1px",marginTop:4,marginBottom:2}}>Ambient Conditions</div>
@@ -13539,6 +13552,15 @@ export default function App(){
                   airFrac={cycleAirFrac} setAirFrac={setCycleAirFrac}
                   loadStepPct={loadStepPct} setLoadStepPct={setLoadStepPct}
                   emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
+                  // Bleed props — bleed UI now renders inline inside the top
+                  // card, between Load and Ambient Conditions. The standalone
+                  // bleedCard below is now a no-op (returns null).
+                  bleedMode={bleedMode} setBleedMode={setBleedMode}
+                  bleedOpenPct={bleedOpenPct}
+                  bleedOpenManualPct={bleedOpenManualPct} setBleedOpenManualPct={setBleedOpenManualPct}
+                  bleedValveSizePct={bleedValveSizePct} setBleedValveSizePct={setBleedValveSizePct}
+                  bleedStepPct={bleedStepPct} setBleedStepPct={setBleedStepPct}
+                  bleedAirFrac={bleedAirFrac}
                   accurate={accurate&&hasOnline}
                 />
               ) : null;
