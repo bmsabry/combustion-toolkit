@@ -1743,7 +1743,7 @@ const sA=[
   ["16. Live Mapping (HMI sim)","Tick rate","2 Hz","Two samples per second across every metric. 10-minute rolling buffer (1200 samples). 2 Hz gives PX36_SEL / PX36_SEL_HI the transient resolution to read acoustic spikes; slow metrics (NOx, CO, MWI_GC, MW) are dead-time / lag-dominated so the higher rate just adds interpolation points to their existing curves."],
   ["","Instrument response","Transport delay + smoothstep","display(t) = lookup(t − deadT) blended over transT. Per-metric deadT/transT: PX36 0/1, NOx/CO 83/7, MWI_WIM 2/5, MWI_GC 415/5, MW 0/7."],
   ["","Noise","Per-metric, mean-band dependent","PX36: random step 1–9% every 1–2 s. NOx/CO: 20-s sine. MWI: 2.5% white + 2-min sine."],
-  ["","PX36 protection trigger","px36 (display) > 5.5 psi","BD4 50 s → BD6 30 s → BD7. Up to 3 cycles before LOCK at BD4."],
+  ["","PX36 protection trigger","PX36_SEL > 5.5 psi  OR  PX36_SEL_HI > 2.5 psi","Action depends on current BRNDMD. BR=4 → 4-hour TRIP (full engine shutdown banner). BR=6 or 7 → stage down to BD4 (BD4 50 s → BD6 30 s → BD7) and increment cycle count; LOCK at BD4 after 3 cycles. BR=1 or 2 → no action."],
   ["","Stochastic trips","phi_IP / phi_OP exceeding load-interp band","Random threshold rolled per band entry. Trip → all targets ramp to 0; 4-hour lockout banner."],
   ["","Emissions Mode staging","BD4 → 50 s → BD6 → 30 s → BD7","Triggered when Emissions Mode toggles ON. Endpoint adapts to current MW (skip / stop at BD6 / full)."],
 
@@ -5517,7 +5517,7 @@ function AssumptionsPanel(){
       <Assumption label="Tick rate" value="2 Hz" note="Two samples per second across every metric. Buffer holds 10 minutes (1200 samples) and shifts oldest out. The acoustic metrics (PX36_SEL, PX36_SEL_HI) need this resolution for transient spikes; slow metrics (NOx, CO, MWI_GC, MW) are dead-time / lag-dominated and just carry extra interpolation points."/>
       <Assumption label="Instrument response" value="History-based transport delay + 1st-order smoothstep" note="displayed(t) = lookup(history, t − deadT) blended via smoothstep over transT. Per-metric deadT/transT: PX36 0/1, NOx/CO 83/7, MWI_WIM 2/5, MWI_GC 415/5, MW 0/7."/>
       <Assumption label="Noise model" value="Per-metric, mean-band dependent" note="PX36: random step every 1–2 s, amplitude scales with mean (1.5–3.4% low, 7–9% high). NOx/CO: 20-second sine, amplitude re-rolled at each cycle. MWI: 2.5% white + slow 2-min sine."/>
-      <Assumption label="PX36 trip threshold" value="px36 (display) > 5.5 psi" note="Triggers the protection cycle: BD4 for 50 s → BD6 for 30 s → BD7. Up to 3 cycles before LOCK at BD4."/>
+      <Assumption label="PX36 protection trigger" value="PX36_SEL > 5.5 psi  OR  PX36_SEL_HI > 2.5 psi" note="Action depends on current BRNDMD: at BR=4 the engine TRIPS (4-hour shutdown banner with cause-tagged sensor + value). At BR=6 or 7 the engine stages down to BD4 (BD4 50 s → BD6 30 s → BD7) and the cycle counter advances; after 3 cycles the engine LOCKS at BD4. At BR=1 or 2 (startup / low-MW modes) no action is taken."/>
       <Assumption label="Stochastic engine trips" value="phi_IP / phi_OP excursions" note="At BR=7, phi_IP entry into a load-interpolated band rolls a random threshold; crossing it trips the engine. Same logic for phi_OP at BR=6 or 7. After trip, all targets ramp to 0 with metric-specific delays; banner shows a 4-hour lockout countdown."/>
       <Assumption label="Emissions Mode staging" value="BD4 → 50 s → BD6 → 30 s → BD7 (or stop at BD6)" note="Triggered when Emissions Mode toggles ON during mapping. Endpoint adapts to current MW: low load skips, mid load (BR_max=6) stops at BD6, high load runs the full sequence."/>
     </AssumptionsGroup>
@@ -6362,6 +6362,7 @@ function CombustorMappingPanel({
                 atSec: now, px36HiVal: 100,
                 brndmd: _br, loadPct,
                 phiIp: pIp, phiOp: Number(phiOPRef.current)||0, phiIm: Number(phiIMRef.current)||0,
+                cause: 'phi_ip', causeValue: pIp,
               });
               _resetProtection();  // cancel any in-progress protection cycle
               if (cancelEmissionsStaging) cancelEmissionsStaging();  // cancel any in-progress emissions ramp
@@ -6389,6 +6390,7 @@ function CombustorMappingPanel({
                 atSec: now, px36HiVal: 100,
                 brndmd: _br, loadPct,
                 phiIp: Number(phiIPRef.current)||0, phiOp: pOp, phiIm: Number(phiIMRef.current)||0,
+                cause: 'phi_op', causeValue: pOp,
               });
               _resetProtection();
               if (cancelEmissionsStaging) cancelEmissionsStaging();
@@ -6455,12 +6457,45 @@ function CombustorMappingPanel({
         ? dPX36HI  // trip — no noise, clean 100 psi spike
         : dPX36HI * (1 + n.PX36_SEL_HI.sign * n.PX36_SEL_HI.devPct);
 
-      // ── Engine Protection Logic (NOT during trip) ──
-      if (!tr.tripped
-          && px36Val > 5.5
-          && protRef.current.state !== 'at4'
-          && protRef.current.state !== 'locked') {
-        _triggerProtection(px36Val);
+      // ── Engine Protection Logic — PX36 thresholds (NOT during trip) ──
+      // Trigger: PX36_SEL > 5.5 psi  OR  PX36_SEL_HI > 2.5 psi.
+      // Action depends on current BRNDMD:
+      //   BR = 4         → 4-hour TRIP (full engine shutdown banner)
+      //   BR = 6 or 7    → stage down to BD4 + increment cycleCount
+      //                    (existing _triggerProtection cycle; 3-strike LOCK
+      //                    at BD4 after the third cycle)
+      //   BR = 1 or 2    → no action (startup / low-MW modes)
+      if (!tr.tripped) {
+        const _px_trigger = (px36Val > 5.5) || (px36HiVal > 2.5);
+        if (_px_trigger) {
+          const _br_now = brndmdOverrideRef.current
+            ?? calcBRNDMD(cycLatest?.MW_net || 0, emissionsModeRef.current);
+          // Tag which sensor crossed first — used by the banner copy below.
+          const _cause = (px36Val > 5.5) ? 'px36_sel' : 'px36_sel_hi';
+          const _causeValue = (px36Val > 5.5) ? px36Val : px36HiVal;
+          if (_br_now === 4) {
+            // 4-hour TRIP path. Mirrors the phi_ip / phi_op trip handlers.
+            tr.tripped = true; tr.tripAt = now; tr.tripCause = _cause;
+            _updateTarget(now, m.PX36_SEL_HI, 100);  // visual spike on the trace
+            setTripBanner({
+              atSec: now, px36HiVal: 100,
+              brndmd: _br_now, loadPct: cycLatest?.load_pct || 100,
+              phiIp: Number(phiIPRef.current) || 0,
+              phiOp: Number(phiOPRef.current) || 0,
+              phiIm: Number(phiIMRef.current) || 0,
+              cause: _cause, causeValue: _causeValue,
+            });
+            _resetProtection();
+            if (cancelEmissionsStaging) cancelEmissionsStaging();
+          } else if ((_br_now === 6 || _br_now === 7)
+              && protRef.current.state !== 'at4'
+              && protRef.current.state !== 'locked') {
+            // Stage-down + counter (existing protection cycle). Pass the
+            // cause-value so the banner shows whichever sensor tripped.
+            _triggerProtection(_causeValue);
+          }
+          // BR = 1 or 2 → no action.
+        }
       }
 
       // NOx15 — 20 s sine, re-roll amp at wave end
@@ -7105,10 +7140,23 @@ function CombustorMappingPanel({
                         REMAINING · auto-release at <strong style={{color:C.txt,fontFamily:"monospace"}}>{releaseStr}</strong>
                       </div>
                     </div>
-                    {/* Trip condition — pure data, no cause disclosure */}
+                    {/* Trip condition — show the sensor + value that triggered.
+                        Falls back to PX36_SEL_HI display for legacy banners
+                        (older phi_ip / phi_op trips before cause was tagged). */}
                     <div style={{fontSize:13,color:C.txt,fontFamily:"monospace",
                       lineHeight:1.55,marginTop:6}}>
-                      <strong style={{color:C.warm}}>PX36_SEL_HI = {fmtPx(tripBanner.px36HiVal)} {pxUnit}</strong>
+                      {(() => {
+                        const cause = tripBanner.cause;
+                        const cv = tripBanner.causeValue;
+                        if (cause === 'px36_sel' && Number.isFinite(cv)) {
+                          return <strong style={{color:C.warm}}>PX36_SEL = {fmtPx(cv)} {pxUnit}</strong>;
+                        }
+                        if (cause === 'px36_sel_hi' && Number.isFinite(cv)) {
+                          return <strong style={{color:C.warm}}>PX36_SEL_HI = {fmtPx(cv)} {pxUnit}</strong>;
+                        }
+                        // phi_ip / phi_op: keep the original PX36_SEL_HI=100 visual cue.
+                        return <strong style={{color:C.warm}}>PX36_SEL_HI = {fmtPx(tripBanner.px36HiVal)} {pxUnit}</strong>;
+                      })()}
                       &nbsp;·&nbsp; tripped at <strong>{tStr}</strong>
                     </div>
                     <div style={{fontSize:12,color:C.txtDim,fontFamily:"monospace",
