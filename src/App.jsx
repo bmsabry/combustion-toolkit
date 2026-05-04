@@ -200,9 +200,9 @@ function calcBRNDMD(MW_net, emissionsMode=true, override=null){
 // At BR=6 only, the displayed PX36_SEL_HI is augmented relative to the
 // raw backend correlation:
 //
-//   displayed = (corr.PX36_SEL_HI + 0.4) × _phi_ip_hi_mult(φ_IP)
+//   displayed = (corr.PX36_SEL_HI + 0.2) × _phi_ip_hi_mult(φ_IP)
 //
-// The +0.4 psi offset captures a BR=6 acoustic bias not in the linear
+// The +0.2 psi offset captures a BR=6 acoustic bias not in the linear
 // correlation. The φ_IP multiplier is a piecewise-linear lookup from
 // rig data (table below). Per user spec, this modifier is applied to
 // every "mean" PX36_SEL_HI display: System Metrics summary on the
@@ -211,7 +211,7 @@ function calcBRNDMD(MW_net, emissionsMode=true, override=null){
 // stays consistent across all displays.
 //
 // At BR ≠ 6, returns the raw value unchanged.
-const _PX36_SEL_HI_BR6_OFFSET_PSI = 0.4;
+const _PX36_SEL_HI_BR6_OFFSET_PSI = 0.2;
 const _PX36_HI_MULT_TABLE = [[0.8,1.08],[0.9,1.04],[1.0,1.00],[1.1,0.94],[1.2,0.85],[1.3,0.84],[1.4,0.83]];
 function _phi_ip_hi_mult(phiIp) {
   const tbl = _PX36_HI_MULT_TABLE;
