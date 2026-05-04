@@ -532,6 +532,33 @@ export const AUTO_OUTPUTS = [
   { id: "phi_OP_mult",        label: "φ_OP multiplier", panel: "mapping", unit: "—",  pick: r => r.map?.derived?.phi_OP_mult },
   { id: "P3_pressure_ratio",  label: "P3 ratio (P3/638)", panel: "mapping", unit: "—",pick: r => r.map?.derived?.pressure_ratio },
   { id: "FAR_stoich",         label: "FAR stoich",   panel: "mapping", unit: "—",     pick: r => r.map?.FAR_stoich },
+  // Per-circuit fuel split (% of total fuel) — matches the Fuel_Split column
+  // added to the Operating Snapshot table. Computed from circuit m_fuel
+  // results divided by total m_fuel across all 4 circuits.
+  { id: "fuel_split_IP",      label: "Fuel Split IP", panel: "mapping", unit: "%",
+    pick: r => {
+      const c = r.map?.circuits || {};
+      const tot = ["IP","OP","IM","OM"].reduce((s,k)=>s+(c[k]?.m_fuel_kg_s||0),0);
+      return (tot > 0 && Number.isFinite(c.IP?.m_fuel_kg_s)) ? c.IP.m_fuel_kg_s/tot*100 : null;
+    } },
+  { id: "fuel_split_OP",      label: "Fuel Split OP", panel: "mapping", unit: "%",
+    pick: r => {
+      const c = r.map?.circuits || {};
+      const tot = ["IP","OP","IM","OM"].reduce((s,k)=>s+(c[k]?.m_fuel_kg_s||0),0);
+      return (tot > 0 && Number.isFinite(c.OP?.m_fuel_kg_s)) ? c.OP.m_fuel_kg_s/tot*100 : null;
+    } },
+  { id: "fuel_split_IM",      label: "Fuel Split IM", panel: "mapping", unit: "%",
+    pick: r => {
+      const c = r.map?.circuits || {};
+      const tot = ["IP","OP","IM","OM"].reduce((s,k)=>s+(c[k]?.m_fuel_kg_s||0),0);
+      return (tot > 0 && Number.isFinite(c.IM?.m_fuel_kg_s)) ? c.IM.m_fuel_kg_s/tot*100 : null;
+    } },
+  { id: "fuel_split_OM",      label: "Fuel Split OM", panel: "mapping", unit: "%",
+    pick: r => {
+      const c = r.map?.circuits || {};
+      const tot = ["IP","OP","IM","OM"].reduce((s,k)=>s+(c[k]?.m_fuel_kg_s||0),0);
+      return (tot > 0 && Number.isFinite(c.OM?.m_fuel_kg_s)) ? c.OM.m_fuel_kg_s/tot*100 : null;
+    } },
 
   // ── AFT (Flame Temp & Properties) ──
   { id: "T_ad",               label: "Tad_eq", panel: "aft", unit_si: "K", unit_en: "°F", siToEn: K_to_F, pick: r => r.aft?.T_ad },
@@ -629,10 +656,30 @@ export const AUTO_OUTPUTS = [
     pick: r => r.exh_slip?.heat_input_MW },
   { id: "exh_total_cost_per_hr", label: "Total Fuel Cost",  panel: "exhaust", unit: "USD/hr",
     pick: r => r.exh_slip?.total_cost_per_hr },
-  { id: "exh_penalty_per_hr_o2",  label: "Penalty (O₂)",    panel: "exhaust", unit: "USD/hr",
+  { id: "exh_penalty_per_hr_o2",  label: "Penalty/hr (O₂)",    panel: "exhaust", unit: "USD/hr",
     pick: r => r.exh_slip?.penalty_per_hr_o2 },
-  { id: "exh_penalty_per_hr_co2", label: "Penalty (CO₂)",   panel: "exhaust", unit: "USD/hr",
+  { id: "exh_penalty_per_hr_co2", label: "Penalty/hr (CO₂)",   panel: "exhaust", unit: "USD/hr",
     pick: r => r.exh_slip?.penalty_per_hr_co2 },
+  // Per-period penalty convenience outputs — UI defaults to monthly so these
+  // are usually the most useful absolute numbers. Rates: 730 hr/month, 8760 hr/year.
+  { id: "exh_penalty_per_month_o2",  label: "Penalty/month (O₂)",  panel: "exhaust", unit: "USD/month",
+    pick: r => r.exh_slip?.penalty_per_month_o2 },
+  { id: "exh_penalty_per_year_o2",   label: "Penalty/year (O₂)",   panel: "exhaust", unit: "USD/year",
+    pick: r => r.exh_slip?.penalty_per_year_o2 },
+  { id: "exh_penalty_per_month_co2", label: "Penalty/month (CO₂)", panel: "exhaust", unit: "USD/month",
+    pick: r => r.exh_slip?.penalty_per_month_co2 },
+  { id: "exh_penalty_per_year_co2",  label: "Penalty/year (CO₂)",  panel: "exhaust", unit: "USD/year",
+    pick: r => r.exh_slip?.penalty_per_year_co2 },
+  // Phi_Exhaust + linked CO/UHC traceability — only populated when both
+  // Cycle and Mapping panels ran in the same row. NaN otherwise.
+  { id: "exh_phi_exhaust",      label: "Phi_Exhaust (cycle ṁ_fuel/ṁ_air)",
+    panel: "exhaust", unit: "—", pick: r => r.exh_slip?.phi_exhaust },
+  { id: "exh_o2_dry_at_phi_exhaust", label: "O₂_dry @ Phi_Exhaust",
+    panel: "exhaust", unit: "% dry", pick: r => r.exh_slip?.o2_dry_at_phi_exhaust },
+  { id: "exh_CO_linked",        label: "CO_linked (from Mapping CO15)",
+    panel: "exhaust", unit: "ppmvd @ actual O₂", pick: r => r.exh_slip?.CO_linked },
+  { id: "exh_UHC_linked",       label: "UHC_linked (= CO_linked / 3)",
+    panel: "exhaust", unit: "ppmvd @ actual O₂", pick: r => r.exh_slip?.UHC_linked },
 
   // ── PSR-PFR Combustor ──
   // The runner normalizes both Free (calcCombustorNetwork) and Accurate

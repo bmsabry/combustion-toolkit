@@ -932,7 +932,7 @@ function exportToExcel(fuel,ox,phi,T0,P,_unitsIgnored,ps){
   }, 400);
 }
 
-function _buildExportWorkbook(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,measCO=0,measUHC=0,measH2=0,fuelFlowKgs=0,fuelCostUsdPerMmbtuLhv=4.00,costPeriod="week",combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult,mappingTables,
+function _buildExportWorkbook(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.book_new();const u=units;const fp=calcFuelProps(fuel,ox);const{velocity,Lchar,Dfh=0.02,Lpremix=0.10,Vpremix=60,tau_psr,L_pfr,V_pfr,T_fuel,T_air,measO2,measCO2,measCO=0,measUHC=0,measH2=0,fuelFlowKgs=0,fuelCostUsdPerMmbtuLhv=4.00,costPeriod="month",combMode,psrSeed="cold_ignited",eqConstraint="HP",integration="chunked",heatLossFrac=0,mechanism="gri30",WFR=0,waterMode="liquid",T_water=288.15,accurate=false,cycleEngine,cyclePamb,cycleTamb,cycleRH,cycleLoad,cycleTcool,cycleAirFrac,bleedMode="auto",bleedOpenPct=0,bleedValveSizePct=0,bleedAirFrac=0,cycleResult,mappingTables,
   emissionsMode=true,mapW36w3=0.75,mapFracIP=2.3,mapFracOP=2.2,mapFracIM=39.9,mapFracOM=55.6,
   mapPhiIP=0.25,mapPhiOP=0.65,mapPhiIM=0.50,mapResult=null,emTfMults=null,
   linkT3=true,linkP3=true,linkFAR=true,linkFuelFlow=true,linkExhaustCO=false,linkExhaustUHC=false,loadStepPct=5,bleedStepPct=15,
@@ -1351,6 +1351,41 @@ const _slipFuelRows=[
   ["Linkage CO ← Mapping CO15",linkExhaustCO?"ON (Mapping CO15 → CO at actual O₂ via Phi_Exhaust)":"OFF","—"],
   ["Linkage UHC ← Mapping CO15",linkExhaustUHC?"ON (UHC = CO_linked / 3)":"OFF","—"],
 ];
+// Phi_Exhaust + linked-CO traceability rows. Only meaningful when the
+// Mapping correlation has run (gts/advanced) AND the cycle reports
+// air & fuel flow. Computed identically to ExhaustPanel's runtime
+// linkage so the Excel record matches what the user sees on screen.
+const _mappingCO15_xl=mapResult?.correlations?.CO15;
+const _mdotFuelCyc_xl=cycleResult?.mdot_fuel_kg_s;
+const _mdotAirCyc_xl =cycleResult?.mdot_air_post_bleed_kg_s;
+const _FAR_stoich_xl =1/((fp.AFR_mass)||1e-12);
+const _phiExhaust_xl =(Number.isFinite(_mdotFuelCyc_xl)&&Number.isFinite(_mdotAirCyc_xl)&&_mdotAirCyc_xl>0)
+  ? (_mdotFuelCyc_xl/_mdotAirCyc_xl)/_FAR_stoich_xl : NaN;
+let _o2DryAtPhiExh_xl=NaN, _coLinked_xl=NaN, _uhcLinked_xl=NaN;
+if(Number.isFinite(_phiExhaust_xl)&&_phiExhaust_xl>0&&_phiExhaust_xl<1){
+  const _Tmix_xl=mixT(fuel,ox,_phiExhaust_xl,T_fuel??T0,T_air??T0);
+  const _r_xl=calcAFT(fuel,ox,_phiExhaust_xl,_Tmix_xl);
+  const _o2w=_r_xl.products?.O2||0, _h2ow=_r_xl.products?.H2O||0;
+  const _denom=1-_h2ow/100;
+  if(_denom>0)_o2DryAtPhiExh_xl=_o2w/_denom;
+  if(Number.isFinite(_mappingCO15_xl)&&_mappingCO15_xl>0&&Number.isFinite(_o2DryAtPhiExh_xl)&&_o2DryAtPhiExh_xl<20.9){
+    _coLinked_xl=_mappingCO15_xl*(20.9-_o2DryAtPhiExh_xl)/5.9;
+    _uhcLinked_xl=_coLinked_xl/3;
+  }
+}
+_slipFuelRows.push(
+  [],
+  ["═══ EXHAUST LINKAGE TRACEABILITY (Phi_Exhaust → linked CO/UHC) ═══"],
+  ["Parameter","Value","Unit"],
+  ["Mapping CO15 (correlation output)",Number.isFinite(_mappingCO15_xl)?+_mappingCO15_xl.toFixed(2):"n/a","ppmvd @ 15% O₂"],
+  ["ṁ_fuel (Cycle)",_flowFmt(_mdotFuelCyc_xl),_flowUnit],
+  ["ṁ_air post-bleed (Cycle)",_flowFmt(_mdotAirCyc_xl),_flowUnit],
+  ["FAR_stoich (panel fuel/oxidizer)",Number.isFinite(_FAR_stoich_xl)?+_FAR_stoich_xl.toFixed(5):"n/a","—"],
+  ["Phi_Exhaust = (ṁ_fuel/ṁ_air) / FAR_stoich",Number.isFinite(_phiExhaust_xl)?+_phiExhaust_xl.toFixed(4):"n/a","—"],
+  ["O₂_dry @ Phi_Exhaust (complete combustion)",Number.isFinite(_o2DryAtPhiExh_xl)?+_o2DryAtPhiExh_xl.toFixed(3):"n/a","% dry"],
+  ["CO_linked = CO15 × (20.9 − O₂_dry%) / 5.9",Number.isFinite(_coLinked_xl)?+_coLinked_xl.toFixed(2):"n/a","ppmvd @ actual O₂"],
+  ["UHC_linked = CO_linked / 3",Number.isFinite(_uhcLinked_xl)?+_uhcLinked_xl.toFixed(2):"n/a","ppmvd @ actual O₂"],
+);
 const s5=[["═══ EXHAUST ANALYSIS — INPUTS ═══"],[],["Parameter","Value","Unit"],["Measured O₂ (dry)",+measO2.toFixed(2),"%"],["Measured CO₂ (dry)",+measCO2.toFixed(2),"%"],["Air Inlet Temperature (T_air)",+uv(u,"T",T_air??T0).toFixed(2),uu(u,"T")],["Fuel Inlet Temperature (T_fuel)",+uv(u,"T",T_fuel??T0).toFixed(2),uu(u,"T")],["T_mixed @ φ(O₂ case)",+uv(u,"T",T_mix_O2).toFixed(2),uu(u,"T")],["T_mixed @ φ(CO₂ case)",+uv(u,"T",T_mix_CO2).toFixed(2),uu(u,"T")],["Water/Fuel Mass Ratio (WFR)",+(+WFR).toFixed(3),"kg_water/kg_fuel"],["Water Injection Mode",WFR>0?(waterMode==="steam"?"Steam (gas phase @ T_air)":"Liquid (absorbs h_fg)"):"off","—"],[],["═══ FROM MEASURED O₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ FROM MEASURED CO₂ ═══"],[],["Parameter","Value","Unit"],["Equivalence Ratio (φ)",+rCO2.phi.toFixed(5),"—"],["Adiabatic Flame Temperature",+uv(u,"T",rCO2.T_ad).toFixed(1),uu(u,"T")],["Fuel/Air Ratio (mass)",+rCO2.FAR_mass.toFixed(6),uu(u,"afr_mass")],["Air/Fuel Ratio (mass)",+(1/(rCO2.FAR_mass+1e-20)).toFixed(3),uu(u,"afr_mass")],[],["Species (wet basis)","Mole %"],...Object.entries(rCO2.products||{}).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["Species (dry basis)","Mole %"],...Object.entries(dryBasis(rCO2.products||{})).filter(([_,v])=>v>0.01).sort((a,b)=>b[1]-a[1]).map(([sp,v])=>[fmt(sp),+v.toFixed(4)]),[],["═══ Adiabatic Temperature vs Exhaust O₂ ═══"],["Exhaust O₂ (%)","Flame Temperature ("+uu(u,"T")+")","Equivalence Ratio (φ)","Fuel/Air Ratio (mass)"],...Array.from({length:30},(_,i)=>{const o2=0.5+i*0.5;const r0=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,0.6,T_fuel??T0,T_air??T0),P,combMode);const r=calcExhaustFromO2(fuel,ox,o2,mixT(fuel,ox,r0.phi,T_fuel??T0,T_air??T0),P,combMode);return[+o2.toFixed(1),+uv(u,"T",r.T_ad).toFixed(1),+r.phi.toFixed(4),+r.FAR_mass.toFixed(6)]})];s5.push(..._slipFuelRows);const ws5=XLSX.utils.aoa_to_sheet(s5);ws5["!cols"]=[{wch:38},{wch:20},{wch:16},{wch:16}];if(_showCombustion)XLSX.utils.book_append_sheet(wb,ws5,"Exhaust Analysis");
 const s4=[["═══ THERMO DATABASE ═══"],["NASA 7-coefficient polynomials"],[]];for(const sp of["CH4","C2H6","C3H8","H2","CO","O2","N2","H2O","CO2","OH","NO","Ar"]){if(!SP[sp])continue;s4.push([SP[sp].nm+" ("+fmt(sp)+")","Molecular Weight: "+SP[sp].MW,"ΔHf: "+(SP[sp].Hf/1000).toFixed(2)+" kJ/mol"]);s4.push(["Temperature (K)","Heat Capacity Cp (J/mol·K)","Enthalpy H (kJ/mol)","Entropy S (J/mol·K)","Gibbs Energy G (kJ/mol)"]);for(let T=200;T<=3000;T+=100){const H=h_mol(sp,T)/1000;const Sv=sR(sp,T)*R_u;s4.push([T,+cp_mol(sp,T).toFixed(4),+H.toFixed(4),+Sv.toFixed(4),+((H*1000-T*Sv)/1000).toFixed(4)]);}s4.push([]);}const ws4=XLSX.utils.aoa_to_sheet(s4);ws4["!cols"]=[{wch:28},{wch:18},{wch:18},{wch:18},{wch:18}];if(_showCombustion)XLSX.utils.book_append_sheet(wb,ws4,"Thermo Database");
 // ══════════════════ CYCLE (Gas Turbine) — Option A + B ══════════════════
@@ -1487,12 +1522,15 @@ if(_showMapping){
       return [k,fmtN(e.NOx,3),fmtN(e.CO,3),fmtN(e.PX36,3)];
     }),
     [],
-    ["═══ CIRCUIT RESULTS (mass flows, T_AFT) ═══"],
-    ["Circuit","φ","m_air (kg/s)","m_fuel (kg/s)","T_AFT_complete ("+uu(u,"T")+")"],
+    ["═══ CIRCUIT RESULTS (mass flows, TFlame, fuel split) ═══"],
+    ["Circuit","φ","TFlame ("+uu(u,"T")+")","m_air (kg/s)","m_fuel (kg/s)","Fuel_Split (%)"],
     ...["IP","OP","IM","OM"].map(k=>{
       const c=mc[k]||{};
-      return [k,fmtN(c.phi,4),fmtN(c.m_air_kg_s,4),fmtN(c.m_fuel_kg_s,5),
-        Number.isFinite(c.T_AFT_complete_K)?fmtN(uv(u,"T",c.T_AFT_complete_K),1):"n/a"];
+      const _mFuelTot=["IP","OP","IM","OM"].reduce((s,kk)=>s+(mc[kk]?.m_fuel_kg_s||0),0);
+      const _split=(_mFuelTot>0&&Number.isFinite(c.m_fuel_kg_s))?(c.m_fuel_kg_s/_mFuelTot*100):NaN;
+      return [k,fmtN(c.phi,4),
+        Number.isFinite(c.T_AFT_complete_K)?fmtN(uv(u,"T",c.T_AFT_complete_K),1):"n/a",
+        fmtN(c.m_air_kg_s,4),fmtN(c.m_fuel_kg_s,5),fmtN(_split,2)];
     }),
     [],
     ["═══ AIR ACCOUNTING ═══"],
@@ -1531,6 +1569,22 @@ if(_showMapping){
     ["PX36_SEL_HI ref",fmtN(mr?.reference?.values?.PX36_SEL_HI,3),"psi"],
     ["DT_Main ref","450","°F"],["Phi_OP ref","0.65","—"],["C3 ref","7.5","%"],
     ["N₂ ref","0.5","%"],["Tflame ref","3035","°F"],["T3 ref","700","°F"],["P3 ref","638","psia"],
+    [],
+    // System Metrics summary mirrors the 5-row Category | Value table on
+    // the Operating Snapshot card. PX36 / NOx15 / CO15 come from this
+    // sheet's correlation outputs above; Penalty is computed from the
+    // O₂-anchored slip path in the Exhaust block of the workbook (same
+    // _penaltyCostPerPeriod calc — recomputed here so the value lands
+    // on the same sheet as the metrics it joins).
+    ["═══ SYSTEM METRICS (snapshot summary) ═══"],
+    ["Category","Value","Unit"],
+    ["Acoustics — PX36_SEL",    fmtN(mFinal.PX36_SEL,1),    "psi"],
+    ["Acoustics — PX36_SEL_HI", fmtN(mFinal.PX36_SEL_HI,1), "psi"],
+    ["Emissions — NOx@15",      fmtN(mFinal.NOx15,1),       "ppmvd"],
+    ["Emissions — CO@15",       fmtN(mFinal.CO15,1),        "ppmvd"],
+    [`Inefficiencies — Penalty / ${costPeriod}`,
+      Number.isFinite(_penaltyCostPerPeriod)?+(_penaltyCostPerPeriod).toFixed(0):"n/a",
+      "USD"],
   ];
   const wsMP=XLSX.utils.aoa_to_sheet(sMP);
   wsMP["!cols"]=[{wch:42},{wch:18},{wch:18},{wch:22},{wch:22}];
@@ -5020,6 +5074,14 @@ const NOMENCLATURE_EXTRA = [
     desc: "When ON, the sidebar Oxidizer composition tracks the cycle's computed humid-air mol % at ambient T/RH." },
   { symbol: "linkFuelFlow", fullName: "Cycle linkage: Fuel Flow ← cycle ṁ_fuel", unit: "—", group: "Cycle linkages",
     desc: "When ON (default in GTS / Advanced modes), the Exhaust panel's Fuel Flow input on the Fuel & Money card tracks the cycle's mdot_fuel_kg_s. In GTS mode the link is non-breakable; in Advanced mode the BREAK button drops to manual entry. Hidden in Free / Combustion Toolkit (no cycle running)." },
+  { symbol: "linkExhaustCO", fullName: "Mapping linkage: Exhaust CO ← Mapping CO15 (corrected to actual O₂ via Phi_Exhaust)", unit: "—", group: "Cycle linkages",
+    desc: "When ON (default in GTS / Advanced modes), the Exhaust panel's measured-CO input is computed from the Mapping correlation's CO15 (15% O₂ basis) using CO_actual = CO15 × (20.9 − O₂_dry%) / 5.9 at Phi_Exhaust. In GTS mode the link is non-breakable; in Advanced mode the BREAK button drops to manual entry. Hidden in Free / Combustion Toolkit (no Mapping panel)." },
+  { symbol: "linkExhaustUHC", fullName: "Mapping linkage: Exhaust UHC ← Mapping CO15 (UHC = CO_linked / 3)", unit: "—", group: "Cycle linkages",
+    desc: "When ON (default in GTS / Advanced modes), the Exhaust panel's measured-UHC input is set to CO_linked / 3, per LMS100 mapping convention. In GTS mode the link is non-breakable; in Advanced mode the BREAK button drops to manual entry. Hidden in Free / Combustion Toolkit (no Mapping panel)." },
+  { symbol: "Phi_Exhaust", fullName: "Equivalence ratio computed from cycle's air & fuel mass flows", unit: "—", group: "Combustion efficiency & slip",
+    desc: "Phi_Exhaust = (cycle.mdot_fuel_kg_s / cycle.mdot_air_post_bleed_kg_s) / FAR_stoich. Used by the CO/UHC Mapping linkages on the Exhaust panel to convert mapping CO15 (15% O₂ basis) to the actual-O₂ basis. Distinct from cycle.phi4 — uses the panel-side flows directly." },
+  { symbol: "Fuel_Split", fullName: "Per-circuit fuel-flow share of total fuel", unit: "% of total", group: "Combustor model",
+    desc: "Fuel_Split_circuit = m_fuel_circuit / m_fuel_total × 100 for each of IP / OP / IM / OM. Shown in the Operating Snapshot table as a 4th column alongside φ, TFlame, M_Fuel. Helps the operator see which DLE circuit carries what fraction of the load — useful for diagnosing pilot-heavy operation or stoichiometric drift." },
 
   // ── Combustion efficiency & slip ────────────────────────────────────
   { symbol: "η_c", fullName: "Combustion efficiency", unit: "%", group: "Combustion efficiency & slip",
@@ -6748,9 +6810,9 @@ function CombustorMappingPanel({
                   <th style={{padding:"7px 10px",textAlign:"left",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Circuit</th>
                   <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Air flow ({mdotU})</th>
                   <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>φ</th>
+                  <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>TFlame ({uu(units,"T")})</th>
                   <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>M_Fuel ({mdotU})</th>
                   <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>Fuel_Split (%)</th>
-                  <th style={{padding:"7px 10px",textAlign:"right",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10}}>T_AFT ({uu(units,"T")})</th>
                   <th style={{padding:"7px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px",fontSize:10,borderLeft:`2px solid ${C.border}`,color:C.txtDim}}>System Metrics</th>
                 </tr>
               </thead>
@@ -6772,6 +6834,7 @@ function CombustorMappingPanel({
                         ? <PhiEditor val={phiV} setVal={setPhi} step={step} color={color}/>
                         : <PhiDisabled val={phiV} color={color}/>}
                     </td>
+                    <td style={{padding:"8px 10px",textAlign:"right",color:C.orange,fontWeight:700,borderBottom:`1px solid ${C.border}40`}}>{row?fmtT(row.T_AFT_complete_K):"—"}</td>
                     <td style={{padding:"8px 10px",textAlign:"right",color:C.accent2,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{row?fmtMdot(row.m_fuel_kg_s):"—"}</td>
                     <td style={{padding:"8px 10px",textAlign:"right",color:C.txt,fontWeight:600,borderBottom:`1px solid ${C.border}40`}}>{
                       // Fuel split = m_fuel_circuit / m_fuel_total × 100, rounded
@@ -6780,7 +6843,6 @@ function CombustorMappingPanel({
                         ? (row.m_fuel_kg_s / m_fuel_total * 100).toFixed(2) + " %"
                         : "—"
                     }</td>
-                    <td style={{padding:"8px 10px",textAlign:"right",color:C.orange,fontWeight:700,borderBottom:`1px solid ${C.border}40`}}>{row?fmtT(row.T_AFT_complete_K):"—"}</td>
                     {/* System-wide metrics: rendered once spanning all 4 rows.
                         5-row × 2-col Category|Value table — Acoustics × 2 +
                         Emissions × 2 + Inefficiencies (Penalty $/period from
@@ -8615,7 +8677,7 @@ async function _runPostCycleBatch(panels, inp, cycleResult, accurate){
       const both = await runExhaustForAutomation(inp, accurate);
       out.exh_o2  = both.o2;
       out.exh_co2 = both.co2;
-      out.exh_slip = computeExhaustSlipForRow(both, inp);
+      out.exh_slip = computeExhaustSlipForRow(both, inp, out.cycle, out.map);
     }
     if (panels.includes("combustor")){
       out.psr = await runPSRForAutomation(inp, accurate);
@@ -8709,7 +8771,7 @@ async function _runPostCycleBatch(panels, inp, cycleResult, accurate){
   // the slip + Fuel & Money block. Same shape as the free-mode runner so
   // AUTO_OUTPUTS pickers don't branch.
   if (panels.includes("exhaust") && out.exh_o2 && out.exh_co2){
-    out.exh_slip = computeExhaustSlipForRow({o2: out.exh_o2, co2: out.exh_co2}, inp);
+    out.exh_slip = computeExhaustSlipForRow({o2: out.exh_o2, co2: out.exh_co2}, inp, out.cycle, out.map);
   }
   return out;
 }
@@ -8730,7 +8792,7 @@ async function _runPostCycleSequential(panels, inp, cycleResult, accurate, parti
     const both = await runExhaustForAutomation(inp, accurate);
     out.exh_o2  = both.o2;
     out.exh_co2 = both.co2;
-    out.exh_slip = computeExhaustSlipForRow(both, inp);
+    out.exh_slip = computeExhaustSlipForRow(both, inp, out.cycle, out.map);
   }
   if (panels.includes("combustor") && !("psr" in out)){
     out.psr = await runPSRForAutomation(inp, accurate);
@@ -8843,7 +8905,7 @@ async function runAFTForAutomation(inp, accurate){
 // `both` is { o2, co2 } from runExhaustForAutomation. Both halves carry
 // {phi, T_ad, FAR_mass, AFR_mass, products} in PERCENT (free + accurate
 // shapes are unified upstream).
-function computeExhaustSlipForRow(both, inp){
+function computeExhaustSlipForRow(both, inp, cycleResultLocal, mapResultLocal){
   const fuel = inp.fuel || {};
   const ox   = inp.ox   || {};
   const fp   = calcFuelProps(fuel, ox, inp.T_fuel);
@@ -8916,6 +8978,39 @@ function computeExhaustSlipForRow(both, inp){
     ? heat_input_MMBTU_hr * fuelCost : NaN;
   const penalty_per_hr_o2  = Number.isFinite(total_cost_per_hr) ? total_cost_per_hr * (1 - sO2.eta_c)  : NaN;
   const penalty_per_hr_co2 = Number.isFinite(total_cost_per_hr) ? total_cost_per_hr * (1 - sCO2.eta_c) : NaN;
+  // ── Exhaust linkage block (Phi_Exhaust → O2_dry → CO_linked → UHC_linked) ──
+  // Only computable when both Cycle AND Mapping ran in the same row. Mirrors
+  // the runtime ExhaustPanel useMemo math exactly so Excel matches the UI.
+  // Returns NaN for any row where either runner was absent.
+  let phi_exhaust = NaN, o2_dry_at_phi_exhaust = NaN;
+  let CO_linked = NaN, UHC_linked = NaN;
+  const _mdotFuelCyc = cycleResultLocal?.mdot_fuel_kg_s;
+  const _mdotAirCyc  = cycleResultLocal?.mdot_air_post_bleed_kg_s;
+  const _mappingCO15 = mapResultLocal?.correlations?.CO15;
+  const _FAR_stoich  = 1 / ((fp.AFR_mass) || 1e-12);
+  if (Number.isFinite(_mdotFuelCyc) && Number.isFinite(_mdotAirCyc) && _mdotAirCyc > 0){
+    phi_exhaust = (_mdotFuelCyc / _mdotAirCyc) / _FAR_stoich;
+    if (Number.isFinite(phi_exhaust) && phi_exhaust > 0 && phi_exhaust < 1){
+      const _Tmix = mixT(fuel, ox, phi_exhaust, inp.T_fuel, inp.T_air);
+      try {
+        const _r = calcAFT(fuel, ox, phi_exhaust, _Tmix);
+        const _o2w = _r.products?.O2 || 0, _h2ow = _r.products?.H2O || 0;
+        const _denom = 1 - _h2ow/100;
+        if (_denom > 0) o2_dry_at_phi_exhaust = _o2w / _denom;
+        if (Number.isFinite(_mappingCO15) && _mappingCO15 > 0
+            && Number.isFinite(o2_dry_at_phi_exhaust) && o2_dry_at_phi_exhaust < 20.9){
+          CO_linked  = _mappingCO15 * (20.9 - o2_dry_at_phi_exhaust) / 5.9;
+          UHC_linked = CO_linked / 3;
+        }
+      } catch (_) { /* leave NaN */ }
+    }
+  }
+  // Per-period penalty convenience outputs. The UI defaults to monthly so
+  // these are commonly the most useful absolute numbers.
+  const penalty_per_month_o2  = Number.isFinite(penalty_per_hr_o2)  ? penalty_per_hr_o2  * 730  : NaN;
+  const penalty_per_year_o2   = Number.isFinite(penalty_per_hr_o2)  ? penalty_per_hr_o2  * 8760 : NaN;
+  const penalty_per_month_co2 = Number.isFinite(penalty_per_hr_co2) ? penalty_per_hr_co2 * 730  : NaN;
+  const penalty_per_year_co2  = Number.isFinite(penalty_per_hr_co2) ? penalty_per_hr_co2 * 8760 : NaN;
   return {
     eta_c_o2: sO2.eta_c, eta_c_co2: sCO2.eta_c,
     phi_fed_o2: sO2.phi_fed, phi_fed_co2: sCO2.phi_fed,
@@ -8927,6 +9022,10 @@ function computeExhaustSlipForRow(both, inp){
     total_cost_per_hr,
     penalty_per_hr_o2,
     penalty_per_hr_co2,
+    penalty_per_month_o2,  penalty_per_year_o2,
+    penalty_per_month_co2, penalty_per_year_co2,
+    phi_exhaust, o2_dry_at_phi_exhaust,
+    CO_linked, UHC_linked,
   };
 }
 
