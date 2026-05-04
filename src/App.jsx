@@ -6811,7 +6811,7 @@ function CombustorMappingPanel({
                               <tbody>
                                 {ROWS.map(([cat, val, color], i) => (
                                   <tr key={cat} style={{background:`${color}08`}}>
-                                    <td style={{padding:"7px 10px",color:C.txtDim,letterSpacing:".3px",fontSize:13,borderBottom:i<ROWS.length-1?`1px solid ${C.border}40`:"none"}}>{cat}</td>
+                                    <td style={{padding:"7px 10px",color,fontWeight:700,letterSpacing:".3px",fontSize:13,borderBottom:i<ROWS.length-1?`1px solid ${C.border}40`:"none"}}>{cat}</td>
                                     <td style={{padding:"7px 10px",textAlign:"right",color,fontWeight:700,fontSize:14,fontVariantNumeric:"tabular-nums",borderBottom:i<ROWS.length-1?`1px solid ${C.border}40`:"none"}}>{val}</td>
                                   </tr>
                                 ))}
