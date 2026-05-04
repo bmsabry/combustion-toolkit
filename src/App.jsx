@@ -6785,12 +6785,16 @@ function CombustorMappingPanel({
                           // Color rule per user: PX36 → red, NOx/CO → green,
                           // Inefficiencies → orange. C.strong is the canonical
                           // red, C.good the canonical green.
+                          // Power (MW_net) from cycleResult — same format as
+                          // the Operating Snapshot inlet chip (1 decimal MW).
+                          const _mwNet = cycleResult?.MW_net;
                           const ROWS = [
                             ["Acoustics — PX36_SEL",    corr ? `${_fmtPx1(corr.PX36_SEL)} ${pxUnit}`     : "—", C.strong],
                             ["Acoustics — PX36_SEL_HI", corr ? `${_fmtPx1(corr.PX36_SEL_HI)} ${pxUnit}`  : "—", C.strong],
                             ["Emissions — NOx@15",      corr ? `${corr.NOx15.toFixed(1)} ppm`            : "—", C.good],
                             ["Emissions — CO@15",       corr ? `${corr.CO15.toFixed(1)} ppm`             : "—", C.good],
                             [`Inefficiencies — Penalty / ${_period}`, _fmtUSD(_penaltyVal),               C.orange],
+                            ["Power",                   Number.isFinite(_mwNet) ? `${_mwNet.toFixed(1)} MW` : "—", C.good],
                           ];
                           return (
                             <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"monospace",fontSize:14}}>
