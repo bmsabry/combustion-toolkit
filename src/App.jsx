@@ -5536,7 +5536,7 @@ function AssumptionsPanel(){
       • linkP3  → sidebar Pressure        = P3
       • linkFAR → sidebar phi (and FAR)   = cycle-computed phi at target T4
 */
-function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx,setLinkOx,result,loading,err,mode}){
+function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx,setLinkOx,linkFuelFlow,setLinkFuelFlow,linkExhaustCO,setLinkExhaustCO,linkExhaustUHC,setLinkExhaustUHC,result,loading,err,mode}){
   const units=useContext(UnitCtx);
   const {accurate,available}=useContext(AccurateCtx);
   const fmtT=K=>uv(units,"T",K).toFixed(1)+" "+uu(units,"T");
@@ -5561,7 +5561,7 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
       <p style={{margin:"0 0 6px"}}>This panel computes the full thermodynamic cycle of the <span style={hs.em}>LMS100PB+ DLE IC</span> aero-derivative gas turbine at the ambient and load you set. Additional engines are in development.</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>You change:</span> engine, ambient pressure, ambient temperature, relative humidity, load %, intercooler coolant T (LMS100), combustor air fraction, fuel composition, water injection, and compressor bleed.</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>You get:</span> station states (T1 / T2 / T3 / T4 / T5 and P1 / P2 / P3 / P_exhaust), all mass flows, gross and net power, heat rate, efficiency, fuel-flexibility derate, and the flame-zone bulk values (T_Bulk, φ_Bulk, FAR_Bulk).</p>
-      <p style={{margin:"0 0 6px"}}><span style={hs.em}>Linkages.</span> Four toggles pipe T3, P3, φ_Bulk, and the humid-air oxidizer back into the sidebar so every other panel runs at the engine's actual flame-zone state. Each toggle has a <strong>Break link</strong> button if you need manual control.</p>
+      <p style={{margin:"0 0 6px"}}><span style={hs.em}>Linkages.</span> Seven toggles pipe T3, P3, φ_Bulk, the humid-air oxidizer, the cycle ṁ_fuel, and the Mapping CO15/UHC slip back into the sidebar / Exhaust panel so every downstream panel runs at the engine's actual flame-zone state. Each toggle has a <strong>BREAK · OFF</strong> button so you can run sensitivity studies on any single variable, and a <strong>RE-LINK ALL TO CYCLE</strong> button restores the engine-as-designed coupling in one click.</p>
       <p style={{margin:0,fontSize:11,color:C.txtMuted}}>Engine-deck anchors, calibration, and off-design scaling are documented in the <strong>Assumptions</strong> tab.</p>
     </HelpBox>
 
@@ -5575,16 +5575,18 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
           When a linkage is ON, the cycle output drives that sidebar field so <strong style={{color:C.accent}}>every other panel (AFT, Flame Speed, Combustor, Exhaust, Autoignition)</strong> runs at the engine's actual state. Break link to regain manual control.
         </div>
         {(() => {
-          // Toggles are user-controlled ONLY in Advanced Mode. In Gas
-          // Turbine Simulator the linkages are forced ON (engine mode is
-          // always linked by spec); the buttons render but are disabled
-          // and labeled LOCKED so the user can see the wiring.
-          const canToggle = (mode === "advanced");
+          // Toggles are user-controllable wherever the cycle itself runs
+          // (Simulator + Advanced). Free / CTK don't compute the cycle, so
+          // there is nothing to link FROM and the row is rendered LOCKED.
+          const canToggle = (mode === "gts" || mode === "advanced");
           return [
             {on:linkT3,set:setLinkT3,label:"Air Temp → T3",tip:"Sidebar Air Temp (K) ← cycle T3 (combustor inlet / HPC exit)"},
             {on:linkP3,set:setLinkP3,label:"Pressure → P3",tip:"Sidebar Pressure ← cycle P3 (combustor inlet pressure)"},
             {on:linkFAR,set:setLinkFAR,label:"φ → cycle φ_Bulk (flame zone)",tip:"Sidebar φ ← cycle's flame-zone φ_Bulk = φ₄ / combustor_air_frac. This is the equivalence ratio actually seen by the primary flame (richer than the diluted combustor exit φ₄). Drives T_ad on Flame Temp and the PSR-PFR / Flame Speed / Blowoff / Exhaust panels, which all model the flame — not the diluted exit."},
             {on:linkOx,set:setLinkOx,label:"Oxidizer comp → humid air @ ambient",tip:"Sidebar Oxidizer composition ← cycle's computed humid-air mol % at ambient T/RH. Required for T_ad on Flame Temp to match T4 on this panel (they use the same mechanism and same air)."},
+            {on:linkFuelFlow,set:setLinkFuelFlow,label:"Fuel Flow → cycle ṁ_fuel",tip:"Exhaust panel Fuel Flow (kg/s) ← cycle ṁ_fuel. Drives the heat-input / fuel-cost / penalty calcs on the Exhaust panel."},
+            {on:linkExhaustCO,set:setLinkExhaustCO,label:"Exhaust CO → Mapping CO15",tip:"Exhaust panel measured CO ← Mapping CO15 (corrected from 15% O₂ basis to actual O₂ basis using Phi_Exhaust)."},
+            {on:linkExhaustUHC,set:setLinkExhaustUHC,label:"Exhaust UHC → Mapping CO15 ÷ 3",tip:"Exhaust panel measured UHC ← Mapping CO15 ÷ 3 (LMS100 mapping convention) with the same O₂-basis correction."},
           ].map(l=>(
             <div key={l.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",border:`1px solid ${l.on?C.accent:C.border}`,borderRadius:6,marginBottom:6,background:l.on?`${C.accent}10`:"transparent"}}>
               <div style={{fontSize:11,color:C.txt,fontFamily:"monospace"}} title={l.tip}>
@@ -5604,6 +5606,46 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
               </button>
             </div>
           ));
+        })()}
+        {/* Re-link All — reset every linkage to the engine-as-designed
+            coupling (all seven ON). Visible whenever the cycle is
+            available (Simulator + Advanced); flagged with a count of
+            broken links so users always see whether the panel is on
+            "as-designed" or in a sensitivity-study state. */}
+        {(mode === "gts" || mode === "advanced") && (() => {
+          const _allLinks = [linkT3, linkP3, linkFAR, linkOx, linkFuelFlow, linkExhaustCO, linkExhaustUHC];
+          const _brokenCount = _allLinks.filter(v => !v).length;
+          const _allLinked = _brokenCount === 0;
+          return (
+            <div style={{marginTop:10,padding:"8px 10px",
+              background: _allLinked ? `${C.accent}10` : `${C.accent2}12`,
+              border: `1px solid ${_allLinked ? `${C.accent}40` : `${C.accent2}55`}`,
+              borderRadius:5, display:"flex", alignItems:"center",
+              justifyContent:"space-between", gap:10, flexWrap:"wrap"}}>
+              <div style={{fontSize:10.5,color:C.txt,lineHeight:1.4,flex:"1 1 220px"}}>
+                {_allLinked
+                  ? <span><strong style={{color:C.accent}}>Engine-as-designed</strong> · all 7 linkages ON · sidebar variables track the cycle</span>
+                  : <span><strong style={{color:C.accent2}}>Manual override active</strong> · {_brokenCount} of 7 linkage{_brokenCount===1?"":"s"} broken · sidebar value{_brokenCount===1?"":"s"} no longer track{_brokenCount===1?"s":""} the cycle</span>}
+              </div>
+              <button
+                onClick={() => {
+                  setLinkT3(true); setLinkP3(true); setLinkFAR(true); setLinkOx(true);
+                  setLinkFuelFlow(true); setLinkExhaustCO(true); setLinkExhaustUHC(true);
+                }}
+                disabled={_allLinked}
+                title={_allLinked ? "All linkages already ON" : "Restore every sidebar variable to follow the cycle (engine-as-designed coupling)"}
+                style={{padding:"4px 12px",fontSize:10,fontWeight:700,
+                  color: _allLinked ? C.txtMuted : C.bg,
+                  background: _allLinked ? "transparent" : C.accent,
+                  border: `1px solid ${_allLinked ? C.border : C.accent}`,
+                  borderRadius:4,
+                  cursor: _allLinked ? "not-allowed" : "pointer",
+                  fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px",
+                  whiteSpace:"nowrap"}}>
+                🔗 RE-LINK ALL TO CYCLE
+              </button>
+            </div>
+          );
         })()}
         {!available&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.warm}12`,border:`1px solid ${C.warm}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Cycle linkages need an active subscription to run the Cantera backend. The <strong style={{color:C.warm}}>Gas Turbine Simulator</strong> or <strong style={{color:C.warm}}>Advanced Mode</strong> tier enables the cycle solver.</div>}
         {available&&!accurate&&<div style={{marginTop:10,padding:"8px 10px",background:`${C.accent2}12`,border:`1px solid ${C.accent2}35`,borderRadius:5,fontSize:10.5,color:C.txt,lineHeight:1.4}}>Switch to <strong style={{color:C.accent2}}>Gas Turbine Simulator</strong> or <strong style={{color:C.accent2}}>Advanced Mode</strong> via the MODE picker in the header to run the cycle solver and activate linkages.</div>}
@@ -13550,23 +13592,25 @@ export default function App(){
   const setAccurate = () => {};
 
   // ── Effective cycle linkages (derived from mode) ──────────────────
-  // free/ctk → false (no cycle running)
-  // gts      → true  (engine mode is always linked)
-  // advanced → user-controlled via the *Raw flags above
-  const linkT3  = (mode === "advanced") ? linkT3Raw  : (mode === "gts");
-  const linkP3  = (mode === "advanced") ? linkP3Raw  : (mode === "gts");
-  const linkFAR = (mode === "advanced") ? linkFARRaw : (mode === "gts");
-  const linkOx  = (mode === "advanced") ? linkOxRaw  : (mode === "gts");
-  const linkFuelFlow = (mode === "advanced") ? linkFuelFlowRaw : (mode === "gts");
-  // Exhaust CO/UHC linkages (only meaningful when a cycle is running, so
-  // free/ctk evaluate to false naturally — no Mapping panel + no cycleResult
-  // means there's nothing to link FROM).
-  const linkExhaustCO  = (mode === "advanced") ? linkExhaustCORaw  : (mode === "gts");
-  const linkExhaustUHC = (mode === "advanced") ? linkExhaustUHCRaw : (mode === "gts");
-  // The sidebar BREAK button is only meaningful in Advanced. We pass
-  // null for onBreak in non-Advanced modes so LinkChip suppresses
-  // the button (showing the chip as a read-only status indicator).
-  const _linkBreakable = (mode === "advanced");
+  // free/ctk → false  (no cycle running, nothing to link FROM)
+  // gts/adv  → user-controlled via the *Raw flags above
+  //
+  // Both Simulator (gts) AND Advanced now expose per-link BREAK + a
+  // "Re-link All to Cycle" reset (CyclePanel) so users can run sensitivity
+  // studies on any sidebar variable while still being one click away from
+  // restoring the engine-as-designed coupling.
+  const _hasCycle = (mode === "gts" || mode === "advanced");
+  const linkT3  = _hasCycle ? linkT3Raw  : false;
+  const linkP3  = _hasCycle ? linkP3Raw  : false;
+  const linkFAR = _hasCycle ? linkFARRaw : false;
+  const linkOx  = _hasCycle ? linkOxRaw  : false;
+  const linkFuelFlow = _hasCycle ? linkFuelFlowRaw : false;
+  const linkExhaustCO  = _hasCycle ? linkExhaustCORaw  : false;
+  const linkExhaustUHC = _hasCycle ? linkExhaustUHCRaw : false;
+  // The BREAK button on each LinkChip is shown whenever a cycle is
+  // available (i.e. wherever the link itself is meaningful). In Free /
+  // CTK there is no cycle, so the chips don't render at all.
+  const _linkBreakable = _hasCycle;
   // ── Theme state ─────────────────────────────────────────────────────
   // Theme is hot-swappable ("dark" ↔ "light"). The actual palette lives at
   // module level in `_activeC` (see DARK_C / LIGHT_C). Toggling here:
@@ -14457,6 +14501,9 @@ export default function App(){
               linkP3={linkP3} setLinkP3={setLinkP3}
               linkFAR={linkFAR} setLinkFAR={setLinkFAR}
               linkOx={linkOx} setLinkOx={setLinkOx}
+              linkFuelFlow={linkFuelFlow} setLinkFuelFlow={setLinkFuelFlow}
+              linkExhaustCO={linkExhaustCO} setLinkExhaustCO={setLinkExhaustCO}
+              linkExhaustUHC={linkExhaustUHC} setLinkExhaustUHC={setLinkExhaustUHC}
               result={cycleResult} loading={bkCycle.loading} err={bkCycle.err}
             />}
             {tab==="aft"&&<AFTPanel fuel={fuel} ox={ox} phi={phi} T0={T0} P={P} Tfuel={T_fuel} WFR={WFR} waterMode={waterMode} combMode={combMode} setCombMode={setCombMode} T4_K={cycleResult?.T4_K}/>}
