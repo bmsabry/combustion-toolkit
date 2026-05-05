@@ -1736,7 +1736,7 @@ const sA=[
   ["","OM circuit","Residual fuel mass","m_fuel_OM = total − (IP+OP+IM). φ_OM solved & clamped to [0,3]."],
   ["","Linear correction (Step 1)","Y = Y_ref + Σ ∂Y/∂xₖ · (xₖ − xₖ_ref)","Vars: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (≥0.25 floor), Tflame, T3. All four outputs treat ∂/∂DT_Main piecewise: NOx15 linear above 150 °F floor / frozen below; CO15 linear above 75 °F / flat 25–75 / reversed below 25; PX36_SEL/HI linear up to 650 °F ceiling / frozen above."],
   ["","Phi_OP multiplier (Step 2)","HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45","Linear interp on the 0.10 band. PX36_SEL_HI only."],
-  ["","P3 scaling (Step 3)","(P3/638)^exp","NOx15=0.467, CO15=−1.0, SEL=1.35, SEL_HI=0.44."],
+  ["","P3 scaling (Step 3)","(P3/638)^exp","NOx15=0.467, CO15=−1.0, SEL=1.35, SEL_HI=0.65."],
   ["","C3-effective","0.8·(C2H6+C2H4+C2H2) + (C3+...+C8)","C2-class at 0.8; C3 and heavier at 1.0."],
   ["","Tflame derivative (NOx)","Piecewise: 0.12 ≥2850, 0.04 between, 0 below 2750","Integrated continuously from T_ref = 3035 °F."],
   ["","Emissions Transfer Function","Per-BRNDMD post-multipliers on NOx, CO, PX36","User-trim knob; default 1.0. PX36_SEL_HI not multiplied."],
@@ -5509,7 +5509,7 @@ function AssumptionsPanel(){
       <Assumption label="OM circuit" value="Residual fuel mass" note="m_fuel_OM = m_fuel_total − (m_fuel_IP + m_fuel_OP + m_fuel_IM). φ_OM is back-solved and clamped to [0, 3]."/>
       <Assumption label="Linear correction (Step 1)" value="Y_lin = Y_ref + Σₖ (∂Y/∂xₖ)·(xₖ − xₖ_ref)" note="Variables: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (above 0.25 floor), Tflame, T3. Per-output derivatives baked into the module — see combustor_mapping.py. All four outputs treat ∂/∂DT_Main piecewise (the entries in the linear-derivative table are 0; per-output helpers do the work): NOx15 — linear above the 150 °F floor and frozen below (so very flat IM/OM splits don't drag NOx down without bound); CO15 — linear above 75 °F (slope +0.424 ppm/°F), flat plateau between 25 and 75 °F (frozen at −159 ppm), reversed slope below 25 °F (the contribution climbs back up as DT_Main falls further); PX36_SEL and PX36_SEL_HI — linear up to a 650 °F ceiling and frozen above."/>
       <Assumption label="Phi_OP multiplier (Step 2)" value="HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45" note="Linear interp on the 0.10 band between. PX36_SEL_HI is the only output that gets this multiplier."/>
-      <Assumption label="P3 scaling (Step 3)" value="(P3/638)^exp" note="Exponents: NOx15=0.467, CO15=−1.0, PX36_SEL=1.35, PX36_SEL_HI=0.44. Anchored at the design P3 = 638 psia."/>
+      <Assumption label="P3 scaling (Step 3)" value="(P3/638)^exp" note="Exponents: NOx15=0.467, CO15=−1.0, PX36_SEL=1.35, PX36_SEL_HI=0.65. Anchored at the design P3 = 638 psia."/>
       <Assumption label="C3-effective" value="0.8·(C2H6+C2H4+C2H2) + (C3H8+C4H10+...+C8H18)" note="C2-class species at 0.8 coefficient; C3 and every heavier hydrocarbon at 1.0."/>
       <Assumption label="Tflame derivative (NOx only)" value="Piecewise: 0.12 ppm/°F ≥2850, 0.04 between 2750–2850, 0 below 2750" note="Integrated continuously from T_ref = 3035 °F so the contribution has no jumps at breakpoints."/>
       <Assumption label="Emissions Transfer Function" value="Per-BRNDMD post-multipliers on NOx, CO, PX36" note="User-trim knob, default 1.0 for all. PX36_SEL_HI does NOT take this multiplier (its tuning is in Step 2). Stored per BRNDMD ∈ {2,4,6,7}."/>

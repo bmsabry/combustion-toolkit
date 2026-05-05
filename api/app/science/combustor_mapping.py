@@ -126,7 +126,8 @@ _P3_EXP = {
                             # the new T_Bulk derivative.
                             # (Earlier excursions: 0.50 → 0.56 → 0.60 → 0.65
                             #  → 0.75 → 0.90 → 1.50 → 1.70 → 1.00 → 1.35)
-    "PX36_SEL_HI": 0.44,
+    "PX36_SEL_HI": 0.65,    # bumped from 0.44 on 2026-05-05 — slightly
+                            # super-linear P3 sensitivity per rig recalibration.
 }
 
 
