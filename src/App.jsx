@@ -2225,14 +2225,30 @@ const hs=new Proxy({},{get(_,key){if(_hsCacheFor!==_activeC){_hsCache=_buildHs()
 // disconnect (Advanced Mode). When `onBreak` is null/undefined the chip is a
 // read-only indicator — used in Gas Turbine Simulator mode where the cycle is
 // always the source of truth and the link is not user-breakable.
-function LinkChip({onBreak,label}){return(<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4,padding:"3px 7px",background:`${C.accent}15`,border:`1px solid ${C.accent}50`,borderRadius:4,fontSize:9.5,fontFamily:"monospace"}}>
-  <span style={{color:C.accent}}>🔗 {label}</span>
-  {onBreak ? (
-    <button onClick={onBreak} title="Stop pulling this value from the Cycle panel" style={{padding:"1px 6px",fontSize:8.5,fontWeight:700,color:C.accent2,background:"transparent",border:`1px solid ${C.accent2}70`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>BREAK</button>
-  ) : (
-    <span title="Linked by Application Mode — engine mode always follows the cycle" style={{padding:"1px 6px",fontSize:8.5,fontWeight:700,color:C.txtMuted,background:"transparent",border:`1px solid ${C.border}`,borderRadius:3,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>LOCKED</span>
-  )}
-</div>);}
+// LinkChip — bistable cycle-linkage indicator.
+//
+// LINKED state (green):  "🔗 Linked to {label}"  with [BREAK]  button
+// MANUAL state (orange): "✋ Manual — {label}"  with [RE-LINK] button
+//
+// The chip stays mounted in BOTH states so the user can always undo a
+// BREAK from the same spot they made it. Render sites should always
+// render the chip whenever the cycle is available (gts / advanced) and
+// pass `linked` + both setters; do NOT gate the chip on `linked` itself
+// or RE-LINK becomes unreachable.
+function LinkChip({linked, onBreak, onRelink, label}){
+  if (linked) {
+    return (<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4,padding:"3px 7px",background:`${C.accent}15`,border:`1px solid ${C.accent}50`,borderRadius:4,fontSize:9.5,fontFamily:"monospace"}}>
+      <span style={{color:C.accent}}>🔗 Linked to {label}</span>
+      <button onClick={onBreak} title="Break the link — sidebar value becomes a manual override and stops tracking the cycle"
+        style={{padding:"1px 6px",fontSize:8.5,fontWeight:700,color:C.accent2,background:"transparent",border:`1px solid ${C.accent2}70`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>BREAK</button>
+    </div>);
+  }
+  return (<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:4,padding:"3px 7px",background:`${C.accent2}15`,border:`1px solid ${C.accent2}55`,borderRadius:4,fontSize:9.5,fontFamily:"monospace"}}>
+    <span style={{color:C.accent2}}>✋ Manual — {label}</span>
+    <button onClick={onRelink} title="Restore the link — sidebar value will follow the cycle again (engine-as-designed)"
+      style={{padding:"1px 6px",fontSize:8.5,fontWeight:700,color:C.accent,background:"transparent",border:`1px solid ${C.accent}70`,borderRadius:3,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".4px"}}>RE-LINK</button>
+  </div>);
+}
 
 function HelpBox({children,title="ℹ️ How It Works"}){const[open,setOpen]=useState(false);return(<div style={{marginBottom:10}}>
   <button onClick={()=>setOpen(!open)} style={{background:"none",border:`1px solid ${C.accent}20`,borderRadius:5,padding:"5px 10px",cursor:"pointer",color:C.accent,fontSize:10,fontWeight:600,fontFamily:"monospace",letterSpacing:".5px",display:"flex",alignItems:"center",gap:5}}>
@@ -4732,7 +4748,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
               borderRadius:4,textAlign:"center",
               cursor:linkExhaustCO?"not-allowed":"text"}}/>
         </div>
-        {linkExhaustCO && <LinkChip onBreak={linkBreakable?()=>setLinkExhaustCO(false):null} label="Linked to Mapping CO15"/>}
+        {linkBreakable && <LinkChip linked={linkExhaustCO} onBreak={()=>setLinkExhaustCO(false)} onRelink={()=>setLinkExhaustCO(true)} label="Mapping CO15"/>}
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:3}}>
         <div style={{display:"flex",alignItems:"center",gap:6}}>
@@ -4752,7 +4768,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
               borderRadius:4,textAlign:"center",
               cursor:linkExhaustUHC?"not-allowed":"text"}}/>
         </div>
-        {linkExhaustUHC && <LinkChip onBreak={linkBreakable?()=>setLinkExhaustUHC(false):null} label="Linked to Mapping CO15 (÷3)"/>}
+        {linkBreakable && <LinkChip linked={linkExhaustUHC} onBreak={()=>setLinkExhaustUHC(false)} onRelink={()=>setLinkExhaustUHC(true)} label="Mapping CO15 (÷3)"/>}
       </div>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
         <Tip text="Measured H₂ in exhaust (dry, actual O₂ basis — NOT 15% O₂ corrected). Relevant for syngas, H₂-blended fuels, or partial oxidation upsets. Used in the energy-loss formula via LHV_H₂ = 241.83 kJ/mol. Set to zero for natural-gas combustion (H₂ slip is typically negligible there).">
@@ -4815,11 +4831,11 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
                 borderRadius:4,textAlign:"center",
                 cursor:linkFuelFlow?"not-allowed":"text"}}/>
           </div>
-          {/* Cycle ṁ_fuel linkage chip — shown when the effective link
-              is active (forced ON in Gas Turbine Simulator; user-controlled
-              ON in Advanced). Hidden in Free / Combustion Toolkit (no cycle
-              running). BREAK button is suppressed (LOCKED) outside Advanced. */}
-          {linkFuelFlow && <LinkChip onBreak={linkBreakable?()=>setLinkFuelFlow(false):null} label="Linked to Cycle ṁ_fuel"/>}
+          {/* Cycle ṁ_fuel linkage chip — bistable toggle. Renders
+              whenever the cycle is available (gts / advanced); the chip
+              itself shows LINKED-with-BREAK or MANUAL-with-RE-LINK. In
+              Free / Combustion Toolkit (no cycle) it doesn't render. */}
+          {linkBreakable && <LinkChip linked={linkFuelFlow} onBreak={()=>setLinkFuelFlow(false)} onRelink={()=>setLinkFuelFlow(true)} label="Cycle ṁ_fuel"/>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:6}}>
           <Tip text="Fuel cost in US dollars per million BTU on a LHV basis — the standard contract / regulatory unit for natural gas. Default $4.00/MMBTU LHV (typical 2024-2026 industrial-tier U.S. NG benchmark). Adjust to your actual fuel contract.">
@@ -14234,7 +14250,37 @@ export default function App(){
             <div data-card="operating-conditions">
             {/* ── Operating Conditions ───────────────────────────── */}
             <div style={{background:C.bg2,border:`1px solid ${C.accent}25`,borderRadius:8,padding:12,marginBottom:10}}>
-              <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px",marginBottom:8}}>Operating Conditions</div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,gap:8,flexWrap:"wrap"}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:"1.5px"}}>Operating Conditions</div>
+                {/* Discoverable global "Re-link All" button — visible from
+                    every tab whenever the cycle is available. Counts how
+                    many of the 7 linkages are currently broken; greys out
+                    when nothing to reset. */}
+                {accurate && hasOnline && _linkBreakable && (() => {
+                  const _allLinks = [linkT3, linkP3, linkFAR, linkOx, linkFuelFlow, linkExhaustCO, linkExhaustUHC];
+                  const _brokenCount = _allLinks.filter(v => !v).length;
+                  const _allLinked = _brokenCount === 0;
+                  return (
+                    <button
+                      onClick={() => {
+                        setLinkT3(true); setLinkP3(true); setLinkFAR(true); setLinkOx(true);
+                        setLinkFuelFlow(true); setLinkExhaustCO(true); setLinkExhaustUHC(true);
+                      }}
+                      disabled={_allLinked}
+                      title={_allLinked ? "All 7 cycle linkages already ON" : `Restore all 7 cycle linkages — ${_brokenCount} currently broken`}
+                      style={{padding:"3px 8px",fontSize:9,fontWeight:700,
+                        color: _allLinked ? C.txtMuted : C.bg,
+                        background: _allLinked ? "transparent" : C.accent,
+                        border: `1px solid ${_allLinked ? C.border : C.accent}`,
+                        borderRadius:4,
+                        cursor: _allLinked ? "default" : "pointer",
+                        fontFamily:"'Barlow Condensed',sans-serif",
+                        letterSpacing:".5px",whiteSpace:"nowrap"}}>
+                      🔗 RE-LINK ALL{_allLinked ? "" : ` · ${_brokenCount}/7`}
+                    </button>
+                  );
+                })()}
+              </div>
               {/* Field order per Application Mode spec:
                     Air Temp → Pressure → TFlame_CC → phi → FAR → Fuel Temp */}
               {/* ── Air Temp ─────────────────────────────────────────── */}
@@ -14242,13 +14288,13 @@ export default function App(){
                 <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}} title="Air / oxidizer inlet temperature. On the Combustor tab, Cantera mixes this with Fuel Temp adiabatically (mass-weighted enthalpy balance with T-dependent NASA polynomials) to get the actual PSR inlet T.">Air Temp ({uu(units,"T")})</label>
                 <NumField value={uv(units,"T",T0)} decimals={2} onCommit={v=>setT0(uvI(units,"T",v))} style={{...S.inp,borderColor:`${C.accent3}55`}}/>
                 <input type="range" min={units==="SI"?250:0} max={units==="SI"?900:1160} step={5} value={+uv(units,"T",T0).toFixed(2)} onChange={e=>setT0(uvI(units,"T",+e.target.value))} style={{width:"100%",accentColor:C.accent3,marginTop:4}}/>
-                {accurate&&hasOnline&&linkT3&&<LinkChip onBreak={_linkBreakable?()=>setLinkT3(false):null} label="Linked to Cycle T3"/>}
+                {accurate&&hasOnline&&_linkBreakable&&<LinkChip linked={linkT3} onBreak={()=>setLinkT3(false)} onRelink={()=>setLinkT3(true)} label="Cycle T3"/>}
               </div>
               {/* ── Pressure ─────────────────────────────────────────── */}
               <div style={{marginBottom:10}}>
                 <label style={{fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"block",marginBottom:3}}>Pressure ({uu(units,"P")})</label>
                 <NumField value={uv(units,"P",P)} decimals={1} onCommit={v=>setP(uvI(units,"P",v))} style={S.inp}/>
-                {accurate&&hasOnline&&linkP3&&<LinkChip onBreak={_linkBreakable?()=>setLinkP3(false):null} label="Linked to Cycle P3"/>}
+                {accurate&&hasOnline&&_linkBreakable&&<LinkChip linked={linkP3} onBreak={()=>setLinkP3(false)} onRelink={()=>setLinkP3(true)} label="Cycle P3"/>}
               </div>
               {/* ── Tflame (adiabatic, complete combustion) — third equivalent
                    way to express the operating point. φ, FAR, and T_flame are
@@ -14316,7 +14362,7 @@ export default function App(){
                 </div>
                 <input type="range" min="0" max="3.0" step="0.01" value={Math.min(3.0,phi)} onChange={e=>setPhiClamped(+e.target.value)} style={{width:"100%",accentColor:C.accent}}/>
                 <div style={{textAlign:"center",fontSize:9.5,color:C.txtMuted,marginTop:-2}}>{phi<0.95?"lean":phi>1.05?"rich":"~stoichiometric"}</div>
-                {accurate&&hasOnline&&linkFAR&&<LinkChip onBreak={_linkBreakable?()=>setLinkFAR(false):null} label="Linked to Cycle φ_Bulk"/>}
+                {accurate&&hasOnline&&_linkBreakable&&<LinkChip linked={linkFAR} onBreak={()=>setLinkFAR(false)} onRelink={()=>setLinkFAR(true)} label="Cycle φ_Bulk"/>}
               </div>
               {/* ── FAR ──────────────────────────────────────────────── */}
               <div style={{marginBottom:10}}>
@@ -14345,7 +14391,7 @@ export default function App(){
             <div>
               <CompEditor title="Oxidizer (mol%)" comp={ox} setComp={setOx} presets={OX_PRESETS} speciesList={OX_SP} accent={C.accent3} initialPreset="Humid Air (60%RH 25°C)"
                 helpText="Enter oxidizer composition in mole percent. 'Dry Air' is the standard. Use humid air, O₂-enriched, or vitiated air for specialized analyses."/>
-              {accurate&&hasOnline&&linkOx&&<div style={{marginTop:-2,marginBottom:8}}><LinkChip onBreak={_linkBreakable?()=>setLinkOx(false):null} label="Linked to Cycle humid air"/></div>}
+              {accurate&&hasOnline&&_linkBreakable&&<div style={{marginTop:-2,marginBottom:8}}><LinkChip linked={linkOx} onBreak={()=>setLinkOx(false)} onRelink={()=>setLinkOx(true)} label="Cycle humid air"/></div>}
             </div>
               );
 
