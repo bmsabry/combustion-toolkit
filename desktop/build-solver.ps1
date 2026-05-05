@@ -11,21 +11,41 @@ Write-Host "=== Combustion Toolkit Windows solver build ==="
 Write-Host "  repo: $repo"
 Write-Host "  out:  $out"
 
-# ---- locate Python 3.12 or newer ----
+# ---- locate Python 3.12+ ----
+# Explicit check of common install paths FIRST. We have to skip the
+# Microsoft Store stub at C:\Users\<u>\AppData\Local\Microsoft\WindowsApps\python.exe
+# which prints "Python was not found" instead of running anything.
 function Find-Python {
-  foreach ($cmd in @("python", "python3.12", "python3")) {
-    $p = Get-Command $cmd -ErrorAction SilentlyContinue
-    if ($p) {
-      $v = & $cmd --version 2>&1
-      if ($v -match "Python 3\.1[2-9]") { return $cmd }
+  $candidates = @(
+    "C:\ProgramData\Anaconda3\python.exe",
+    "C:\ProgramData\Miniconda3\python.exe",
+    "$env:USERPROFILE\anaconda3\python.exe",
+    "$env:USERPROFILE\Anaconda3\python.exe",
+    "$env:USERPROFILE\miniconda3\python.exe",
+    "$env:USERPROFILE\AppData\Local\Programs\Python\Python313\python.exe",
+    "$env:USERPROFILE\AppData\Local\Programs\Python\Python312\python.exe",
+    "C:\Python313\python.exe",
+    "C:\Python312\python.exe"
+  )
+  foreach ($p in $candidates) {
+    if (Test-Path $p) {
+      $v = & $p --version 2>&1
+      if ($v -match "Python 3\.1[2-9]") {
+        return $p
+      }
     }
   }
-  $py = Get-Command "py" -ErrorAction SilentlyContinue
-  if ($py) {
-    $v = & py -3.12 --version 2>&1
-    if ($v -match "Python 3\.1[2-9]") { return "py -3.12" }
+  # Fall back to PATH search, but exclude the WindowsApps Store stub.
+  foreach ($cmd in @("python", "python3.12", "python3")) {
+    $found = Get-Command $cmd -ErrorAction SilentlyContinue
+    if ($found -and ($found.Source -notmatch "WindowsApps")) {
+      $v = & $found.Source --version 2>&1
+      if ($v -match "Python 3\.1[2-9]") {
+        return $found.Source
+      }
+    }
   }
-  throw "Python 3.12+ not found. Install from python.org and re-run."
+  throw "Python 3.12+ not found in Anaconda/Miniconda paths or PATH. Install from python.org and re-run."
 }
 
 $python = Find-Python
