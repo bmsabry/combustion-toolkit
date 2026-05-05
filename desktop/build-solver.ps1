@@ -2,7 +2,11 @@
 # ASCII-only, no fancy quotes, no em-dashes, no parens inside strings.
 # Output: desktop/solver-dist/ctk-solver.exe
 
-$ErrorActionPreference = "Stop"
+# Use Continue (default) instead of Stop. With "Stop", PowerShell treats ANY
+# native-tool stderr output as fatal, including harmless warnings like
+# PyInstaller's "115 WARNING: Assuming this is not an Anaconda environment".
+# We rely on explicit $LASTEXITCODE checks after each native call instead.
+$ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = Resolve-Path (Join-Path $here "..")
 $out  = Join-Path $here "solver-dist"
@@ -96,29 +100,34 @@ Write-Host "Running PyInstaller ..."
 Push-Location $repo
 try {
   $workPath = Join-Path $out "build"
-  & $venvPy -m PyInstaller `
-    --clean `
-    --noconfirm `
-    --onefile `
-    --name ctk-solver `
-    --distpath $out `
-    --workpath $workPath `
-    --specpath $out `
-    --hidden-import cantera `
-    --hidden-import uvicorn.logging `
-    --hidden-import uvicorn.loops `
-    --hidden-import uvicorn.loops.auto `
-    --hidden-import uvicorn.protocols `
-    --hidden-import uvicorn.protocols.http `
-    --hidden-import uvicorn.protocols.http.auto `
-    --hidden-import uvicorn.protocols.websockets `
-    --hidden-import uvicorn.protocols.websockets.auto `
-    --hidden-import uvicorn.lifespan `
-    --hidden-import uvicorn.lifespan.on `
-    --collect-all cantera `
-    --collect-all scipy `
-    $bootstrapPath 2>&1 | Out-Host
-  if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+  # Build the PyInstaller arg list as a flat array (avoids all of
+  # PowerShell's line-continuation parsing). PyInstaller writes warnings
+  # to stderr; with $ErrorActionPreference = Continue (set above) those
+  # are fine. We check $LASTEXITCODE explicitly after.
+  $pyiArgs = @(
+    "-m", "PyInstaller",
+    "--clean", "--noconfirm", "--onefile",
+    "--name", "ctk-solver",
+    "--distpath", $out,
+    "--workpath", $workPath,
+    "--specpath", $out,
+    "--hidden-import", "cantera",
+    "--hidden-import", "uvicorn.logging",
+    "--hidden-import", "uvicorn.loops",
+    "--hidden-import", "uvicorn.loops.auto",
+    "--hidden-import", "uvicorn.protocols",
+    "--hidden-import", "uvicorn.protocols.http",
+    "--hidden-import", "uvicorn.protocols.http.auto",
+    "--hidden-import", "uvicorn.protocols.websockets",
+    "--hidden-import", "uvicorn.protocols.websockets.auto",
+    "--hidden-import", "uvicorn.lifespan",
+    "--hidden-import", "uvicorn.lifespan.on",
+    "--collect-all", "cantera",
+    "--collect-all", "scipy",
+    $bootstrapPath
+  )
+  & $venvPy @pyiArgs 2>&1 | ForEach-Object { Write-Host $_ }
+  if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 } finally {
   Pop-Location
 }
