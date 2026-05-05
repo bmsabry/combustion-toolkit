@@ -12842,9 +12842,13 @@ function EngineAmbientSidebar({
             {k:"manual",lbl:"MANUAL",tip:"You set the bleed open % directly — type a value, click ± with the selected step, or drag the slider."},
           ].map(o=>(
             <button key={o.k} onClick={()=>{
-              if(o.k==="manual"&&bleedMode!=="manual"){
-                setBleedOpenManualPct(bleedOpenPct);
-              }
+              // Clicking AUTO clears any prior MANUAL override so the
+              // displayed value drops back to the live auto schedule.
+              // Clicking MANUAL does NOT seed a value — the override
+              // stays null and the field continues to track auto until
+              // the operator actually types or clicks ±, which is what
+              // freezes the override at that value.
+              if(o.k==="auto") setBleedOpenManualPct(null);
               setBleedMode(o.k);
             }} title={o.tip} style={{
               flex:1,padding:"4px 8px",fontSize:10,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",
@@ -13390,7 +13394,13 @@ export default function App(){
   // Auto schedule: 100 % open at load ≤ 75 %, 0 % at load ≥ 95 %, linear between.
   // Effective bleed_air_frac = (open % / 100) × (valve_size % / 100).
   const[bleedMode,setBleedMode]=useState("auto");
-  const[bleedOpenManualPct,setBleedOpenManualPct]=useState(100);
+  // null = "no operator override yet" — the displayed Bleed Open % will
+  // continuously track the AUTO value (autoBleedOpenPct(load)) even when
+  // the mode toggle reads MANUAL, until the operator actually types a
+  // value or clicks ±. The moment they do, the override freezes at that
+  // value. Clicking AUTO again clears the override (back to null) so the
+  // next switch to MANUAL again starts by tracking auto.
+  const[bleedOpenManualPct,setBleedOpenManualPct]=useState(null);
   const[bleedValveSizePct,setBleedValveSizePct]=useState(7.75);
   // UI step size for Bleed Open % (manual mode). Selectable via the chips
   // under the Bleed Open NumField. 1 = fine (per-% step); 15/30/45/60/75/90 are
@@ -13739,7 +13749,17 @@ export default function App(){
     if(L>=95)return 0;
     return 100*(95-L)/20;
   };
-  const bleedOpenPct=bleedMode==="auto"?Math.round(autoBleedOpenPct(cycleLoad)):bleedOpenManualPct;
+  // bleedOpenPct = effective bleed open % currently being sent to the
+  // backend cycle. In AUTO it's the load-driven schedule. In MANUAL it's
+  // the operator override IF set (a number) — but if the override is null
+  // (no operator action since last AUTO toggle), the field still tracks
+  // the AUTO schedule so the user sees the live calculated value, then
+  // can take over by typing or clicking ±.
+  const bleedOpenPct = bleedMode==="auto"
+    ? Math.round(autoBleedOpenPct(cycleLoad))
+    : (bleedOpenManualPct != null
+        ? bleedOpenManualPct
+        : Math.round(autoBleedOpenPct(cycleLoad)));
   // Effective compressor-discharge fraction lost to ambient. Backend clamps
   // to [0, 0.50] so the UI never has to.
   const bleedAirFrac=Math.max(0,Math.min(0.50,(bleedOpenPct/100)*(bleedValveSizePct/100)));
