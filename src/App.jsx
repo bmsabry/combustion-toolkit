@@ -5815,11 +5815,11 @@ function CombustorMappingPanel({
   const units=useContext(UnitCtx);
   const {accurate}=useContext(AccurateCtx);
 
-  // ─── Engine load ramp — 0.2 MW/sec ────────────────────────────────────
+  // ─── Engine load ramp — 0.3 MW/sec ────────────────────────────────────
   // When the user changes LOAD, the cycle backend returns the new steady-
-  // state engine outputs instantly. A real LMS100 takes time (~0.2 MW/sec
+  // state engine outputs instantly. A real LMS100 takes time (~0.3 MW/sec
   // permitted gradient). We interpolate cycleResult linearly between the
-  // previous displayed state and the new target at 0.2 MW/sec so the live
+  // previous displayed state and the new target at 0.3 MW/sec so the live
   // mapping traces show a representative engine response.
   //
   // CRITICAL: ONLY load (MW) changes are ramped. φ button clicks, fuel
@@ -5828,7 +5828,7 @@ function CombustorMappingPanel({
   // output (PX36/NOx/CO correlations) is interpolated alongside the
   // cycle ONLY while a load ramp is in flight; for any other input
   // change the map snaps to the latest backend value.
-  const RAMP_RATE_MW_PER_S = 0.2;
+  const RAMP_RATE_MW_PER_S = 0.3;
   const [displayedCycle, setDisplayedCycle] = useState(cycleResultProp);
   const [displayedMap,   setDisplayedMap]   = useState(bkMapProp?.data || null);
   // ramp state — `active` flips true ONLY when a load (MW) change triggers
