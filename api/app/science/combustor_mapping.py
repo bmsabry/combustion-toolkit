@@ -66,15 +66,18 @@ _REFPT = {
 # already converted to "per unit phi" by pre-multiplying by 10.
 # Phi_IP applies only above 0.25 (one-sided ramp). See _phi_ip_delta below.
 _DERIV = {
-    # PX36_SEL and PX36_SEL_HI ∂/∂DT_Main are piecewise (linear up to
-    # DT_Main = 650 °F, then flat) and handled by
-    # _px36_dt_main_contribution() below — the entries here are 0 to
-    # avoid double-counting in the generic linear loop.
-    # NOx15 ∂/∂DT_Main is also piecewise: linear above the 150 °F floor,
-    # frozen below, handled by _nox15_dt_main_contribution(). Its entry
-    # here is 0 for the same reason. CO15 keeps the original unclamped
-    # linear slope.
-    "DT_Main": {"NOx15": 0.0,    "CO15":  0.424, "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
+    # All four outputs treat ∂/∂DT_Main piecewise — the entries here are
+    # 0 to avoid double-counting in the generic linear loop. Per-output
+    # piecewise helpers handle the actual contribution:
+    #   NOx15        → _nox15_dt_main_contribution()
+    #                  linear above 150 °F floor, frozen below
+    #   CO15         → _co15_dt_main_contribution()
+    #                  linear above 75 °F, flat 25–75, reversed below 25
+    #   PX36_SEL     → _px36_dt_main_contribution(slope=-0.004)
+    #                  linear up to 650 °F ceiling, frozen above
+    #   PX36_SEL_HI  → _px36_dt_main_contribution(slope=-0.0004)
+    #                  same 650 °F ceiling
+    "DT_Main": {"NOx15": 0.0,    "CO15":  0.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "N2":      {"NOx15": -0.25,  "CO15":  2.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "C3":      {"NOx15":  0.75,  "CO15": -12.0,  "PX36_SEL":  0.04,   "PX36_SEL_HI":  0.0266},
     "Phi_OP":  {"NOx15":  17.5,  "CO15":  -70.0, "PX36_SEL": -1.5,    "PX36_SEL_HI": -0.15},
@@ -100,6 +103,16 @@ _DT_MAIN_PX36_CLAMP_F      = 650.0     # above this DT_Main, contribution is fro
 # typical operating values.
 _DT_MAIN_NOX15_SLOPE  = 0.0375  # ppm/°F — same magnitude as old _DERIV
 _DT_MAIN_NOX15_FLOOR_F = 150.0  # below this DT_Main, contribution is frozen
+
+# CO15 piecewise DT_Main (linear → flat plateau → reversed). The
+# generic linear loop would push CO15 deeply negative at low DT_Main
+# (slope is 11x stronger than NOx); the flat plateau caps the reduction
+# at DT_Main = 75 °F and the reversed slope below 25 °F brings CO15
+# back UP — physically the kinetic floor + IM-cold-spot dynamics flip
+# direction once the spread is very flat.
+_DT_MAIN_CO15_SLOPE     = 0.424  # ppm/°F (above 75 °F) — same as old _DERIV
+_DT_MAIN_CO15_FLAT_HI_F = 75.0   # above this, slope = +0.424
+_DT_MAIN_CO15_FLAT_LO_F = 25.0   # below this, slope = -0.424; in between, slope = 0
 
 # Phi_IP activation threshold. Below this the IP derivative contributes 0.
 _PHI_IP_FLOOR = 0.25
@@ -173,6 +186,40 @@ def _px36_dt_main_contribution(DT_Main_F: float,
     DT = float(DT_Main_F)
     DT_clamped = min(DT_clamp_F, DT)
     return slope_per_F * (DT_clamped - DT_ref_F)
+
+
+def _co15_dt_main_contribution(DT_Main_F: float,
+                                slope_per_F:  float = _DT_MAIN_CO15_SLOPE,
+                                DT_ref_F:     float = 450.0,
+                                DT_flat_hi_F: float = _DT_MAIN_CO15_FLAT_HI_F,
+                                DT_flat_lo_F: float = _DT_MAIN_CO15_FLAT_LO_F) -> float:
+    """Piecewise CO15 contribution from DT_Main:
+
+      DT_Main > DT_flat_hi_F (75 °F)      → slope_per_F × (DT_Main − DT_ref_F)
+      DT_flat_lo_F ≤ DT ≤ DT_flat_hi_F    → flat plateau at the value reached
+                                            at DT_flat_hi_F
+                                            = slope × (75 − 450) = −159.0 ppm
+      DT_Main < DT_flat_lo_F (25 °F)      → reversed slope (−slope_per_F)
+                                            applied below 25 °F
+                                            = -159 + (−slope) × (DT − 25)
+
+    The integral is continuous at both breakpoints (75 and 25 °F).
+
+    Slope direction: above 75 °F a wider IM/OM spread ↑ CO (cold-spot
+    region grows). In [25, 75] the contribution flattens — incremental
+    spread changes don't add CO. Below 25 °F the slope reverses: the
+    spread is so flat that further reduction stops making things worse
+    and a kinetic-floor / IM-cold-spot dynamics flip dominates,
+    nudging CO back up.
+    """
+    DT = float(DT_Main_F)
+    plateau = slope_per_F * (DT_flat_hi_F - DT_ref_F)
+    if DT >= DT_flat_hi_F:
+        return slope_per_F * (DT - DT_ref_F)
+    if DT >= DT_flat_lo_F:
+        return plateau
+    # Below the flat plateau: reversed slope = -slope_per_F
+    return plateau + (-slope_per_F) * (DT - DT_flat_lo_F)
 
 
 def _nox15_dt_main_contribution(DT_Main_F: float,
@@ -431,6 +478,10 @@ def run(
         if name == "NOx15":
             y += _nox15_tflame_contribution(Tflame_F)
             y += _nox15_dt_main_contribution(DT_Main_F)
+        # CO15 gets a piecewise DT_Main contribution: linear above 75 °F,
+        # flat plateau between 25–75, reversed slope below 25.
+        if name == "CO15":
+            y += _co15_dt_main_contribution(DT_Main_F)
         # PX36_SEL gets a clamped-linear Tflame contribution (anchored at
         # 3035 °F, slope +0.318 psi per +50 °F, frozen below 2950 °F and
         # above 3060 °F). PX36_SEL_HI is intentionally NOT given a Tflame
