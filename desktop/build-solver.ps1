@@ -1,31 +1,18 @@
-# Build the standalone `ctk-solver.exe` binary that Electron spawns on Windows.
-#
-# Requirements:
-#   - Python 3.12 on PATH (or accessible via `py -3.12`)
-#   - Microsoft Visual C++ Build Tools (PyInstaller needs them, and Cantera's
-#     wheel install pulls binaries that rely on the MSVC redistributable)
-#   - Internet access (first run downloads ~500 MB of wheels into a venv)
-#
-# Output: desktop/solver-dist/ctk-solver.exe (~250 MB, includes Cantera + GRI-Mech)
-#
-# Notes on the Ed25519 anti-piracy upgrade:
-#   The previous HMAC scheme required CTK_BAKED_SIGNING_KEY env var. The new
-#   Ed25519 scheme bakes only the PUBLIC KEY into the binary (via the default
-#   value in config.py), so no secret env var is needed at build time. The
-#   private key stays on the Render backend.
+# Build the standalone ctk-solver.exe binary that Electron spawns on Windows.
+# ASCII-only, no fancy quotes, no em-dashes, no parens inside strings.
+# Output: desktop/solver-dist/ctk-solver.exe
 
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = Resolve-Path (Join-Path $here "..")
 $out  = Join-Path $here "solver-dist"
 
-Write-Host "=== Combustion Toolkit — Windows solver build ==="
+Write-Host "=== Combustion Toolkit Windows solver build ==="
 Write-Host "  repo: $repo"
 Write-Host "  out:  $out"
 
-# ---- locate Python 3.12 ----
+# ---- locate Python 3.12 or newer ----
 function Find-Python {
-  # Prefer plain `python` if it's 3.12; fall back to `py -3.12`.
   foreach ($cmd in @("python", "python3.12", "python3")) {
     $p = Get-Command $cmd -ErrorAction SilentlyContinue
     if ($p) {
@@ -52,50 +39,50 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 $venv = Join-Path $here ".solver-venv"
 if (-not (Test-Path $venv)) {
   Write-Host "Creating venv at $venv ..."
-  & $python.Split(' ')[0] $python.Split(' ')[1..($python.Split(' ').Length-1)] -m venv $venv 2>&1 | Out-Host
+  $pyParts = $python.Split(' ')
+  if ($pyParts.Length -gt 1) {
+    & $pyParts[0] $pyParts[1..($pyParts.Length-1)] -m venv $venv 2>&1 | Out-Host
+  } else {
+    & $pyParts[0] -m venv $venv 2>&1 | Out-Host
+  }
   if ($LASTEXITCODE -ne 0) { throw "venv creation failed" }
 }
 
-$venvPy  = Join-Path $venv "Scripts\python.exe"
-$venvPip = Join-Path $venv "Scripts\pip.exe"
-
+$venvPy = Join-Path $venv "Scripts\python.exe"
 if (-not (Test-Path $venvPy)) { throw "venv python not at $venvPy" }
 
 Write-Host "Installing build deps into venv ..."
 & $venvPy -m pip install --upgrade pip wheel 2>&1 | Out-Host
 & $venvPy -m pip install pyinstaller==6.11.0 2>&1 | Out-Host
 
-Write-Host "Installing api/requirements.txt (this can take 5-10 min the first time) ..."
-& $venvPy -m pip install -r (Join-Path $repo "api\requirements.txt") 2>&1 | Out-Host
+Write-Host "Installing api requirements file - this can take 5 to 10 minutes the first time."
+$reqFile = Join-Path $repo "api\requirements.txt"
+& $venvPy -m pip install -r $reqFile 2>&1 | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
 # ---- bootstrap wrapper ----
-# Same trick as the bash version: PyInstaller needs a single entrypoint script,
-# and we want to drop into app.desktop_main:main().
-#
-# We deliberately avoid PowerShell's `@" ... "@` here-string syntax. Git on
-# Windows converts LF -> CRLF on checkout for text files, and PowerShell's
-# here-string parser is fragile under that conversion (the @" line can end
-# up being interpreted as a multi-character token). Building the bootstrap
-# from an array of lines is bulletproof.
+# PyInstaller needs a single entrypoint script. Build it from a string array
+# instead of a here-string because git autocrlf can break PowerShell here-strings.
 $bootstrapPath = Join-Path $out "_bootstrap.py"
-@(
-  "import sys"
-  "from app.desktop_main import main"
+$bootstrapLines = @(
+  "import sys",
+  "from app.desktop_main import main",
   "raise SystemExit(main())"
-) | Out-File -FilePath $bootstrapPath -Encoding ascii
+)
+Set-Content -Path $bootstrapPath -Value $bootstrapLines -Encoding ascii
 
 # ---- run PyInstaller ----
 Write-Host "Running PyInstaller ..."
 Push-Location $repo
 try {
+  $workPath = Join-Path $out "build"
   & $venvPy -m PyInstaller `
     --clean `
     --noconfirm `
     --onefile `
     --name ctk-solver `
     --distpath $out `
-    --workpath (Join-Path $out "build") `
+    --workpath $workPath `
     --specpath $out `
     --hidden-import cantera `
     --hidden-import uvicorn.logging `
@@ -124,14 +111,9 @@ Remove-Item -Force $bootstrapPath -ErrorAction SilentlyContinue
 $exe = Join-Path $out "ctk-solver.exe"
 if (-not (Test-Path $exe)) { throw "ctk-solver.exe was not produced" }
 
-# Avoid `1MB` literal and `$sizeMB MB` interpolation — PowerShell's parser
-# interprets `MB` as a reserved byte-multiplier keyword in some contexts
-# and the tokenizer fails inside the interpolated string when the name
-# of a preceding variable also ends in MB. Use plain bytes/megabytes math
-# and a format-string instead.
-$exeBytes = (Get-Item $exe).Length
+$exeBytes = [int64](Get-Item $exe).Length
 $exeMegabytes = [math]::Round($exeBytes / 1048576, 1)
 Write-Host ""
-Write-Host ("==> Built: {0}  ({1} megabytes)" -f $exe, $exeMegabytes)
+Write-Host ("==> Built: {0} - {1} megabytes" -f $exe, $exeMegabytes)
 Write-Host ""
 Get-ChildItem $out
