@@ -72,13 +72,18 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 # ---- bootstrap wrapper ----
 # Same trick as the bash version: PyInstaller needs a single entrypoint script,
 # and we want to drop into app.desktop_main:main().
-$bootstrap = @"
-import sys
-from app.desktop_main import main
-raise SystemExit(main())
-"@
+#
+# We deliberately avoid PowerShell's `@" ... "@` here-string syntax. Git on
+# Windows converts LF -> CRLF on checkout for text files, and PowerShell's
+# here-string parser is fragile under that conversion (the @" line can end
+# up being interpreted as a multi-character token). Building the bootstrap
+# from an array of lines is bulletproof.
 $bootstrapPath = Join-Path $out "_bootstrap.py"
-$bootstrap | Out-File -FilePath $bootstrapPath -Encoding ascii
+@(
+  "import sys"
+  "from app.desktop_main import main"
+  "raise SystemExit(main())"
+) | Out-File -FilePath $bootstrapPath -Encoding ascii
 
 # ---- run PyInstaller ----
 Write-Host "Running PyInstaller ..."
