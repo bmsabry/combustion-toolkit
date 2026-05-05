@@ -14380,28 +14380,37 @@ export default function App(){
 
           {/* CONTENT */}
           <div style={{flex:1,padding:"12px 16px",overflowY:"auto",minWidth:0}}>
-            {tab==="mapping"&&<CombustorMappingPanel
-              fuel={fuel} Tfuel={T_fuel}
-              WFR={WFR} waterMode={waterMode} T_water={T_water}
-              cycleResult={cycleResult} bkCycle={bkCycle}
-              bkMap={bkMap}
-              exhaustPenalty={exhaustPenalty}
-              emStagingBanner={emStagingBanner}
-              cancelEmissionsStaging={_cancelEmissionsStaging}
-              mwiDerateOverride={mwiDerateOverride}
-              setMwiDerateOverride={setMwiDerateOverride}
-              w36w3={mapW36w3} setW36w3={setMapW36w3}
-              fracIP={mapFracIP} setFracIP={setMapFracIP}
-              fracOP={mapFracOP} setFracOP={setMapFracOP}
-              fracIM={mapFracIM} setFracIM={setMapFracIM}
-              fracOM={mapFracOM} setFracOM={setMapFracOM}
-              phiIP={mapPhiIP} setPhiIP={setMapPhiIP}
-              phiOP={mapPhiOP} setPhiOP={setMapPhiOP}
-              phiIM={mapPhiIM} setPhiIM={setMapPhiIM}
-              mappingTables={mappingTables} setMappingTables={setMappingTables}
-              emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
-              brndmdOverride={brndmdOverride} setBrndmdOverride={setBrndmdOverride}
-            />}
+            {/* CombustorMappingPanel is ALWAYS mounted (display:none when not
+                the active tab) so a Live Mapping recording survives tab nav.
+                Without this, navigating away unmounts the panel → ticker
+                cleanup fires → bufferRef is dropped → mappingActive resets.
+                Same pattern as ExhaustPanel + AutomatePanel below. The 2 Hz
+                ticker is gated on mappingActive, so when no recording is
+                running there is no per-tick cost from the always-mount. */}
+            <div style={{display: tab==="mapping" ? "block" : "none"}}>
+              <CombustorMappingPanel
+                fuel={fuel} Tfuel={T_fuel}
+                WFR={WFR} waterMode={waterMode} T_water={T_water}
+                cycleResult={cycleResult} bkCycle={bkCycle}
+                bkMap={bkMap}
+                exhaustPenalty={exhaustPenalty}
+                emStagingBanner={emStagingBanner}
+                cancelEmissionsStaging={_cancelEmissionsStaging}
+                mwiDerateOverride={mwiDerateOverride}
+                setMwiDerateOverride={setMwiDerateOverride}
+                w36w3={mapW36w3} setW36w3={setMapW36w3}
+                fracIP={mapFracIP} setFracIP={setMapFracIP}
+                fracOP={mapFracOP} setFracOP={setMapFracOP}
+                fracIM={mapFracIM} setFracIM={setMapFracIM}
+                fracOM={mapFracOM} setFracOM={setMapFracOM}
+                phiIP={mapPhiIP} setPhiIP={setMapPhiIP}
+                phiOP={mapPhiOP} setPhiOP={setMapPhiOP}
+                phiIM={mapPhiIM} setPhiIM={setMapPhiIM}
+                mappingTables={mappingTables} setMappingTables={setMappingTables}
+                emissionsMode={emissionsMode} setEmissionsMode={setEmissionsMode}
+                brndmdOverride={brndmdOverride} setBrndmdOverride={setBrndmdOverride}
+              />
+            </div>
             {tab==="summary"&&<OperationsSummaryPanel
               fuel={fuel} ox={ox} Tfuel={T_fuel}
               WFR={WFR} waterMode={waterMode} T_water={T_water}
