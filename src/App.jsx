@@ -6095,7 +6095,10 @@ function CombustorMappingPanel({
   // Mirrors the FULL bkMap response so the diagnostic CSV log can read
   // derived (DT_Main_F, Tflame_K), circuits (per-circuit m_fuel etc.),
   // and air_accounting fields without a stale closure on R.
-  const mapDataRef = useRef(R);
+  // (Initial value is null — the every-render effect below populates it
+  // on first commit. Cannot read R here because R is declared further
+  // down in the panel body and would trigger a TDZ error.)
+  const mapDataRef = useRef(null);
   useEffect(() => {
     corrRef.current = R?.correlations || null;
     mapDataRef.current = R || null;
