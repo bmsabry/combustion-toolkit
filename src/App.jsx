@@ -6102,7 +6102,16 @@ function CombustorMappingPanel({
   useEffect(() => {
     corrRef.current = R?.correlations || null;
     mapDataRef.current = R || null;
-    cycleRef.current = cycleResult || null;
+    // IMPORTANT: cycleRef tracks the BACKEND INSTANT value (cycleResultProp),
+    // NOT the panel's lerped displayedCycle. The trip checker reads BR via
+    // calcBRNDMD(cycLatest.MW_net, ...) and the App-level mapping-table
+    // auto-fill ALSO reads from the backend instant value to pick which BR
+    // table to look up. Keeping these two consumers on the SAME source means
+    // when the operator clicks load down and MW crosses a BR threshold, the
+    // φ values snap and the trip-routing BR snap together — no transient
+    // {old BR + new φ} window for the trip checker to land in.
+    // The MW chart on the trace still uses displayedCycle for visual lerp.
+    cycleRef.current = cycleResultProp || null;
     emissionsModeRef.current = emissionsMode;
     phiIPRef.current = phiIP;
     phiOPRef.current = phiOP;
