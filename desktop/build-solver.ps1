@@ -119,8 +119,14 @@ Remove-Item -Force $bootstrapPath -ErrorAction SilentlyContinue
 $exe = Join-Path $out "ctk-solver.exe"
 if (-not (Test-Path $exe)) { throw "ctk-solver.exe was not produced" }
 
-$sizeMB = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+# Avoid `1MB` literal and `$sizeMB MB` interpolation — PowerShell's parser
+# interprets `MB` as a reserved byte-multiplier keyword in some contexts
+# and the tokenizer fails inside the interpolated string when the name
+# of a preceding variable also ends in MB. Use plain bytes/megabytes math
+# and a format-string instead.
+$exeBytes = (Get-Item $exe).Length
+$exeMegabytes = [math]::Round($exeBytes / 1048576, 1)
 Write-Host ""
-Write-Host "==> Built: $exe  ($sizeMB MB)"
+Write-Host ("==> Built: {0}  ({1} megabytes)" -f $exe, $exeMegabytes)
 Write-Host ""
 Get-ChildItem $out
