@@ -13590,11 +13590,26 @@ export default function App(){
   // mode (accurate = mode !== "free") so every existing AccurateCtx
   // consumer keeps working without refactoring.
   //
+  // ── Desktop tier lock-in ─────────────────────────────────────────────
+  // When running inside the Electron desktop, preload.js exposes the
+  // verified JWT claims as `window.__CTK_LICENSE__ = {tier, features}`.
+  // Tier values from the backend map 1:1 to mode IDs except for
+  // "everything" (backend) → "advanced" (App.jsx legacy id).
+  // On the desktop, this OVERRIDES localStorage — a thief can't bump
+  // their mode by editing a JS variable in DevTools.
+  const _desktopLicense = (typeof window !== "undefined") && window.__CTK_LICENSE__;
+  const _desktopMode = _desktopLicense
+    ? (_desktopLicense.tier === "everything" ? "advanced" : _desktopLicense.tier)
+    : null;
+
   // Persistence: localStorage["ctk_app_mode"]. On load we downgrade to
   // "free" if the saved mode requires a subscription the user doesn't
   // have — that prevents stale state from a previous session leaking
-  // into a logged-out tab.
+  // into a logged-out tab. On desktop, the JWT tier wins.
   const[mode, setModeRaw] = useState(() => {
+    if (_desktopMode && APP_MODES.some(m => m.id === _desktopMode)) {
+      return _desktopMode;
+    }
     try {
       const saved = localStorage.getItem("ctk_app_mode");
       if (saved && APP_MODES.some(m => m.id === saved)) return saved;
@@ -13672,13 +13687,20 @@ export default function App(){
   // the auth-downgrade effect below calls it on auth-state change.
   const setMode = useCallback((next) => {
     const m = _modeById(next);
+    // Desktop lock: the JWT's tier claim is the only mode the user is
+    // allowed to be in. Ignore any attempt to switch (mode picker is
+    // hidden from the UI on desktop, but defense in depth — a tampered
+    // build that re-exposes the picker can't do anything either).
+    if (_desktopMode && m.id !== _desktopMode) {
+      return;
+    }
     if (m.requiresSub && !hasOnline){
       setShowPricing(true);
       return;
     }
     setModeRaw(m.id);
     try { localStorage.setItem("ctk_app_mode", m.id); } catch {}
-  }, [hasOnline]);
+  }, [hasOnline, _desktopMode]);
   // Auto-downgrade if the user loses online/subscribed state while
   // sitting in a non-Free mode. Without this they'd be stuck in a
   // mode whose Cantera calls all 401 / 403.
@@ -13690,15 +13712,20 @@ export default function App(){
   // one-shot lift effect below short-circuits because saved="advanced"
   // already exists — leaving them stuck on Free for the whole session.
   useEffect(() => {
+    // Skip on desktop — the JWT tier is the source of truth, not the
+    // web auth state (which doesn't even exist for desktop launches).
+    if (_desktopMode) return;
     if (auth.loading) return;
     if (mode !== "free" && !hasOnline) setModeRaw("free");
-  }, [mode, hasOnline, auth.loading]);
+  }, [mode, hasOnline, auth.loading, _desktopMode]);
   // First-load lift: subscribed users with no saved mode (or with
   // saved="free" defaulted in by the useState fallback) get bumped to
   // Advanced so they see the same panel set they had before this
   // change shipped. Runs ONCE per auth state transition into "online".
   const[_modeLifted, setModeLifted] = useState(false);
   useEffect(() => {
+    // Desktop never lifts — it's already locked to the JWT tier.
+    if (_desktopMode) { setModeLifted(true); return; }
     if (_modeLifted) return;
     if (auth.loading) return;
     if (!hasOnline) return;
@@ -13708,7 +13735,7 @@ export default function App(){
       try { localStorage.setItem("ctk_app_mode", "advanced"); } catch {}
     }
     setModeLifted(true);
-  }, [hasOnline, _modeLifted, auth.loading]);
+  }, [hasOnline, _modeLifted, auth.loading, _desktopMode]);
   // Kick user out of Account tab if they sign out
   useEffect(()=>{if(!auth.isAuthenticated&&tab==="account")setTab("cycle");},[auth.isAuthenticated,tab]);
 

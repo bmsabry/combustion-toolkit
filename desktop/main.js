@@ -15,10 +15,46 @@
 const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const { spawn } = require("child_process");
 
 const CLOUD_API = "https://combustion-toolkit-api.onrender.com";
 const LICENSE_FILE = () => path.join(app.getPath("userData"), "license.json");
+
+// Ed25519 public key for verifying signed license tokens. The matching
+// PRIVATE key lives only on the Render backend (CTK_ED25519_PRIVATE_KEY_B64
+// env var). Extracting this public key from the binary gives an attacker
+// no ability to forge licenses — Ed25519 is asymmetric.
+//
+// If/when the keypair is rotated (e.g. suspected compromise), generate a
+// new pair, set the new private key on Render, paste the new public key
+// here, and ship a new desktop release. Existing installs will fail
+// verification on next launch and require re-activation.
+const ED25519_PUBLIC_KEY_B64 = "/sUDVHHr3jNFwzG0TNcTYRkzDwEs5HlzU4mejzau2zI=";
+
+function ed25519PublicKeyObject() {
+  // Node's crypto.createPublicKey wants the raw 32-byte Ed25519 key wrapped
+  // in a SPKI DER prefix. Easier: use the built-in support for raw keys
+  // via createPublicKey({ key, format: 'der', type: 'spki' }). But the
+  // simplest portable path is to assemble the SPKI manually:
+  //   30 2a 30 05 06 03 2b 65 70 03 21 00 <32 bytes of raw public key>
+  const SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+  const raw = Buffer.from(ED25519_PUBLIC_KEY_B64, "base64");
+  const der = Buffer.concat([SPKI_PREFIX, raw]);
+  return crypto.createPublicKey({ key: der, format: "der", type: "spki" });
+}
+
+function verifyEd25519(payloadStr, signatureB64) {
+  try {
+    const pub = ed25519PublicKeyObject();
+    const sigBuf = Buffer.from(signatureB64, "base64");
+    // Ed25519 verify: passing null as the algorithm name tells Node to use
+    // EdDSA which is the only operation Ed25519 keys support.
+    return crypto.verify(null, Buffer.from(payloadStr, "utf8"), pub, sigBuf);
+  } catch {
+    return false;
+  }
+}
 
 let solverProc = null;
 let solverPort = null;
@@ -38,12 +74,71 @@ function writeLicense(obj) {
   fs.writeFileSync(LICENSE_FILE(), JSON.stringify(obj, null, 2), "utf8");
 }
 
+// Parse the signed_token "{json}|{signature_b64}" into the inner payload
+// object after verifying the Ed25519 signature. Returns null if the
+// signature fails or the token is malformed — caller treats this exactly
+// like an expired license and shows the activation window.
+//
+// Anti-piracy property: a thief can't tamper with the payload (e.g. extend
+// expires_at, upgrade tier from CTK to EVERYTHING, increase max_activations)
+// because any byte change invalidates the Ed25519 signature, and they
+// can't re-sign without the private key (which is on the server).
+function verifyAndParseToken(signedToken) {
+  if (typeof signedToken !== "string") return null;
+  const sepIdx = signedToken.lastIndexOf("|");
+  if (sepIdx < 0) return null;
+  const payloadStr = signedToken.slice(0, sepIdx);
+  const signature = signedToken.slice(sepIdx + 1);
+  if (!verifyEd25519(payloadStr, signature)) return null;
+  try {
+    return JSON.parse(payloadStr);
+  } catch {
+    return null;
+  }
+}
+
+// Clock-rollback detection. The license file persists the most-recent system
+// clock the app has observed. If the user (or a thief who got hold of an
+// expired license file) sets the system clock backwards in an attempt to
+// keep using an expired license, this catches it: at boot, current clock <
+// last_seen_at_ms means the clock was rolled back. Refuse.
+//
+// Combined with the hard JWT expires_at check, this means an expired
+// license can't be revived offline by any clock manipulation we've thought
+// of. The only escape is reformatting the OS, which is a high enough bar.
+function clockRollbackDetected(lic) {
+  if (!lic || typeof lic.last_seen_at_ms !== "number") return false;
+  return Date.now() < lic.last_seen_at_ms - 60000; // 60s slack for NTP jitter
+}
+
 function licenseIsCurrent(lic) {
   if (!lic || !lic.signed_token || !lic.expires_at) return false;
+  // 1. Signature + payload must verify with the baked Ed25519 public key.
+  const payload = verifyAndParseToken(lic.signed_token);
+  if (!payload) return false;
+  // 2. Refuse if the OS clock has been rolled back since the last
+  //    successful launch (catches the "set system clock back to 2025" trick).
+  if (clockRollbackDetected(lic)) return false;
+  // 3. Hard expiry check — works fully offline. After this passes the user
+  //    is locked out regardless of internet status.
   try {
-    return new Date(lic.expires_at).getTime() > Date.now();
+    const exp = new Date(payload.expires_at || lic.expires_at).getTime();
+    if (!(exp > Date.now())) return false;
   } catch {
     return false;
+  }
+  return true;
+}
+
+// Update the license file's last-seen-at on every successful launch so
+// subsequent launches catch clock-rollback attempts.
+function touchLicenseLastSeen(lic) {
+  if (!lic) return;
+  try {
+    lic.last_seen_at_ms = Date.now();
+    writeLicense(lic);
+  } catch {
+    /* non-fatal */
   }
 }
 
@@ -148,9 +243,20 @@ async function showMainWindow(licenseToken) {
   const extraArgs = [`--ctk-api-base=http://127.0.0.1:${solverPort}`];
   if (licenseToken) {
     // Renderer attaches this as X-License-Token on every /calc/* request — the
-    // loopback solver's require_desktop_license dependency validates the HMAC
-    // in addition to the CTK_LICENSE_TOKEN env var the process was started with.
+    // loopback solver's require_desktop_license dependency validates the
+    // Ed25519 signature in addition to the CTK_LICENSE_TOKEN env var the
+    // process was started with.
     extraArgs.push(`--ctk-license-token=${licenseToken}`);
+    // Verified-payload claims (tier, features) are injected so App.jsx's
+    // mode picker can lock the available modes to whatever the JWT
+    // permits. localStorage tier overrides are ignored on the desktop.
+    const payload = verifyAndParseToken(licenseToken);
+    if (payload) {
+      extraArgs.push(`--ctk-license-tier=${payload.tier || ""}`);
+      extraArgs.push(
+        `--ctk-license-features=${(payload.features || []).join(",")}`
+      );
+    }
   }
   mainWin = new BrowserWindow({
     width: 1400,
@@ -210,11 +316,17 @@ ipcMain.handle("license:activate", async (_e, { key }) => {
 ipcMain.handle("license:status", () => {
   const lic = readLicense();
   if (!lic) return { activated: false };
+  // Re-verify the signature on every status call so a tampered license file
+  // always reports "not activated" — the renderer can't be tricked into
+  // thinking a hand-edited license file is valid by reading lic.tier.
+  const payload = verifyAndParseToken(lic.signed_token);
   return {
     activated: true,
     current: licenseIsCurrent(lic),
-    tier: lic.tier,
-    expires_at: lic.expires_at,
+    tier: payload ? payload.tier : null,
+    features: payload ? payload.features : [],
+    expires_at: payload ? payload.expires_at : lic.expires_at,
+    max_activations: payload ? payload.max_activations : null,
   };
 });
 
@@ -231,20 +343,39 @@ ipcMain.handle("app:open-external", (_e, url) => {
 app.whenReady().then(async () => {
   let lic = readLicense();
 
+  // Distinguish the THREE failure modes for clearer user messaging:
+  //   - clock rolled back → "your system clock is wrong" (don't accuse of theft)
+  //   - signature invalid → "license file corrupted, re-activate"
+  //   - expired           → "your trial/subscription has ended"
+  if (lic && clockRollbackDetected(lic)) {
+    dialog.showErrorBox(
+      "System clock changed",
+      "Your computer's clock has been moved backwards since the last time " +
+      "Combustion Toolkit ran. Set the clock to the correct date/time and " +
+      "restart the app. If you believe this is in error, contact support."
+    );
+    app.quit();
+    return;
+  }
+
   if (!licenseIsCurrent(lic)) {
     lic = await showActivationWindow();
   }
 
   if (!licenseIsCurrent(lic)) {
-    // User declined activation — exit. A future "trial" mode could fall back to the
-    // client-side approximation here, but that's what the free web version is for.
     dialog.showErrorBox(
       "Activation required",
-      "The desktop solver requires a valid subscription. Install the free web version at https://combustion-toolkit.onrender.com/ if you'd like to try without activating.",
+      "The desktop application requires a valid license. Sign up at " +
+      "https://combustion-toolkit.proreadyengineer.com/ for a 14-day free " +
+      "trial, then activate this app with the license key emailed to you."
     );
     app.quit();
     return;
   }
+
+  // Successful launch — stamp the current clock as "last seen" so a future
+  // clock-rollback attempt is caught next launch.
+  touchLicenseLastSeen(lic);
 
   try {
     await startSolver(lic.signed_token);

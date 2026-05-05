@@ -1,6 +1,7 @@
 """Password hashing and JWT token utilities."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import secrets
@@ -8,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import bcrypt
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from jose import JWTError, jwt
 
 from .config import get_settings
@@ -83,6 +86,65 @@ def hash_license_key(key: str) -> str:
 
 
 def sign_license_payload(payload: str) -> str:
-    """Sign a payload with the license signing key (for offline validation in desktop app)."""
+    """LEGACY HMAC signer — kept so existing license files still verify until
+    they expire. Returns hex-encoded HMAC-SHA256. New tokens should use
+    sign_license_payload_ed25519() below.
+    """
     signing_key = settings.license_signing_key or settings.secret_key
     return hmac.new(signing_key.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+# ── Ed25519 license signing (current — anti-piracy) ────────────────────────
+# Private key signs on the server; public key verifies on the desktop. Only
+# the public key is baked into the binary, so extracting it from the
+# installed app gives an attacker no ability to forge tokens. Token format:
+#     {payload_json}|{base64_signature}
+# Same on-the-wire shape as the HMAC tokens, so we can keep the parser in
+# desktop/main.js identical.
+
+def _ed25519_private_key() -> Optional[ed25519.Ed25519PrivateKey]:
+    raw = settings.ed25519_private_key_b64.strip()
+    if not raw:
+        return None
+    try:
+        return ed25519.Ed25519PrivateKey.from_private_bytes(base64.b64decode(raw))
+    except Exception:
+        return None
+
+
+def _ed25519_public_key() -> Optional[ed25519.Ed25519PublicKey]:
+    raw = settings.ed25519_public_key_b64.strip()
+    if not raw:
+        return None
+    try:
+        return ed25519.Ed25519PublicKey.from_public_bytes(base64.b64decode(raw))
+    except Exception:
+        return None
+
+
+def sign_license_payload_ed25519(payload: str) -> str:
+    """Sign a payload with the Ed25519 private key. Returns base64 signature.
+    Raises if the private key isn't configured (server misconfig).
+    """
+    pk = _ed25519_private_key()
+    if pk is None:
+        raise RuntimeError(
+            "Ed25519 private key not configured. Set CTK_ED25519_PRIVATE_KEY_B64 "
+            "env var on the backend."
+        )
+    sig = pk.sign(payload.encode("utf-8"))
+    return base64.b64encode(sig).decode("ascii")
+
+
+def verify_license_payload_ed25519(payload: str, signature_b64: str) -> bool:
+    """Verify an Ed25519 signature against the public key. Used by the
+    desktop solver process when it boots so the local FastAPI confirms
+    the license token wasn't tampered with."""
+    pub = _ed25519_public_key()
+    if pub is None:
+        return False
+    try:
+        pub.verify(base64.b64decode(signature_b64), payload.encode("utf-8"))
+        return True
+    except (InvalidSignature, Exception):
+        return False

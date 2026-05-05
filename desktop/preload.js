@@ -13,12 +13,27 @@ if (arg) {
 }
 
 // Pluck --ctk-license-token=<token>. Renderer attaches this as X-License-Token
-// on every /calc/* request so the loopback solver's HMAC check runs in addition
-// to the env-var-based startup check.
+// on every /calc/* request so the loopback solver verifies the Ed25519
+// signature in addition to the env-var-based startup check.
 const tokArg = process.argv.find((a) => a.startsWith("--ctk-license-token="));
 if (tokArg) {
   const tok = tokArg.slice("--ctk-license-token=".length);
   contextBridge.exposeInMainWorld("__CTK_LICENSE_TOKEN__", tok);
+}
+
+// Verified license claims (already signature-checked in main.js) — expose
+// these as `window.__CTK_LICENSE__` so App.jsx's mode picker can lock the
+// available modes to what the JWT permits. localStorage tier overrides
+// are ignored on the desktop.
+const tierArg = process.argv.find((a) => a.startsWith("--ctk-license-tier="));
+const featArg = process.argv.find((a) => a.startsWith("--ctk-license-features="));
+if (tierArg || featArg) {
+  contextBridge.exposeInMainWorld("__CTK_LICENSE__", {
+    tier: tierArg ? tierArg.slice("--ctk-license-tier=".length) : null,
+    features: featArg
+      ? featArg.slice("--ctk-license-features=".length).split(",").filter(Boolean)
+      : [],
+  });
 }
 
 contextBridge.exposeInMainWorld("ctk", {

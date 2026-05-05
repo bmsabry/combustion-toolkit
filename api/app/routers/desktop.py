@@ -16,9 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import LicenseKey
+from ..models import LicenseKey, normalize_tier, tier_features
 from ..schemas import LicenseActivateRequest, LicenseActivateResponse
-from ..security import hash_license_key, sign_license_payload
+from ..security import hash_license_key, sign_license_payload_ed25519
 
 log = logging.getLogger("combustion-toolkit-api.desktop")
 
@@ -85,21 +85,30 @@ def activate(
         lk.id, lk.tier.value, body.device_id, remote_ip, lk.activation_count, lk.max_activations,
     )
 
-    # Build signed offline token
+    # Build signed offline token. Tier is normalized so legacy DOWNLOAD/FULL
+    # rows still produce a current-model JWT (CTK / EVERYTHING). The
+    # `features` claim is the source of truth for which panels the desktop
+    # binary unlocks — changing tier composition becomes a server-side
+    # change with no rebuild needed.
+    eff_tier = normalize_tier(lk.tier)
     payload = {
         "license_id": lk.id,
-        "tier": lk.tier.value,
+        "tier": eff_tier.value,
+        "features": tier_features(eff_tier),
         "expires_at": lk.expires_at.isoformat(),
         "device_id": body.device_id,
         "activated_at": now.isoformat(),
+        "max_activations": lk.max_activations,
+        "activation_count": lk.activation_count,
+        "sig_alg": "ed25519",
     }
     payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    signature = sign_license_payload(payload_json)
+    signature = sign_license_payload_ed25519(payload_json)
     signed_token = f"{payload_json}|{signature}"
 
     return LicenseActivateResponse(
         valid=True,
-        tier=lk.tier.value,
+        tier=eff_tier.value,
         expires_at=lk.expires_at,
         signed_token=signed_token,
         message="Activated successfully",

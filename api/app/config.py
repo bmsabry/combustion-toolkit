@@ -40,7 +40,18 @@ class Settings(BaseSettings):
     stripe_price_id_full: str = Field(default="")  # $150/yr download + online tier
 
     # Desktop license signing
-    license_signing_key: str = Field(default="")  # HMAC secret for offline license validation
+    # ── Legacy HMAC (kept so old offline tokens still verify until they expire) ──
+    license_signing_key: str = Field(default="")  # HMAC secret — DEPRECATED
+    # ── Current: Ed25519 (anti-piracy upgrade) ──
+    # Private key (server-only, base64-encoded raw 32 bytes) signs license tokens.
+    # Public key (committed to repo + baked into desktop binary) verifies them.
+    # An attacker who extracts the public key from the binary cannot forge tokens.
+    ed25519_private_key_b64: str = Field(default="")  # raw 32-byte private key, b64
+    ed25519_public_key_b64: str = Field(
+        # Default = the production public key, committed to the repo. Override
+        # via env var only for testing with a different keypair.
+        default="/sUDVHHr3jNFwzG0TNcTYRkzDwEs5HlzU4mejzau2zI="
+    )
 
     # Admin (free lifetime access, bypasses the Stripe gate)
     admin_emails: str = Field(default="")  # comma-separated list; auto-promoted on signup/login

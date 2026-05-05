@@ -9,8 +9,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "CTK_DEV_UI=http://localhost:5173 electron .",
-    "build:ui": "cd .. && npm run build && rm -rf desktop/ui && cp -r dist desktop/ui",
-    "build:solver": "bash build-solver.sh",
+    "build:ui": "cd .. && npm run build && node -e \"require('fs').rmSync('desktop/ui',{recursive:true,force:true});require('fs').cpSync('dist','desktop/ui',{recursive:true})\"",
+    "build:solver": "node -e \"const{spawnSync}=require('child_process');const isWin=process.platform==='win32';const r=isWin?spawnSync('powershell',['-ExecutionPolicy','Bypass','-File','build-solver.ps1'],{stdio:'inherit'}):spawnSync('bash',['build-solver.sh'],{stdio:'inherit'});process.exit(r.status||0)\"",
     "build:all": "npm run build:ui && npm run build:solver",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
