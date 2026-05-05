@@ -6092,8 +6092,13 @@ function CombustorMappingPanel({
   // and trips the engine on the very next tick. The override and the
   // φ values must move atomically from the interval's point of view.
   const brndmdOverrideRef = useRef(brndmdOverride);
+  // Mirrors the FULL bkMap response so the diagnostic CSV log can read
+  // derived (DT_Main_F, Tflame_K), circuits (per-circuit m_fuel etc.),
+  // and air_accounting fields without a stale closure on R.
+  const mapDataRef = useRef(R);
   useEffect(() => {
     corrRef.current = R?.correlations || null;
+    mapDataRef.current = R || null;
     cycleRef.current = cycleResult || null;
     emissionsModeRef.current = emissionsMode;
     phiIPRef.current = phiIP;
@@ -6538,12 +6543,66 @@ function CombustorMappingPanel({
       // MW — no noise, just the smoothstepped value (power output is steady)
       const mwVal  = dMW;
 
+      // Pull the live diagnostic state for the forensic CSV log. These
+      // are the values the trip checker AND the trace renderer see at
+      // this exact tick — so the CSV captures any state-snapshot race
+      // (e.g. {BR=7, φ=BR2 values}) directly.
+      const _md_diag = mapDataRef.current;
+      const _diag_derived  = _md_diag?.derived || null;
+      const _diag_circuits = _md_diag?.circuits || null;
+      const _diag_corr     = _md_diag?.correlations || null;
+      const _diag_cyc      = cycleRef.current || null;
+      const _diag_protSt   = protRef.current?.state || 'idle';
+      const _diag_protCnt  = protRef.current?.cycleCount || 0;
       bufferRef.current.push({
         t: now,
+        // Trace values (with noise) — what the chart renders.
         PX36_SEL: px36Val, PX36_SEL_HI: px36HiVal,
         NOx15: nox15Val, CO15: co15Val,
         MWI_WIM: wimVal, MWI_GC: gcVal,
         MW: mwVal,
+        // Mean values (lagging mean before noise) — what the trip
+        // checker arguably SHOULD use.
+        mean_PX36_SEL: dPX36, mean_PX36_SEL_HI: dPX36HI,
+        mean_NOx15: dNOx, mean_CO15: dCO,
+        mean_MWI_WIM: dWIM, mean_MWI_GC: dGC, mean_MW: dMW,
+        // State machine — proves which BR the ticker thinks it's on
+        // when the trip fires, plus whether protection / staging is
+        // mid-cycle.
+        emissionsMode: !!emissionsModeRef.current,
+        brndmdOverride: brndmdOverrideRef.current ?? null,
+        br_computed: _br_this_tick,
+        protection_state: _diag_protSt,
+        protection_cycleCount: _diag_protCnt,
+        tripped: !!tr.tripped,
+        tripCause: tr.tripCause || null,
+        // Per-circuit φ as the ticker sees them (the φ that fed the
+        // backend correlation visible in corr_*).
+        phi_IP: Number(phiIPRef.current) || 0,
+        phi_OP: Number(phiOPRef.current) || 0,
+        phi_IM: Number(phiIMRef.current) || 0,
+        phi_OM: _md_diag?.phi_OM ?? null,
+        // Cycle inputs / outputs at this tick.
+        load_pct:  _diag_cyc?.load_pct ?? null,
+        T3_K:      _diag_cyc?.T3_K ?? null,
+        P3_bar:    _diag_cyc?.P3_bar ?? null,
+        T_fuel_K:  _diag_cyc?.T_fuel_K ?? null,
+        MW_net:    _diag_cyc?.MW_net ?? null,
+        // Backend correlation (raw, before frontend BR=6 PX36_SEL_HI
+        // modifier). Direct comparison with the displayed mean +
+        // noise tells us where any divergence comes from.
+        corr_NOx15:        _diag_corr?.NOx15 ?? null,
+        corr_CO15:         _diag_corr?.CO15 ?? null,
+        corr_PX36_SEL:     _diag_corr?.PX36_SEL ?? null,
+        corr_PX36_SEL_HI:  _diag_corr?.PX36_SEL_HI ?? null,
+        // Derived fields used inside the correlation (DT_Main, Tflame).
+        DT_Main_F:  _diag_derived?.DT_Main_F ?? null,
+        Tflame_K:   _diag_derived?.Tflame_K ?? null,
+        // Per-circuit fuel mass flows (for fuel-split sanity check).
+        m_fuel_IP:  _diag_circuits?.IP?.m_fuel_kg_s ?? null,
+        m_fuel_OP:  _diag_circuits?.OP?.m_fuel_kg_s ?? null,
+        m_fuel_IM:  _diag_circuits?.IM?.m_fuel_kg_s ?? null,
+        m_fuel_OM:  _diag_circuits?.OM?.m_fuel_kg_s ?? null,
       });
       // 2 Hz × 10-minute window = 1200 samples in the ring buffer.
       // Every metric is sampled at 2 Hz; the acoustic ones (PX36_SEL,
@@ -6608,6 +6667,51 @@ function CombustorMappingPanel({
       tripped: false, tripAt: 0, tripCause: null,
     };
     setTripBanner(null);
+  };
+  // ─── Forensic CSV download — full diagnostic snapshot per tick ─────
+  // Converts bufferRef.current to a CSV file and triggers a download.
+  // Up to ~10 minutes (1200 rows) of state captured at 2 Hz: trace +
+  // mean values, BR routing state, protection / staging state, all
+  // φ values, cycle in/out, raw correlation, derived DT_Main / Tflame,
+  // per-circuit fuel flows. Lets the operator capture the exact moment
+  // a state-snapshot race fires (e.g. trip banner showing inconsistent
+  // BR + φ) for forensics.
+  const _downloadMappingCSV = () => {
+    const buf = bufferRef.current || [];
+    if (buf.length === 0) {
+      alert("No live-mapping data recorded yet. Hit ▶ Start to begin recording.");
+      return;
+    }
+    // Column order — t first, then trace, then mean, then state, then
+    // φ, then cycle, then correlation + derived + circuit flows.
+    const cols = [
+      "t",
+      "PX36_SEL","PX36_SEL_HI","NOx15","CO15","MWI_WIM","MWI_GC","MW",
+      "mean_PX36_SEL","mean_PX36_SEL_HI","mean_NOx15","mean_CO15",
+      "mean_MWI_WIM","mean_MWI_GC","mean_MW",
+      "emissionsMode","brndmdOverride","br_computed",
+      "protection_state","protection_cycleCount","tripped","tripCause",
+      "phi_IP","phi_OP","phi_IM","phi_OM",
+      "load_pct","T3_K","P3_bar","T_fuel_K","MW_net",
+      "corr_NOx15","corr_CO15","corr_PX36_SEL","corr_PX36_SEL_HI",
+      "DT_Main_F","Tflame_K",
+      "m_fuel_IP","m_fuel_OP","m_fuel_IM","m_fuel_OM",
+    ];
+    const fmt = v => v == null ? "" : (typeof v === "boolean" ? (v ? "TRUE" : "FALSE") : String(v));
+    const lines = [cols.join(",")];
+    for (const row of buf) {
+      lines.push(cols.map(c => fmt(row[c])).join(","));
+    }
+    const blob = new Blob([lines.join("\n")], {type: "text/csv"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const ts = new Date().toISOString().slice(0,19).replace(/[:T-]/g,"");
+    a.href = url;
+    a.download = `LiveMapping_${ts}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
   // Reset only the trip (operator dismisses the trip banner) — clears the
   // tripped flag so targets resume reading from cycle/correlation. Leaves
@@ -7134,6 +7238,15 @@ function CombustorMappingPanel({
                       color:C.warm,background:"transparent",border:`1.5px solid ${C.warm}`,borderRadius:6,cursor:"pointer",
                       display:"flex",alignItems:"center",gap:7}}>
                     ⟳ RESET
+                  </button>
+                )}
+                {mappingStartedAt && (
+                  <button onClick={_downloadMappingCSV}
+                    title="Download a CSV of every recorded tick: trace + mean + state machine + φ + cycle in/out + raw correlation + derived. Use this to forensically trace any odd state-snapshot (BR vs φ inconsistency, etc.) and send to support."
+                    style={{padding:"10px 14px",fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",
+                      color:C.accent,background:"transparent",border:`1.5px solid ${C.accent}`,borderRadius:6,cursor:"pointer",
+                      display:"flex",alignItems:"center",gap:7}}>
+                    ⬇ DOWNLOAD MAPPING DATA
                   </button>
                 )}
               </div>
