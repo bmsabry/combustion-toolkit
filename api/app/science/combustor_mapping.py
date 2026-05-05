@@ -69,9 +69,12 @@ _DERIV = {
     # PX36_SEL and PX36_SEL_HI ∂/∂DT_Main are piecewise (linear up to
     # DT_Main = 650 °F, then flat) and handled by
     # _px36_dt_main_contribution() below — the entries here are 0 to
-    # avoid double-counting in the generic linear loop. NOx15 and CO15
-    # keep their original linear slopes against DT_Main.
-    "DT_Main": {"NOx15": 0.0375, "CO15":  0.424, "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
+    # avoid double-counting in the generic linear loop.
+    # NOx15 ∂/∂DT_Main is also piecewise: linear above the 150 °F floor,
+    # frozen below, handled by _nox15_dt_main_contribution(). Its entry
+    # here is 0 for the same reason. CO15 keeps the original unclamped
+    # linear slope.
+    "DT_Main": {"NOx15": 0.0,    "CO15":  0.424, "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "N2":      {"NOx15": -0.25,  "CO15":  2.0,   "PX36_SEL":  0.0,    "PX36_SEL_HI":  0.0},
     "C3":      {"NOx15":  0.75,  "CO15": -12.0,  "PX36_SEL":  0.04,   "PX36_SEL_HI":  0.0266},
     "Phi_OP":  {"NOx15":  17.5,  "CO15":  -70.0, "PX36_SEL": -1.5,    "PX36_SEL_HI": -0.15},
@@ -90,6 +93,13 @@ _DERIV = {
 _DT_MAIN_PX36_SEL_SLOPE    = -0.004    # psi/°F — same magnitude as old _DERIV
 _DT_MAIN_PX36_SEL_HI_SLOPE = -0.0004   # psi/°F — same magnitude as old _DERIV
 _DT_MAIN_PX36_CLAMP_F      = 650.0     # above this DT_Main, contribution is frozen
+
+# NOx15 piecewise DT_Main (linear above the floor, frozen below). The
+# slope direction means low DT_Main → reduced NOx; the floor stops that
+# reduction from growing without bound when DT_Main pushes well below
+# typical operating values.
+_DT_MAIN_NOX15_SLOPE  = 0.0375  # ppm/°F — same magnitude as old _DERIV
+_DT_MAIN_NOX15_FLOOR_F = 150.0  # below this DT_Main, contribution is frozen
 
 # Phi_IP activation threshold. Below this the IP derivative contributes 0.
 _PHI_IP_FLOOR = 0.25
@@ -162,6 +172,32 @@ def _px36_dt_main_contribution(DT_Main_F: float,
     """
     DT = float(DT_Main_F)
     DT_clamped = min(DT_clamp_F, DT)
+    return slope_per_F * (DT_clamped - DT_ref_F)
+
+
+def _nox15_dt_main_contribution(DT_Main_F: float,
+                                 slope_per_F: float = _DT_MAIN_NOX15_SLOPE,
+                                 DT_ref_F:    float = 450.0,
+                                 DT_floor_F:  float = _DT_MAIN_NOX15_FLOOR_F) -> float:
+    """Piecewise NOx15 contribution from DT_Main: linear above the 150 °F
+    floor, frozen below.
+
+    DT_Main > DT_floor_F → slope_per_F × (DT_Main − DT_ref_F)
+    DT_Main ≤ DT_floor_F → slope_per_F × (DT_floor_F − DT_ref_F)
+                           = +0.0375 × (150 − 450) = −11.25 ppm  [frozen]
+
+    Slope direction (+0.0375 ppm/°F) means a wider IM/OM spread (larger
+    DT_Main) pushes NOx UP — physically the larger spread implies a
+    hotter peak flame zone, exponentially more thermal NOx. Conversely,
+    a very flat split (small DT_Main) reduces NOx — but only down to a
+    floor: at DT_Main below ~150 °F the engine isn't realistically
+    operating in that condition AND the linear extrapolation would
+    eventually drive the contribution past −16.875 ppm (DT_Main → 0 °F),
+    which is more reduction than the operating envelope supports. The
+    floor stops the reduction from growing without bound.
+    """
+    DT = float(DT_Main_F)
+    DT_clamped = max(DT_floor_F, DT)
     return slope_per_F * (DT_clamped - DT_ref_F)
 
 
@@ -389,8 +425,12 @@ def run(
             y += _DERIV[key][name] * deltas[key]
         # NOx15 gets a piecewise-integrated Tflame contribution on top of the
         # generic linear step (which contributes 0 for NOx15, intentionally).
+        # NOx15 also gets a piecewise DT_Main contribution: linear above
+        # the 150 °F floor, frozen below — so very flat IM/OM splits don't
+        # keep dragging NOx down without bound.
         if name == "NOx15":
             y += _nox15_tflame_contribution(Tflame_F)
+            y += _nox15_dt_main_contribution(DT_Main_F)
         # PX36_SEL gets a clamped-linear Tflame contribution (anchored at
         # 3035 °F, slope +0.318 psi per +50 °F, frozen below 2950 °F and
         # above 3060 °F). PX36_SEL_HI is intentionally NOT given a Tflame

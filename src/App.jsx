@@ -1734,7 +1734,7 @@ const sA=[
   ["15. Combustor Mapping (LMS100 4-circuit DLE)","Reference design point","100% load, 44 °F","NOx15=45, CO15=130, PX36=4.3, PX36_HI=2.2 / DT_Main=450°F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035°F · T3=700°F · P3=638 psia."],
   ["","Per-circuit T_AFT","complete_combustion(T3, P3, φ)","Cantera complete-combustion (no dissociation)."],
   ["","OM circuit","Residual fuel mass","m_fuel_OM = total − (IP+OP+IM). φ_OM solved & clamped to [0,3]."],
-  ["","Linear correction (Step 1)","Y = Y_ref + Σ ∂Y/∂xₖ · (xₖ − xₖ_ref)","Vars: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (≥0.25 floor), Tflame, T3."],
+  ["","Linear correction (Step 1)","Y = Y_ref + Σ ∂Y/∂xₖ · (xₖ − xₖ_ref)","Vars: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (≥0.25 floor), Tflame, T3. NOx15 ∂/∂DT_Main is piecewise: linear above 150 °F floor, frozen below. PX36_SEL/HI ∂/∂DT_Main piecewise: linear up to 650 °F clamp, frozen above."],
   ["","Phi_OP multiplier (Step 2)","HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45","Linear interp on the 0.10 band. PX36_SEL_HI only."],
   ["","P3 scaling (Step 3)","(P3/638)^exp","NOx15=0.467, CO15=−1.0, SEL=1.35, SEL_HI=0.44."],
   ["","C3-effective","0.8·(C2H6+C2H4+C2H2) + (C3+...+C8)","C2-class at 0.8; C3 and heavier at 1.0."],
@@ -5507,7 +5507,7 @@ function AssumptionsPanel(){
       <Assumption label="Reference design point" value="LMS100 DLE, 100% load, 44 °F" note="NOx15=45 ppmvd · CO15=130 ppmvd · PX36_SEL=4.3 psi · PX36_SEL_HI=2.2 psi. DT_Main=450 °F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035 °F · T3=700 °F · P3=638 psia."/>
       <Assumption label="Per-circuit T_AFT" value="complete_combustion at (T3, P3, φ_circuit)" note="Cantera complete-combustion (no dissociation) at the circuit-specific φ. Falls back to T_air when φ ≈ 0."/>
       <Assumption label="OM circuit" value="Residual fuel mass" note="m_fuel_OM = m_fuel_total − (m_fuel_IP + m_fuel_OP + m_fuel_IM). φ_OM is back-solved and clamped to [0, 3]."/>
-      <Assumption label="Linear correction (Step 1)" value="Y_lin = Y_ref + Σₖ (∂Y/∂xₖ)·(xₖ − xₖ_ref)" note="Variables: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (above 0.25 floor), Tflame, T3. Per-output derivatives baked into the module — see combustor_mapping.py."/>
+      <Assumption label="Linear correction (Step 1)" value="Y_lin = Y_ref + Σₖ (∂Y/∂xₖ)·(xₖ − xₖ_ref)" note="Variables: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (above 0.25 floor), Tflame, T3. Per-output derivatives baked into the module — see combustor_mapping.py. Two DT_Main contributions are piecewise rather than purely linear: NOx15 ∂/∂DT_Main is linear above the 150 °F floor and frozen below (so very flat IM/OM splits don't drag NOx down without bound); PX36_SEL and PX36_SEL_HI ∂/∂DT_Main are linear up to a 650 °F ceiling and frozen above (very wide spreads stop dragging dynamics down)."/>
       <Assumption label="Phi_OP multiplier (Step 2)" value="HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45" note="Linear interp on the 0.10 band between. PX36_SEL_HI is the only output that gets this multiplier."/>
       <Assumption label="P3 scaling (Step 3)" value="(P3/638)^exp" note="Exponents: NOx15=0.467, CO15=−1.0, PX36_SEL=1.35, PX36_SEL_HI=0.44. Anchored at the design P3 = 638 psia."/>
       <Assumption label="C3-effective" value="0.8·(C2H6+C2H4+C2H2) + (C3H8+C4H10+...+C8H18)" note="C2-class species at 0.8 coefficient; C3 and every heavier hydrocarbon at 1.0."/>
