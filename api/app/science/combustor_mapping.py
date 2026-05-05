@@ -180,8 +180,10 @@ def _px36_dt_main_contribution(DT_Main_F: float,
     Used for both PX36_SEL (slope -0.004 psi/°F) and PX36_SEL_HI
     (slope -0.0004 psi/°F). The clamp keeps very wide IM/OM spreads
     from continuing to drag PX36 down — physically the dynamics signal
-    saturates once DT_Main pushes past 650 °F. NOx15 / CO15 still use
-    the original unclamped linear slopes against DT_Main.
+    saturates once DT_Main pushes past 650 °F. NOx15 has its own
+    piecewise helper (_nox15_dt_main_contribution, floor at 150 °F);
+    CO15 has its own piecewise helper (_co15_dt_main_contribution,
+    flat plateau 25–75 °F + reversed slope below).
     """
     DT = float(DT_Main_F)
     DT_clamped = min(DT_clamp_F, DT)
