@@ -7643,10 +7643,10 @@ function CombustorMappingPanel({
             <div style={{textAlign:"right"}}>M_Fuel ({mdotU})</div>
           </div>
           {[
-            ["Inner Pilot (IP)","centerbody pilot",C.strong,fracIP,setFracIP,m_air_IP,phiIP,setPhiIP,0.05,m_fuel_IP_bk,true],
-            ["Outer Pilot (OP)","annular pilot",C.orange,fracOP,setFracOP,m_air_OP,phiOP,setPhiOP,0.05,m_fuel_OP_bk,true],
-            ["Inner Main (IM)","inner premix",C.accent,fracIM,setFracIM,m_air_IM,phiIM,setPhiIM,0.005,m_fuel_IM_bk,true],
-            ["Outer Main (OM)","float circuit",C.accent2,fracOM,setFracOM,m_air_OM,phi_OM,null,0,m_fuel_OM,false],
+            ["Pilot 2 (Pt2)","",C.strong,fracIP,setFracIP,m_air_IP,phiIP,setPhiIP,0.05,m_fuel_IP_bk,true],
+            ["Pilot 1 (Pt1)","",C.orange,fracOP,setFracOP,m_air_OP,phiOP,setPhiOP,0.05,m_fuel_OP_bk,true],
+            ["Premixer 2 (PM2)","",C.accent,fracIM,setFracIM,m_air_IM,phiIM,setPhiIM,0.005,m_fuel_IM_bk,true],
+            ["Premixer 1 (PM1)","float circuit",C.accent2,fracOM,setFracOM,m_air_OM,phi_OM,null,0,m_fuel_OM,false],
           ].map(([name,sub,color,frac,setFrac,mAir,phiV,setPhi,step,mFuel,editable])=>(
             <div key={name} style={{display:"grid",gridTemplateColumns:cols,columnGap:14,alignItems:"center",padding:"9px 12px",borderTop:`1px solid ${C.border}`,background:`${color}08`}}>
               <div>
@@ -7667,7 +7667,7 @@ function CombustorMappingPanel({
             </div>
           ))}
           <div style={{padding:"7px 12px",background:C.bg2,borderTop:`1px solid ${C.border}`,fontSize:10.5,color:C.txtMuted,fontFamily:"monospace",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <span>Outer Main φ + M_Fuel are back-solved from the total-fuel mass balance.</span>
+            <span>Premixer 1 φ + M_Fuel are back-solved from the total-fuel mass balance.</span>
             <span>Air frac sum: <strong style={{color:Math.abs(sumFrac-100)<0.05?C.accent:C.warm}}>{sumFrac.toFixed(2)} %</strong></span>
           </div>
         </div>
@@ -7675,8 +7675,8 @@ function CombustorMappingPanel({
         })()}
 
         {sumOff?<div style={{marginTop:8,padding:"6px 10px",background:`${C.warm}14`,border:`1px solid ${C.warm}80`,borderRadius:6,fontSize:11,color:C.warm}}>⚠ Air fractions sum to {sumFrac.toFixed(2)} % — should equal 100 %.</div>:null}
-        {OMnegFuel?<div style={{marginTop:8,padding:"6px 10px",background:`${C.strong}14`,border:`1px solid ${C.strong}80`,borderRadius:6,fontSize:11,color:C.strong}}>⚠ IP + OP + IM fuel exceeds cycle total — Outer Main went to zero. Reduce pilot/main φ.</div>:null}
-        {!OMnegFuel&&OMphiExtreme?<div style={{marginTop:8,padding:"6px 10px",background:`${C.warm}14`,border:`1px solid ${C.warm}80`,borderRadius:6,fontSize:11,color:C.warm}}>⚠ Outer Main φ = {phi_OM.toFixed(3)} is outside the [0.05, 1.5] premixer band.</div>:null}
+        {OMnegFuel?<div style={{marginTop:8,padding:"6px 10px",background:`${C.strong}14`,border:`1px solid ${C.strong}80`,borderRadius:6,fontSize:11,color:C.strong}}>⚠ Pt2 + Pt1 + PM2 fuel exceeds cycle total — Premixer 1 went to zero. Reduce pilot/main φ.</div>:null}
+        {!OMnegFuel&&OMphiExtreme?<div style={{marginTop:8,padding:"6px 10px",background:`${C.warm}14`,border:`1px solid ${C.warm}80`,borderRadius:6,fontSize:11,color:C.warm}}>⚠ Premixer 1 φ = {phi_OM.toFixed(3)} is outside the [0.05, 1.5] premixer band.</div>:null}
       </div>
 
       {/* ═════════════════════════════════════════════════════════════════
