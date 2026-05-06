@@ -1749,7 +1749,7 @@ const sA=[
 
   ["15. Combustor Mapping (LMS100 4-circuit DLE)","Reference design point","100% load, 44 °F","NOx15=45, CO15=130, PX36=4.3, PX36_HI=2.2 / DT_Main=450°F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035°F · T3=700°F · P3=638 psia."],
   ["","Per-circuit T_AFT","complete_combustion(T3, P3, φ)","Cantera complete-combustion (no dissociation)."],
-  ["","OM circuit","Residual fuel mass","m_fuel_OM = total − (IP+OP+IM). φ_OM solved & clamped to [0,3]."],
+  ["","PM1 circuit","Residual fuel mass","m_fuel_PM1 = total − (Pt2+Pt1+PM2). φ_PM1 solved & clamped to [0,3]."],
   ["","Linear correction (Step 1)","Y = Y_ref + Σ ∂Y/∂xₖ · (xₖ − xₖ_ref)","Vars: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (≥0.25 floor), Tflame, T3. All four outputs treat ∂/∂DT_Main piecewise: NOx15 linear above 150 °F floor / frozen below; CO15 linear above 75 °F / flat 25–75 / reversed below 25; PX36_SEL/HI linear up to 650 °F ceiling / frozen above."],
   ["","Phi_OP multiplier (Step 2)","HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45","Linear interp on the 0.10 band. PX36_SEL_HI only."],
   ["","P3 scaling (Step 3)","(P3/638)^exp","NOx15=0.467, CO15=−1.0, SEL=1.35, SEL_HI=0.65."],
@@ -1761,9 +1761,9 @@ const sA=[
   ["16. Live Mapping (HMI sim)","Tick rate","2 Hz","Two samples per second across every metric. 10-minute rolling buffer (1200 samples). 2 Hz gives PX36_SEL / PX36_SEL_HI the transient resolution to read acoustic spikes; slow metrics (NOx, CO, MWI_GC, MW) are dead-time / lag-dominated so the higher rate just adds interpolation points to their existing curves."],
   ["","Instrument response","Transport delay + smoothstep","display(t) = lookup(t − deadT) blended over transT. Per-metric deadT/transT: PX36 0/1, NOx/CO 83/7, MWI_WIM 2/5, MWI_GC 415/5, MW 0/7."],
   ["","Noise","Per-metric, mean-band dependent","PX36: random step 1–9% every 1–2 s. NOx/CO: 20-s sine. MWI: 2.5% white + 2-min sine."],
-  ["","PX36 protection trigger","PX36_SEL > 5.5 psi  OR  PX36_SEL_HI > 2.5 psi","Action depends on current BRNDMD. BR=4 → 4-hour TRIP (full engine shutdown banner). BR=6 or 7 → stage down to BD4 (BD4 50 s → BD6 30 s → BD7) and increment cycle count; LOCK at BD4 after 3 cycles. BR=1 or 2 → no action."],
+  ["","PX36 protection trigger","PX36_SEL > 5.5 psi  OR  PX36_SEL_HI > 2.5 psi","Action depends on current BRNDMD. BR=D → 4-hour TRIP (full engine shutdown banner). BR=F or G → stage down to BD D (BD D 50 s → BD F 30 s → BD G) and increment cycle count; LOCK at BD D after 3 cycles. BR=A or B → no action."],
   ["","Stochastic trips","phi_IP / phi_OP exceeding load-interp band","Random threshold rolled per band entry. Trip → all targets ramp to 0; 4-hour lockout banner."],
-  ["","Emissions Mode staging","BD4 → 50 s → BD6 → 30 s → BD7","Triggered when Emissions Mode toggles ON. Endpoint adapts to current MW (skip / stop at BD6 / full)."],
+  ["","Emissions Mode staging","BD D → 50 s → BD F → 30 s → BD G","Triggered when Emissions Mode toggles ON. Endpoint adapts to current MW (skip / stop at BD F / full)."],
 
   ["17. Exhaust Slip & η_c","Inputs","Measured CO, UHC (as CH₄), H₂ in dry exhaust (ppmvd)","User-entered. Zero values bypass the slip block (η_c = 1)."],
   ["","η_c formula","1 − (N_dry/fuel) · Σ(X_i · LHV_i,molar) / LHV_fuel,molar","Energy-loss form. Mirrors ASME PTC 4 / Lefebvre & Ballal Ch. 9."],
@@ -1816,7 +1816,7 @@ if(mappingTables && _showMapping){
     ["Unit System",u==="SI"?"SI (K, bar, m, m/s)":"English (°F, psia, ft, ft/s)","UI display only — internal calcs are SI"],
     ["Computation Mode",accurate?"ACCURATE (Cantera backend)":"SIMPLE (in-browser JS)","Accurate requires subscription"],
     ["Combustion Mode",combMode==="equilibrium"?"Chemical Equilibrium":"Complete Combustion","Drives AFT, Exhaust, Ops Summary"],
-    ["Emissions Mode (Live Mapping staging)",emissionsMode?"ENABLED (BD7 ladder)":"DISABLED (BD4 only)","Drives BRNDMD ladder & live-mapping staging"],
+    ["Emissions Mode (Live Mapping staging)",emissionsMode?"ENABLED (BD G ladder)":"DISABLED (BD D only)","Drives BRNDMD ladder & live-mapping staging"],
     ["Linkage T3 ← Cycle T3",linkT3?"ON":"OFF","Sidebar T_air follows cycle T3"],
     ["Linkage P3 ← Cycle P3",linkP3?"ON":"OFF","Sidebar P follows cycle P3"],
     ["Linkage φ ← Cycle φ_Bulk",linkFAR?"ON":"OFF","Sidebar φ follows cycle φ_Bulk"],
@@ -2365,7 +2365,7 @@ function HelpModal({show,onClose}){if(!show)return null;
       <p><strong>Intercooler coolant T</strong> — only shown for LMS100PB+. Sets the HPC inlet temperature (architectural intercooler benefit).</p>
       <p><strong>Combustor air fraction</strong> — flame-zone air ÷ total combustor inflow. Higher = leaner flame zone. Drives T_Bulk vs T4 split.</p>
       <p><strong>Bleed (Auto / Manual)</strong> — compressor bleed valve. <em>Auto</em> follows a load schedule. <em>Manual</em> exposes the open % slider with a chip-selectable step (1, 15, 30, 45, 60, 75, 90 %). Valve size sets the maximum bleed fraction at 100 % open.</p>
-      <p><strong>Emissions Mode</strong> — when ON, the Combustor Mapping panel and Live Mapping use the BD7 staging ladder (DLE behavior). When OFF, the engine runs in BD4. In Live Mapping, toggling ON triggers a BD4→BD6→BD7 ramp; toggling OFF cancels any ramp in progress.</p>
+      <p><strong>Emissions Mode</strong> — when ON, the Combustor Mapping panel and Live Mapping use the BD G staging ladder (DLE behavior). When OFF, the engine runs in BD D. In Live Mapping, toggling ON triggers a BD D → BD F → BD G ramp; toggling OFF cancels any ramp in progress.</p>
 
       {_sub("Fuel & Oxidizer Composition")}
       <p>Pick a preset (Pipeline NG, Pure CH₄, etc.) or type custom mol % values. The total <strong>must sum to 100 %</strong> — the Σ indicator turns red if it doesn't. Compositions are shared across every panel.</p>
@@ -5538,23 +5538,23 @@ function AssumptionsPanel(){
     <AssumptionsGroup title="15. Combustor Mapping (LMS100 4-circuit DLE — correlation)" subtitle="Per-circuit T_AFT from a complete-combustion solve, then linear-anchored emissions / dynamics. No reactor kinetics. Drives the Combustor Mapping panel and the Operations Summary.">
       <Assumption label="Reference design point" value="LMS100 DLE, 100% load, 44 °F" note="NOx15=45 ppmvd · CO15=130 ppmvd · PX36_SEL=4.3 psi · PX36_SEL_HI=2.2 psi. DT_Main=450 °F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035 °F · T3=700 °F · P3=638 psia."/>
       <Assumption label="Per-circuit T_AFT" value="complete_combustion at (T3, P3, φ_circuit)" note="Cantera complete-combustion (no dissociation) at the circuit-specific φ. Falls back to T_air when φ ≈ 0."/>
-      <Assumption label="OM circuit" value="Residual fuel mass" note="m_fuel_OM = m_fuel_total − (m_fuel_IP + m_fuel_OP + m_fuel_IM). φ_OM is back-solved and clamped to [0, 3]."/>
+      <Assumption label="PM1 circuit" value="Residual fuel mass" note="m_fuel_PM1 = m_fuel_total − (m_fuel_Pt2 + m_fuel_Pt1 + m_fuel_PM2). φ_PM1 is back-solved and clamped to [0, 3]."/>
       <Assumption label="Linear correction (Step 1)" value="Y_lin = Y_ref + Σₖ (∂Y/∂xₖ)·(xₖ − xₖ_ref)" note="Variables: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (above 0.25 floor), Tflame, T3. Per-output derivatives baked into the module — see combustor_mapping.py. All four outputs treat ∂/∂DT_Main piecewise (the entries in the linear-derivative table are 0; per-output helpers do the work): NOx15 — linear above the 150 °F floor and frozen below (so very flat IM/OM splits don't drag NOx down without bound); CO15 — linear above 75 °F (slope +0.424 ppm/°F), flat plateau between 25 and 75 °F (frozen at −159 ppm), reversed slope below 25 °F (the contribution climbs back up as DT_Main falls further); PX36_SEL and PX36_SEL_HI — linear up to a 650 °F ceiling and frozen above."/>
       <Assumption label="Phi_OP multiplier (Step 2)" value="HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45" note="Linear interp on the 0.10 band between. PX36_SEL_HI is the only output that gets this multiplier."/>
       <Assumption label="P3 scaling (Step 3)" value="(P3/638)^exp" note="Exponents: NOx15=0.467, CO15=−1.0, PX36_SEL=1.35, PX36_SEL_HI=0.65. Anchored at the design P3 = 638 psia."/>
       <Assumption label="C3-effective" value="0.8·(C2H6+C2H4+C2H2) + (C3H8+C4H10+...+C8H18)" note="C2-class species at 0.8 coefficient; C3 and every heavier hydrocarbon at 1.0."/>
       <Assumption label="Tflame derivative (NOx only)" value="Piecewise: 0.12 ppm/°F ≥2850, 0.04 between 2750–2850, 0 below 2750" note="Integrated continuously from T_ref = 3035 °F so the contribution has no jumps at breakpoints."/>
       <Assumption label="Emissions Transfer Function" value="Per-BRNDMD post-multipliers on NOx, CO, PX36" note="User-trim knob, default 1.0 for all. PX36_SEL_HI does NOT take this multiplier (its tuning is in Step 2). Stored per BRNDMD ∈ {2,4,6,7}."/>
-      <Assumption label="Air flow split" value="W36 = W3 · (W36/W3); flame air = W36 · com.Air Frac; effusion / cooling = W36 · (1 − com.Air Frac)" note="W36 enters the dome and is split across the four fuel circuits. The remainder is effusion / cooling air. Outer Main is the float circuit: m_fuel_OM = total − IP − OP − IM, and φ_OM is back-solved."/>
+      <Assumption label="Air flow split" value="W36 = W3 · (W36/W3); flame air = W36 · com.Air Frac; effusion / cooling = W36 · (1 − com.Air Frac)" note="W36 enters the dome and is split across the four fuel circuits. The remainder is effusion / cooling air. Premixer 1 is the float circuit: m_fuel_PM1 = total − Pt2 − Pt1 − PM2, and φ_PM1 is back-solved."/>
     </AssumptionsGroup>
 
     <AssumptionsGroup title="16. Live Mapping (HMI sim — visual only, no engineering data)" subtitle="Real-time trace dashboard. Numbers are derived from the mapping correlation above plus a stochastic instrument-response model. Behavior is intentional and not under operator control.">
       <Assumption label="Tick rate" value="2 Hz" note="Two samples per second across every metric. Buffer holds 10 minutes (1200 samples) and shifts oldest out. The acoustic metrics (PX36_SEL, PX36_SEL_HI) need this resolution for transient spikes; slow metrics (NOx, CO, MWI_GC, MW) are dead-time / lag-dominated and just carry extra interpolation points."/>
       <Assumption label="Instrument response" value="History-based transport delay + 1st-order smoothstep" note="displayed(t) = lookup(history, t − deadT) blended via smoothstep over transT. Per-metric deadT/transT: PX36 0/1, NOx/CO 83/7, MWI_WIM 2/5, MWI_GC 415/5, MW 0/7."/>
       <Assumption label="Noise model" value="Per-metric, mean-band dependent" note="PX36: random step every 1–2 s, amplitude scales with mean (1.5–3.4% low, 7–9% high). NOx/CO: 20-second sine, amplitude re-rolled at each cycle. MWI: 2.5% white + slow 2-min sine."/>
-      <Assumption label="PX36 protection trigger" value="PX36_SEL > 5.5 psi  OR  PX36_SEL_HI > 2.5 psi" note="Action depends on current BRNDMD: at BR=4 the engine TRIPS (4-hour shutdown banner with cause-tagged sensor + value). At BR=6 or 7 the engine stages down to BD4 (BD4 50 s → BD6 30 s → BD7) and the cycle counter advances; after 3 cycles the engine LOCKS at BD4. At BR=1 or 2 (startup / low-MW modes) no action is taken."/>
-      <Assumption label="Stochastic engine trips" value="phi_IP / phi_OP excursions" note="At BR=7, phi_IP entry into a load-interpolated band rolls a random threshold; crossing it trips the engine. Same logic for phi_OP at BR=6 or 7. After trip, all targets ramp to 0 with metric-specific delays; banner shows a 4-hour lockout countdown."/>
-      <Assumption label="Emissions Mode staging" value="BD4 → 50 s → BD6 → 30 s → BD7 (or stop at BD6)" note="Triggered when Emissions Mode toggles ON during mapping. Endpoint adapts to current MW: low load skips, mid load (BR_max=6) stops at BD6, high load runs the full sequence."/>
+      <Assumption label="PX36 protection trigger" value="PX36_SEL > 5.5 psi  OR  PX36_SEL_HI > 2.5 psi" note="Action depends on current BRNDMD: at BR=D the engine TRIPS (4-hour shutdown banner with cause-tagged sensor + value). At BR=F or G the engine stages down to BD D (BD D 50 s → BD F 30 s → BD G) and the cycle counter advances; after 3 cycles the engine LOCKS at BD D. At BR=A or B (startup / low-MW modes) no action is taken."/>
+      <Assumption label="Stochastic engine trips" value="phi_Pt2 / phi_Pt1 excursions" note="At BR=G, phi_Pt2 entry into a load-interpolated band rolls a random threshold; crossing it trips the engine. Same logic for phi_Pt1 at BR=F or G. After trip, all targets ramp to 0 with metric-specific delays; banner shows a 4-hour lockout countdown."/>
+      <Assumption label="Emissions Mode staging" value="BD D → 50 s → BD F → 30 s → BD G (or stop at BD F)" note="Triggered when Emissions Mode toggles ON during mapping. Endpoint adapts to current MW: low load skips, mid load (BR_max=F) stops at BD F, high load runs the full sequence."/>
     </AssumptionsGroup>
   </div>);
 }
@@ -6664,10 +6664,10 @@ function CombustorMappingPanel({
         tripCause: tr.tripCause || null,
         // Per-circuit φ as the ticker sees them (the φ that fed the
         // backend correlation visible in corr_*).
-        phi_IP: Number(phiIPRef.current) || 0,
-        phi_OP: Number(phiOPRef.current) || 0,
-        phi_IM: Number(phiIMRef.current) || 0,
-        phi_OM: _md_diag?.phi_OM ?? null,
+        phi_Pt2: Number(phiIPRef.current) || 0,
+        phi_Pt1: Number(phiOPRef.current) || 0,
+        phi_PM2: Number(phiIMRef.current) || 0,
+        phi_PM1: _md_diag?.phi_OM ?? null,
         // Cycle inputs / outputs at this tick.
         load_pct:  _diag_cyc?.load_pct ?? null,
         T3_K:      _diag_cyc?.T3_K ?? null,
@@ -6685,10 +6685,10 @@ function CombustorMappingPanel({
         DT_Main_F:  _diag_derived?.DT_Main_F ?? null,
         Tflame_K:   _diag_derived?.Tflame_K ?? null,
         // Per-circuit fuel mass flows (for fuel-split sanity check).
-        m_fuel_IP:  _diag_circuits?.IP?.m_fuel_kg_s ?? null,
-        m_fuel_OP:  _diag_circuits?.OP?.m_fuel_kg_s ?? null,
-        m_fuel_IM:  _diag_circuits?.IM?.m_fuel_kg_s ?? null,
-        m_fuel_OM:  _diag_circuits?.OM?.m_fuel_kg_s ?? null,
+        m_fuel_Pt2:  _diag_circuits?.IP?.m_fuel_kg_s ?? null,
+        m_fuel_Pt1:  _diag_circuits?.OP?.m_fuel_kg_s ?? null,
+        m_fuel_PM2:  _diag_circuits?.IM?.m_fuel_kg_s ?? null,
+        m_fuel_PM1:  _diag_circuits?.OM?.m_fuel_kg_s ?? null,
       });
       // 2 Hz × 10-minute window = 1200 samples in the ring buffer.
       // Every metric is sampled at 2 Hz; the acoustic ones (PX36_SEL,
@@ -6777,11 +6777,11 @@ function CombustorMappingPanel({
       "mean_MWI_WIM","mean_MWI_GC","mean_MW",
       "emissionsMode","brndmdOverride","br_computed",
       "protection_state","protection_cycleCount","tripped","tripCause",
-      "phi_IP","phi_OP","phi_IM","phi_OM",
+      "phi_Pt2","phi_Pt1","phi_PM2","phi_PM1",
       "load_pct","T3_K","P3_bar","T_fuel_K","MW_net",
       "corr_NOx15","corr_CO15","corr_PX36_SEL","corr_PX36_SEL_HI",
       "DT_Main_F","Tflame_K",
-      "m_fuel_IP","m_fuel_OP","m_fuel_IM","m_fuel_OM",
+      "m_fuel_Pt2","m_fuel_Pt1","m_fuel_PM2","m_fuel_PM1",
     ];
     const fmt = v => v == null ? "" : (typeof v === "boolean" ? (v ? "TRUE" : "FALSE") : String(v));
     const lines = [cols.join(",")];
@@ -7492,9 +7492,9 @@ function CombustorMappingPanel({
                       PX36_SEL trip at <strong style={{color:accent,fontSize:14}}>{fmtPx(protBanner.px36Val)} {pxUnit}</strong>
                       &nbsp;·&nbsp; <strong>{tStr}</strong>
                       {!isLocked && (<>
-                        &nbsp;·&nbsp; BR=<strong style={{color:C.violet}}>{protBanner.currentBR}</strong>
+                        &nbsp;·&nbsp; BR=<strong style={{color:C.violet}}>{BL(protBanner.currentBR)}</strong>
                         {protBanner.nextBR != null && (<>
-                          &nbsp;→&nbsp; BR=<strong style={{color:C.violet}}>{protBanner.nextBR}</strong>
+                          &nbsp;→&nbsp; BR=<strong style={{color:C.violet}}>{BL(protBanner.nextBR)}</strong>
                           &nbsp;in&nbsp;<strong style={{color:accent,fontSize:14}}>{remain != null ? `${Math.ceil(remain)} s` : "—"}</strong>
                         </>)}
                         {protBanner.nextBR == null && <em style={{color:C.txtDim}}>&nbsp;· monitoring (will retrigger if PX36 spikes again)</em>}
@@ -7548,9 +7548,9 @@ function CombustorMappingPanel({
                       EMISSIONS MODE STAGING IN PROGRESS
                     </div>
                     <div style={{fontSize:13,color:C.txt,fontFamily:"monospace",lineHeight:1.55}}>
-                      Currently at BR=<strong style={{color:accent,fontSize:14}}>{emStagingBanner.currentBR}</strong>
+                      Currently at BR=<strong style={{color:accent,fontSize:14}}>{BL(emStagingBanner.currentBR)}</strong>
                       {emStagingBanner.nextBR != null && (<>
-                        &nbsp;→&nbsp; BR=<strong style={{color:accent,fontSize:14}}>{emStagingBanner.nextBR}</strong>
+                        &nbsp;→&nbsp; BR=<strong style={{color:accent,fontSize:14}}>{BL(emStagingBanner.nextBR)}</strong>
                         &nbsp;in&nbsp;<strong style={{color:accent,fontSize:14}}>{remain != null ? `${Math.ceil(remain)} s` : "—"}</strong>
                       </>)}
                       {emStagingBanner.nextBR == null && (
@@ -8308,11 +8308,11 @@ function OperationsSummaryPanel({
         const _imgMap = {1:"BD2", 2:"BD2", 4:"BD4", 6:"BD4", 7:"BD7"};
         const _imgName = _br!=null ? (_imgMap[_br] || "BD2") : null;
         const _imgSrc = _imgName ? `/burner-modes/${_imgName}.png` : null;
-        const _modeLabel = {1:"BRNDMD 1 — Sub-idle", 2:"BRNDMD 2 — Pilot only (IP+OP)", 4:"BRNDMD 4 — Pilots + Outer Main", 6:"BRNDMD 6 — Pilots + Both Mains (transitional)", 7:"BRNDMD 7 — Full ladder, all four circuits"}[_br] || "";
+        const _modeLabel = {1:"BRNDMD A — Sub-idle", 2:"BRNDMD B — Pilots only (Pt1+Pt2)", 4:"BRNDMD D — Pilots + Premixer 1", 6:"BRNDMD F — Pilots + both Premixers (transitional)", 7:"BRNDMD G — Full ladder, all four circuits"}[_br] || "";
         return (
           <div style={{display:"flex",flexDirection:"column",gap:8,minWidth:0}}>
             <div style={{fontSize:9.5,fontWeight:700,color:C.violet,textTransform:"uppercase",letterSpacing:"1.2px",marginBottom:4,paddingBottom:3,borderBottom:`1px solid ${C.violet}30`}}>
-              Burner Mode (BRNDMD = {_br??"—"}) — Active Circuits
+              Burner Mode (BRNDMD = {_br!=null ? BL(_br) : "—"}) — Active Circuits
             </div>
             <div style={{background:C.bg2,border:`1px solid ${C.violet}30`,borderRadius:8,padding:14,display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
               {_imgSrc?(
@@ -8376,7 +8376,7 @@ function OperationsSummaryPanel({
           padding:"8px 12px",marginBottom:10,
           background:C.bg2,border:`1px solid ${C.border}`,borderRadius:6,
           fontFamily:"'Barlow',sans-serif"}}
-          title="Background tint on every chart below indicates which burner mode the engine is in at that load. Cool teal = BD7 (full DLE, calm). Warm red = BD2 (startup). BD-mode breakpoints depend on engine deck and ambient — re-run the sweep after changing ambient to update the bands.">
+          title="Background tint on every chart below indicates which burner mode the engine is in at that load. Cool teal = BD G (full DLE, calm). Warm red = BD B (startup). BD-mode breakpoints depend on engine deck and ambient — re-run the sweep after changing ambient to update the bands.">
           <span style={{fontSize:10,fontWeight:700,color:C.txtDim,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",textTransform:"uppercase"}}>
             Burner mode (BR) bands:
           </span>
@@ -13026,8 +13026,8 @@ function EngineAmbientSidebar({
           else setEmissionsMode(!emissionsMode);
         }}
           title={emissionsMode
-            ?"Click to DISABLE emissions mode — engine holds at BD4 (low-load mode) regardless of MW. In Live Mapping, this cancels any in-progress staging ramp."
-            :"Click to ENABLE emissions mode — full DLE BD4→BD6→BD7 ladder is active. In Live Mapping, this triggers a staging ramp through the burner modes."}
+            ?"Click to DISABLE emissions mode — engine holds at BD D (low-load mode) regardless of MW. In Live Mapping, this cancels any in-progress staging ramp."
+            :"Click to ENABLE emissions mode — full DLE BD D → BD F → BD G ladder is active. In Live Mapping, this triggers a staging ramp through the burner modes."}
           style={{width:"100%",padding:"7px 12px",fontSize:11.5,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".6px",
             color:emissionsMode?C.good:C.strong,
             background:emissionsMode?`${C.good}18`:`${C.strong}18`,
