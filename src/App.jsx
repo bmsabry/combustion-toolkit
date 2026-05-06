@@ -1565,23 +1565,23 @@ if(_showMapping){
     ["Parameter","Value","Unit"],
     ["W36 / W3 (compressor → combustor)",fmtN(mapW36w3,4),"—"],
     ["Combustor air fraction (flame / W36)",fmtN(cycleAirFrac,4),"—"],
-    ["Inner Pilot air %",fmtN(mapFracIP,2),"% of flame air"],
-    ["Outer Pilot air %",fmtN(mapFracOP,2),"% of flame air"],
-    ["Inner Main air %", fmtN(mapFracIM,2),"% of flame air"],
-    ["Outer Main air %", fmtN(mapFracOM,2),"% of flame air"],
+    ["Pilot 2 air %",fmtN(mapFracIP,2),"% of flame air"],
+    ["Pilot 1 air %",fmtN(mapFracOP,2),"% of flame air"],
+    ["Premixer 2 air %", fmtN(mapFracIM,2),"% of flame air"],
+    ["Premixer 1 air %", fmtN(mapFracOM,2),"% of flame air"],
     [],
     ["═══ CIRCUIT EQUIVALENCE-RATIO INPUTS ═══"],
     ["Parameter","Value","Unit"],
-    ["φ_IP (Inner Pilot)",fmtN(mapPhiIP,4),"—"],
-    ["φ_OP (Outer Pilot)",fmtN(mapPhiOP,4),"—"],
-    ["φ_IM (Inner Main)", fmtN(mapPhiIM,4),"—"],
-    ["φ_OM (Outer Main, residual)",fmtN(mr?.phi_OM,4),"— (computed)"],
+    ["φ_Pt2 (Pilot 2)",fmtN(mapPhiIP,4),"—"],
+    ["φ_Pt1 (Pilot 1)",fmtN(mapPhiOP,4),"—"],
+    ["φ_PM2 (Premixer 2)", fmtN(mapPhiIM,4),"—"],
+    ["φ_PM1 (Premixer 1, residual)",fmtN(mr?.phi_OM,4),"— (computed)"],
     [],
     ["═══ EMISSIONS TRANSFER FUNCTION (post-multipliers per BRNDMD) ═══"],
     ["BRNDMD","NOx mult","CO mult","PX36 mult"],
     ...[7,6,4,2].map(k=>{
       const e=emTfMults?.[k]||{};
-      return [k,fmtN(e.NOx,3),fmtN(e.CO,3),fmtN(e.PX36,3)];
+      return [BL(k),fmtN(e.NOx,3),fmtN(e.CO,3),fmtN(e.PX36,3)];
     }),
     [],
     ["═══ CIRCUIT RESULTS (mass flows, TFlame, fuel split) ═══"],
@@ -1590,7 +1590,7 @@ if(_showMapping){
       const c=mc[k]||{};
       const _mFuelTot=["IP","OP","IM","OM"].reduce((s,kk)=>s+(mc[kk]?.m_fuel_kg_s||0),0);
       const _split=(_mFuelTot>0&&Number.isFinite(c.m_fuel_kg_s))?(c.m_fuel_kg_s/_mFuelTot*100):NaN;
-      return [k,fmtN(c.phi,4),
+      return [CL(k),fmtN(c.phi,4),
         Number.isFinite(c.T_AFT_complete_K)?fmtN(uv(u,"T",c.T_AFT_complete_K),1):"n/a",
         fmtN(c.m_air_kg_s,4),fmtN(c.m_fuel_kg_s,5),fmtN(_split,2)];
     }),
@@ -1793,11 +1793,11 @@ if(mappingTables && _showMapping){
   const _t3Header=u==="SI"?"T3 (K)":"T3 (°F)";
   const _t3Conv=u==="SI"?(F=>+(((+F-32)*5/9+273.15).toFixed(2))):(F=>+(+F).toFixed(1));
   const sM=[["═══ COMBUSTOR MAPPING TABLES — φ lookup by T3 × BRNDMD ═══"],
-    ["BRNDMD = burner mode (7=full DLE, 6=trans, 4=part-load, 2=startup)"],[],
+    ["BRNDMD = burner mode (G=full DLE, F=trans, D=part-load, B=startup)"],[],
     ["BRNDMD",_t3Header,"φ_Pt1","φ_Pt2","φ_PM2"]];
   for(const k of [7,6,4,2]){
     const rows=mappingTables[k]||[];
-    for(const r of rows){sM.push([k,_t3Conv(r.T3),+r.OP,+r.IP,+r.IM]);}
+    for(const r of rows){sM.push([BL(k),_t3Conv(r.T3),+r.OP,+r.IP,+r.IM]);}
     sM.push([]);
   }
   const wsM=XLSX.utils.aoa_to_sheet(sM);
@@ -2388,11 +2388,11 @@ function HelpModal({show,onClose}){if(!show)return null;
       <p>Run <strong>Cycle</strong> → its results propagate through the linkages into every other panel.</p>
 
       {_sub("🎯 Combustor Mapping (LMS100 only)")}
-      <p>4-circuit DLE correlation: per-circuit T_AFT (complete-combustion solve) plus a linear-anchored emissions / dynamics model centered on the LMS100 design point. <strong>Inputs</strong>: W36/W3 ratio, per-circuit air fractions (IP/OP/IM/OM), per-circuit φ (IP/OP/IM — OM is the residual). <strong>Outputs</strong>: NOx15, CO15, PX36_SEL, PX36_SEL_HI, plus stage-by-stage diagnostics (linear → φ_OP mult → P3 scaling).</p>
-      <p><strong>Mapping Tables</strong> — editable φ-vs-T3 lookups for BRNDMD ∈ {"{2, 4, 6, 7}"}. Edits persist via localStorage. The <strong>Reset</strong> button is a bimodal switch between two named presets — <strong>UNMAPPED</strong> (raw factory lookups, the default seed for fresh sessions) and <strong>MAPPED</strong> (rig-calibrated lookups). The button label flips after each click to show which preset will load on the next click. <strong>Export to Excel</strong> writes the four BRNDMD lookups in their current state to a standalone .xlsx. Used to seed circuit φ inputs as ambient changes.</p>
+      <p>4-circuit DLE correlation: per-circuit T_AFT (complete-combustion solve) plus a linear-anchored emissions / dynamics model centered on the LMS100 design point. <strong>Inputs</strong>: W36/W3 ratio, per-circuit air fractions (Pt2/Pt1/PM2/PM1), per-circuit φ (Pt2/Pt1/PM2 — PM1 is the residual). <strong>Outputs</strong>: NOx15, CO15, PX36_SEL, PX36_SEL_HI, plus stage-by-stage diagnostics (linear → φ_Pt1 mult → P3 scaling).</p>
+      <p><strong>Mapping Tables</strong> — editable φ-vs-T3 lookups for BRNDMD ∈ {"{B, D, F, G}"}. Edits persist via localStorage. The <strong>Reset</strong> button is a bimodal switch between two named presets — <strong>UNMAPPED</strong> (raw factory lookups, the default seed for fresh sessions) and <strong>MAPPED</strong> (rig-calibrated lookups). The button label flips after each click to show which preset will load on the next click. <strong>Export to Excel</strong> writes the four BRNDMD lookups in their current state to a standalone .xlsx. Used to seed circuit φ inputs as ambient changes.</p>
       <p><strong>Emissions Transfer Function</strong> — per-BRNDMD post-multipliers on NOx, CO, and PX36_SEL. Trim knob; defaults to 1.0. Persists.</p>
       <p><strong>Live Mapping</strong> — real-time HMI-style trace dashboard. <strong>▶ Start</strong> begins a 2 Hz recording for up to 10 minutes. Six charts (PX36_SEL, PX36_SEL_HI, NOx15, CO15, MWI, MW Net) with sensor-realistic noise + first-order lag (each metric has its own deadtime and time constant). Per-chart <strong>y-axis Min/Max</strong> inputs persist; auto-extend if data exceeds your bounds.</p>
-      <p style={{paddingLeft:14,borderLeft:`2px solid ${C.txtMuted}50`,fontSize:11,color:C.txtMuted}}>The Live Mapping plays out a stochastic plant model under the hood: PX36 spikes &gt; 5.5 trigger a 3-cycle protection sequence (BD4→BD6→BD7); rare φ_IP/φ_OP excursions trigger a full engine trip with a 4-hour lockout banner and a Reset button. Toggling Emissions Mode ON during mapping triggers the same staging ladder, ending at BD6 or BD7 depending on load. These behaviors are intentional and not under the operator's direct control — they exist to make the panel feel like a real control room.</p>
+      <p style={{paddingLeft:14,borderLeft:`2px solid ${C.txtMuted}50`,fontSize:11,color:C.txtMuted}}>The Live Mapping plays out a stochastic plant model under the hood: PX36 spikes &gt; 5.5 trigger a 3-cycle protection sequence (BD D → BD F → BD G); rare φ_Pt2/φ_Pt1 excursions trigger a full engine trip with a 4-hour lockout banner and a Reset button. Toggling Emissions Mode ON during mapping triggers the same staging ladder, ending at BD F or BD G depending on load. These behaviors are intentional and not under the operator's direct control — they exist to make the panel feel like a real control room.</p>
 
       {_sub("🔥 Flame Temp & Properties")}
       <p>Adiabatic flame temperature via energy balance with NASA polynomials. Two modes: <em>Complete combustion</em> (no dissociation) and <em>Equilibrium</em> (full dissociation). Outputs LHV / HHV (mass + volumetric), Wobbe Index, Modified Wobbe Index (MWI = LHV_vol / √(SG·T_fuel)), specific gravity, stoichiometric AFR, equilibrium products at T_ad. If Cycle has been run, also re-equilibrates products at T₄.</p>
@@ -6989,7 +6989,7 @@ function CombustorMappingPanel({
         <div style={{display:"flex",gap:8,flexWrap:"wrap",fontFamily:"monospace",fontSize:11,marginBottom:10}}>
           {/* BRNDMD chip — leftmost so users see the burner-mode ladder
               position at a glance before reading the cycle stations. */}
-          <div title="BRNDMD = burner mode (7=full DLE, 6=transitional, 4=part-load, 2=startup). Computed from MW_net via the emissions-mode ladder." style={{padding:"5px 9px",background:`${C.violet}15`,borderRadius:5,border:`1px solid ${C.violet}66`}}><span style={{color:C.txtDim}}>BRNDMD:</span> <strong style={{color:C.violet}}>{Number.isFinite(brndmdVal)?brndmdVal:"—"}</strong></div>
+          <div title="BRNDMD = burner mode (G=full DLE, F=transitional, D=part-load, B=startup). Computed from MW_net via the emissions-mode ladder." style={{padding:"5px 9px",background:`${C.violet}15`,borderRadius:5,border:`1px solid ${C.violet}66`}}><span style={{color:C.txtDim}}>BRNDMD:</span> <strong style={{color:C.violet}}>{Number.isFinite(brndmdVal)?BL(brndmdVal):"—"}</strong></div>
           {/* MW_net chip — drives BRNDMD selection and is the headline cycle output. */}
           <div title="MW_net = OEM-anchored cycle deck output (after part-load, ambient droop, fuel-flex derate). Drives the BRNDMD ladder selection." style={{padding:"5px 9px",background:`${C.good}15`,borderRadius:5,border:`1px solid ${C.good}66`}}><span style={{color:C.txtDim}}>Power:</span> <strong style={{color:C.good}}>{Number.isFinite(cycleResult?.MW_net)?cycleResult.MW_net.toFixed(1):"—"} MW</strong></div>
           <div style={{padding:"5px 9px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`}}><span style={{color:C.txtDim}}>T₃:</span> <strong style={{color:C.accent}}>{fmtT(T3)} {uu(units,"T")}</strong></div>
@@ -7755,13 +7755,13 @@ function CombustorMappingPanel({
         <div style={{padding:"8px 10px",background:C.bg2,borderRadius:5,border:`1px solid ${C.border}`,marginBottom:10,fontSize:11,fontFamily:"monospace"}}>
           <div style={{color:C.txtDim,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px",marginBottom:3}}>Active lookup</div>
           <div>
-            BRNDMD = <strong style={{color:C.violet}}>{brndmdVal}</strong>
-            {brndmdVal<2?<span style={{color:C.warm}}> (no table for BRNDMD ≤ 1 — using BRNDMD=2 table)</span>:null}
+            BRNDMD = <strong style={{color:C.violet}}>{BL(brndmdVal)}</strong>
+            {brndmdVal<2?<span style={{color:C.warm}}> (no table for BRNDMD ≤ A — using BRNDMD=B table)</span>:null}
             {", "}T₃ = <strong style={{color:C.accent}}>{T3_F_cycle.toFixed(1)} °F</strong>
             {tableLookup?(
-              <>  →  φ_OP = <strong style={{color:C.orange}}>{tableLookup.OP.toFixed(3)}</strong>
-                , φ_IP = <strong style={{color:C.strong}}>{tableLookup.IP.toFixed(3)}</strong>
-                , φ_IM = <strong style={{color:C.accent}}>{tableLookup.IM.toFixed(3)}</strong></>
+              <>  →  φ_Pt1 = <strong style={{color:C.orange}}>{tableLookup.OP.toFixed(3)}</strong>
+                , φ_Pt2 = <strong style={{color:C.strong}}>{tableLookup.IP.toFixed(3)}</strong>
+                , φ_PM2 = <strong style={{color:C.accent}}>{tableLookup.IM.toFixed(3)}</strong></>
             ):<span style={{color:C.txtMuted}}> (waiting for cycle)</span>}
           </div>
         </div>
@@ -7776,7 +7776,7 @@ function CombustorMappingPanel({
               border:`1.5px solid ${C.violet}`,
               borderRadius:5,cursor:"pointer",
               display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
-              BRNDMD {k}
+              BRNDMD {BL(k)}
               {brndmdVal===k?<span style={{fontSize:8.5,opacity:0.85,fontWeight:500}}>● active</span>:null}
             </button>
           ))}
@@ -7788,9 +7788,9 @@ function CombustorMappingPanel({
             <thead style={{position:"sticky",top:0,background:C.bg2,zIndex:1}}>
               <tr>
                 <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.txtDim,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>T₃ (°F)</th>
-                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.orange,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>φ_OP</th>
-                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.strong,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>φ_IP</th>
-                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.accent,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>φ_IM</th>
+                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.orange,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>φ_Pt1</th>
+                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.strong,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>φ_Pt2</th>
+                <th style={{padding:"6px 8px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:C.accent,fontSize:9.5,textTransform:"uppercase",letterSpacing:".5px"}}>φ_PM2</th>
               </tr>
             </thead>
             <tbody>
