@@ -535,25 +535,25 @@ export const AUTO_OUTPUTS = [
   // Per-circuit fuel split (% of total fuel) — matches the Fuel_Split column
   // added to the Operating Snapshot table. Computed from circuit m_fuel
   // results divided by total m_fuel across all 4 circuits.
-  { id: "fuel_split_IP",      label: "Fuel Split IP", panel: "mapping", unit: "%",
+  { id: "fuel_split_IP",      label: "Fuel Split Pt2", panel: "mapping", unit: "%",
     pick: r => {
       const c = r.map?.circuits || {};
       const tot = ["IP","OP","IM","OM"].reduce((s,k)=>s+(c[k]?.m_fuel_kg_s||0),0);
       return (tot > 0 && Number.isFinite(c.IP?.m_fuel_kg_s)) ? c.IP.m_fuel_kg_s/tot*100 : null;
     } },
-  { id: "fuel_split_OP",      label: "Fuel Split OP", panel: "mapping", unit: "%",
+  { id: "fuel_split_OP",      label: "Fuel Split Pt1", panel: "mapping", unit: "%",
     pick: r => {
       const c = r.map?.circuits || {};
       const tot = ["IP","OP","IM","OM"].reduce((s,k)=>s+(c[k]?.m_fuel_kg_s||0),0);
       return (tot > 0 && Number.isFinite(c.OP?.m_fuel_kg_s)) ? c.OP.m_fuel_kg_s/tot*100 : null;
     } },
-  { id: "fuel_split_IM",      label: "Fuel Split IM", panel: "mapping", unit: "%",
+  { id: "fuel_split_IM",      label: "Fuel Split PM2", panel: "mapping", unit: "%",
     pick: r => {
       const c = r.map?.circuits || {};
       const tot = ["IP","OP","IM","OM"].reduce((s,k)=>s+(c[k]?.m_fuel_kg_s||0),0);
       return (tot > 0 && Number.isFinite(c.IM?.m_fuel_kg_s)) ? c.IM.m_fuel_kg_s/tot*100 : null;
     } },
-  { id: "fuel_split_OM",      label: "Fuel Split OM", panel: "mapping", unit: "%",
+  { id: "fuel_split_OM",      label: "Fuel Split PM1", panel: "mapping", unit: "%",
     pick: r => {
       const c = r.map?.circuits || {};
       const tot = ["IP","OP","IM","OM"].reduce((s,k)=>s+(c[k]?.m_fuel_kg_s||0),0);

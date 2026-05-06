@@ -57,6 +57,22 @@ function uv(units,key,val){return UC[units][key].from(val);}
 function uvI(units,key,disp){return UC[units][key].to(disp);}  // display units -> SI
 function uu(units,key){return UC[units][key].u;}
 
+// ── Display-name mappings ────────────────────────────────────────────
+// Customer-facing labels for the four DLE combustor circuits and the five
+// burner modes. Internal data keys (cycleResult.OP, mappingResults.IM,
+// _br=7, etc.) intentionally keep their original names — only the
+// display layer is renamed. Use CL("OP") / BL(7) anywhere a UI string,
+// Excel header, or chart label is generated.
+const _CIRCUIT_LABEL = {
+  OMain: "PM1", OM: "PM1",
+  OP: "Pt1",
+  IMain: "PM2", IM: "PM2",
+  IP: "Pt2",
+};
+const _BR_LABEL = { 1: "A", 2: "B", 4: "D", 6: "F", 7: "G" };
+function CL(k){ return _CIRCUIT_LABEL[k] ?? k; }
+function BL(br){ return _BR_LABEL[br] ?? String(br); }
+
 // Default mapping tables — φ for IP/OP/IM as a function of T3 (°F) and BRNDMD.
 // Used by the Combustor Mapping panel: once T3 and BRNDMD are known, look up
 // the three φ values and auto-fill the IP/OP/IM circuit inputs. User can edit
@@ -1778,7 +1794,7 @@ if(mappingTables && _showMapping){
   const _t3Conv=u==="SI"?(F=>+(((+F-32)*5/9+273.15).toFixed(2))):(F=>+(+F).toFixed(1));
   const sM=[["═══ COMBUSTOR MAPPING TABLES — φ lookup by T3 × BRNDMD ═══"],
     ["BRNDMD = burner mode (7=full DLE, 6=trans, 4=part-load, 2=startup)"],[],
-    ["BRNDMD",_t3Header,"φ_OuterPilot","φ_InnerPilot","φ_InnerMain"]];
+    ["BRNDMD",_t3Header,"φ_Pt1","φ_Pt2","φ_PM2"]];
   for(const k of [7,6,4,2]){
     const rows=mappingTables[k]||[];
     for(const r of rows){sM.push([k,_t3Conv(r.T3),+r.OP,+r.IP,+r.IM]);}
@@ -2175,10 +2191,10 @@ const C = new Proxy({}, {
 //          chart-background fill rectangles. Subtle enough to never
 //          out-shout the data line.
 const BR_PALETTE = {
-  7: { solid: "#2DD4BF", tint: "#2DD4BF14", label: "BD7", desc: "Full DLE (high load)" },
-  6: { solid: "#A78BFA", tint: "#A78BFA14", label: "BD6", desc: "Transition" },
-  4: { solid: "#FBBF24", tint: "#FBBF2414", label: "BD4", desc: "Part-load" },
-  2: { solid: "#F87171", tint: "#F8717114", label: "BD2", desc: "Startup / off-design" },
+  7: { solid: "#2DD4BF", tint: "#2DD4BF14", label: "BDG", desc: "Full DLE (high load)" },
+  6: { solid: "#A78BFA", tint: "#A78BFA14", label: "BDF", desc: "Transition" },
+  4: { solid: "#FBBF24", tint: "#FBBF2414", label: "BDD", desc: "Part-load" },
+  2: { solid: "#F87171", tint: "#F8717114", label: "BDB", desc: "Startup / off-design" },
 };
 // Compute BR-mode background-band specs from a load-sweep result.
 // Walks the sorted-by-load points and emits one band per contiguous BR-mode
@@ -6850,7 +6866,7 @@ function CombustorMappingPanel({
       ["BRNDMD = burner mode (7=full DLE, 6=trans, 4=part-load, 2=startup)"],
       ["Generated: " + new Date().toISOString().slice(0, 16)],
       [],
-      ["BRNDMD", _t3Header, "φ_OuterPilot", "φ_InnerPilot", "φ_InnerMain"],
+      ["BRNDMD", _t3Header, "φ_Pt1", "φ_Pt2", "φ_PM2"],
     ];
     for (const k of [7, 6, 4, 2]){
       const rows = mappingTables[k] || [];
@@ -7006,10 +7022,10 @@ function CombustorMappingPanel({
               </thead>
               <tbody>
                 {[
-                  ["Inner Pilot","IP",C.strong,"centerbody pilot",C_IP,phiIP,setPhiIP,0.05,true],
-                  ["Outer Pilot","OP",C.orange,"annular pilot",C_OP,phiOP,setPhiOP,0.05,true],
-                  ["Inner Main","IM",C.accent,"inner premix",C_IM,phiIM,setPhiIM,0.005,true],
-                  ["Outer Main","OM",C.accent2,"float circuit",C_OM,phi_OM,null,0,false],
+                  ["Pt2","Pt2",C.strong,"centerbody pilot",C_IP,phiIP,setPhiIP,0.05,true],
+                  ["Pt1","Pt1",C.orange,"annular pilot",C_OP,phiOP,setPhiOP,0.05,true],
+                  ["PM2","PM2",C.accent,"inner premix",C_IM,phiIM,setPhiIM,0.005,true],
+                  ["PM1","PM1",C.accent2,"float circuit",C_OM,phi_OM,null,0,false],
                 ].map(([label,key,color,sub,row,phiV,setPhi,step,editable],idx)=>(
                   <tr key={key} style={{background:`${color}08`}}>
                     <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}40`,minWidth:140}}>
@@ -7400,10 +7416,10 @@ function CombustorMappingPanel({
                       lineHeight:1.5,marginTop:2,letterSpacing:".2px"}}>
                       Mapping at trip:&nbsp;
                       Load <strong style={{color:C.txt}}>{tripBanner.loadPct.toFixed(0)} %</strong>
-                      &nbsp;·&nbsp; BR <strong style={{color:C.violet}}>{tripBanner.brndmd}</strong>
-                      &nbsp;·&nbsp; φ<sub>IP</sub> <strong style={{color:C.txt}}>{tripBanner.phiIp.toFixed(3)}</strong>
-                      &nbsp;·&nbsp; φ<sub>OP</sub> <strong style={{color:C.txt}}>{tripBanner.phiOp.toFixed(3)}</strong>
-                      &nbsp;·&nbsp; φ<sub>IM</sub> <strong style={{color:C.txt}}>{tripBanner.phiIm.toFixed(3)}</strong>
+                      &nbsp;·&nbsp; BR <strong style={{color:C.violet}}>{BL(tripBanner.brndmd)}</strong>
+                      &nbsp;·&nbsp; φ<sub>Pt2</sub> <strong style={{color:C.txt}}>{tripBanner.phiIp.toFixed(3)}</strong>
+                      &nbsp;·&nbsp; φ<sub>Pt1</sub> <strong style={{color:C.txt}}>{tripBanner.phiOp.toFixed(3)}</strong>
+                      &nbsp;·&nbsp; φ<sub>PM2</sub> <strong style={{color:C.txt}}>{tripBanner.phiIm.toFixed(3)}</strong>
                     </div>
                     <div style={{fontSize:12,color:C.txtMuted,fontStyle:"italic",
                       marginTop:4,fontFamily:"'Barlow',sans-serif"}}>
@@ -7431,18 +7447,17 @@ function CombustorMappingPanel({
               const tStr = (()=>{const d=new Date(protBanner.atSeconds*1000);return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}:${String(d.getSeconds()).padStart(2,"0")}`;})();
               const remain = protBanner.timerEndsAt ? Math.max(0, protBanner.timerEndsAt - (Date.now()/1000)) : null;
               const titleText = isLocked
-                ? "ENGINE LOCKED IN BD 4"
+                ? "ENGINE LOCKED IN BD D"
                 : (protBanner.cycleCount === 1
-                    ? "STAGED DOWN TO BD 4 — ELEVATED ACOUSTICS"
+                    ? "STAGED DOWN TO BD D — ELEVATED ACOUSTICS"
                     : `ENGINE PROTECTION CYCLE ${protBanner.cycleCount} OF 3`);
-              // Sub-text always says "STAGED DOWN TO BD 4" because that IS
+              // Sub-text always says "STAGED DOWN TO BD D" because that IS
               // the protective action triggered by the acoustic spike. The
-              // 4 → 6 → 7 recovery progression is shown in the detail line
-              // below ("BR=4 → BR=6 in N s"). Saying "STAGED DOWN TO BD 7"
-              // when the cycle has restaged UP to BD 7 is nonsense.
+              // D -> F -> G recovery progression is shown in the detail line
+              // below.
               const subText = isLocked
                 ? "CONTACT YOUR PROVIDER"
-                : (protBanner.cycleCount > 1 ? "STAGED DOWN TO BD 4 — ACOUSTICS RETRIGGERED" : null);
+                : (protBanner.cycleCount > 1 ? "STAGED DOWN TO BD D — ACOUSTICS RETRIGGERED" : null);
               return (
                 <div style={{
                   marginBottom:14,padding:"18px 22px",
@@ -8229,7 +8244,7 @@ function OperationsSummaryPanel({
           tip="Net shaft power divided by fuel LHV thermal input. Equivalent to 1 / HR in consistent units."/>
         <Hero flex={0} small label="Heat Rate" value={cycleResult.heat_rate_kJ_per_kWh.toFixed(0)} unit="kJ/kWh" color={C.accent3}
           tip="Fuel heat input per unit electrical output. Lower is better."/>
-        <Hero flex={0} small label="BRNDMD" value={String(calcBRNDMD(cycleResult.MW_net, emissionsMode, brndmdOverride))} unit="" color={C.violet}
+        <Hero flex={0} small label="BRNDMD" value={BL(calcBRNDMD(cycleResult.MW_net, emissionsMode, brndmdOverride))} unit="" color={C.violet}
           tip={`Burner mode — piecewise-constant function of net shaft power (MW). Emissions Mode is currently ${emissionsMode?"ENABLED — full ladder 1/2/4/6/7":"DISABLED — holds at 4 for MW > 45"}. Breakpoints (emissions ON): ≤10 → 1, ≤45 → 2, ≤65 → 4, ≤75 → 6, >75 → 7.`}/>
         <Hero flex={0} small label="Bleed Valve" value={(bleedOpenPct||0).toFixed(0)} unit="% open" color={C.orange}
           tip="Bleed valve position — 0 % = closed, 100 % = fully open. Auto schedule: 100 % below 75 % load, 0 % above 95 %, linear between. Effective air dumped = valve % × Max Bleed split %."/>
@@ -8302,7 +8317,7 @@ function OperationsSummaryPanel({
             <div style={{background:C.bg2,border:`1px solid ${C.violet}30`,borderRadius:8,padding:14,display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
               {_imgSrc?(
                 <img src={_imgSrc}
-                  alt={`Burner mode ${_imgName} — circuits active at BRNDMD ${_br}`}
+                  alt={`Burner mode diagram — circuits active at BRNDMD ${BL(_br)}`}
                   style={{maxWidth:"100%",maxHeight:480,width:"auto",height:"auto",borderRadius:6,objectFit:"contain"}}
                   onError={(e)=>{
                     e.currentTarget.style.display="none";
@@ -14475,7 +14490,7 @@ export default function App(){
                     <div style={{color:C.warm,textAlign:"center",fontWeight:700,fontSize:9.5,textTransform:"uppercase",letterSpacing:".3px"}}>PX36 ×</div>
                     {[7,6,4,2].map(k=>(
                       <Fragment key={k}>
-                        <div style={{color:C.violet,fontWeight:700,fontSize:10}}>BR={k}</div>
+                        <div style={{color:C.violet,fontWeight:700,fontSize:10}}>BR={BL(k)}</div>
                         <NumField value={emTfMults?.[k]?.NOx??1.0} decimals={2}
                           onCommit={v=>setEmTfMults(prev=>({...prev,[k]:{...(prev?.[k]||{}),NOx:Math.max(0,+v)}}))}
                           style={{width:"100%",padding:"3px 4px",fontSize:11,fontFamily:"monospace",color:C.strong,fontWeight:600,background:C.bg,border:`1px solid ${C.strong}40`,borderRadius:3,textAlign:"center",outline:"none"}}/>
