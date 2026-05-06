@@ -7022,9 +7022,9 @@ function CombustorMappingPanel({
               </thead>
               <tbody>
                 {[
-                  ["Pilot 2","Pt2",C.strong,"centerbody pilot",C_IP,phiIP,setPhiIP,0.05,true],
-                  ["Pilot 1","Pt1",C.orange,"annular pilot",C_OP,phiOP,setPhiOP,0.05,true],
-                  ["Premixer 2","PM2",C.accent,"inner premix",C_IM,phiIM,setPhiIM,0.005,true],
+                  ["Pilot 2","Pt2",C.strong,"",C_IP,phiIP,setPhiIP,0.05,true],
+                  ["Pilot 1","Pt1",C.orange,"",C_OP,phiOP,setPhiOP,0.05,true],
+                  ["Premixer 2","PM2",C.accent,"",C_IM,phiIM,setPhiIM,0.005,true],
                   ["Premixer 1","PM1",C.accent2,"float circuit",C_OM,phi_OM,null,0,false],
                 ].map(([label,key,color,sub,row,phiV,setPhi,step,editable],idx)=>(
                   <tr key={key} style={{background:`${color}08`}}>
