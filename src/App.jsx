@@ -11062,15 +11062,37 @@ function PlotPanel({ results, varSpecs, selectedOutputs, units, baseline, onClos
   // ── Multi-select state ──────────────────────────────────────────
   // Default selection: top-N most-important plots (combustion priority).
   // The Set stores chart keys; a key being IN the set means "render &
-  // export it". Recomputed whenever the chart list changes.
+  // export it".
   const DEFAULT_SHOW_N = 8;
   const [selectedKeys, setSelectedKeys] = useState(() =>
     new Set(autoCharts.slice(0, DEFAULT_SHOW_N).map(ch => ch.key))
   );
-  // Re-seed when autoCharts changes (e.g. user reruns matrix).
+  // Re-seed only when the SET of available chart keys actually changes
+  // (new matrix run, different output picks, different varied vars).
+  // Comparing autoCharts by reference would wipe user selections every
+  // time the parent re-renders, even when the chart catalog is identical
+  // — that's the "doesn't hold data" symptom. We hash the sorted key
+  // list and only react to actual content changes. We also INTERSECT
+  // the previous selection with the new key set so a user who deselected
+  // chart #3 doesn't see it come back when only one new chart appears.
+  const autoChartKeySig = useMemo(
+    () => autoCharts.map(ch => ch.key).sort().join("|"),
+    [autoCharts],
+  );
+  const prevSigRef = useRef(autoChartKeySig);
   useEffect(() => {
-    setSelectedKeys(new Set(autoCharts.slice(0, DEFAULT_SHOW_N).map(ch => ch.key)));
-  }, [autoCharts]);
+    if (prevSigRef.current === autoChartKeySig) return;
+    prevSigRef.current = autoChartKeySig;
+    const availableKeys = new Set(autoCharts.map(ch => ch.key));
+    setSelectedKeys(prev => {
+      // Keep any prior selections that still exist in the new catalog.
+      const survived = new Set([...prev].filter(k => availableKeys.has(k)));
+      if (survived.size > 0) return survived;
+      // Nothing survived (e.g. user reran with totally new outputs) →
+      // seed with the top-N defaults.
+      return new Set(autoCharts.slice(0, DEFAULT_SHOW_N).map(ch => ch.key));
+    });
+  }, [autoChartKeySig, autoCharts]);
 
   const renderedCharts = useMemo(
     () => autoCharts.filter(ch => selectedKeys.has(ch.key)),
@@ -14090,6 +14112,50 @@ export default function App(){
   // including the App-body bkCycle useBackendCalc call above. Wrapping
   // BusyProvider inside App would leave bkCycle with the default no-op
   // begin() and the top overlay would silently miss all cycle-only updates.
+
+  // ── Stable baseline for AutomatePanel ────────────────────────────────────
+  // CRITICAL: this object is consumed inside PlotPanel useMemo deps
+  // (autoCharts, customSliceData) and through baselineMismatches. If we
+  // pass it as an inline object literal in the JSX below, React creates a
+  // new reference on every App re-render — and ANY app re-render
+  // (sidebar input, hover, theme toggle, ANYTHING) becomes a "baseline
+  // changed" signal. That cascades to:
+  //   1. autoCharts useMemo recomputes
+  //   2. useEffect([autoCharts]) fires inside PlotPanel
+  //   3. setSelectedKeys() resets to default top-N
+  //   → user's hand-picked plot selections get wiped, plot heldOverrides
+  //     can drop, and the panel "loses data" between unrelated user
+  //     actions. Memoizing with primitive deps fixes the thrash.
+  // fuel and ox are objects so they're included by reference; they only
+  // change when the user actually edits composition.
+  const automateBaseline = useMemo(() => ({
+    phi, T_air:T0, T_fuel, P, WFR, water_mode:waterMode,
+    engine:cycleEngine, P_amb:cyclePamb, T_amb:cycleTamb, RH:cycleRH,
+    load_pct:cycleLoad, T_cool:cycleTcool, com_air_frac:cycleAirFrac,
+    bleed_open_pct:bleedOpenPct,
+    bleed_valve_size_pct:bleedValveSizePct,
+    emissionsMode,
+    mapW36w3, mapPhiIP, mapPhiOP, mapPhiIM,
+    mapFracIP, mapFracOP, mapFracIM, mapFracOM,
+    tau_psr, L_pfr, V_pfr, heatLossFrac,
+    velocity, Lchar, Dfh, Lpremix, Vpremix,
+    measO2, measCO2, measCO, measUHC, measH2,
+    fuelFlowKgs, fuelCostUsdPerMmbtuLhv, costPeriod,
+    fuel, ox,
+  }), [
+    phi, T0, T_fuel, P, WFR, waterMode,
+    cycleEngine, cyclePamb, cycleTamb, cycleRH,
+    cycleLoad, cycleTcool, cycleAirFrac,
+    bleedOpenPct, bleedValveSizePct, emissionsMode,
+    mapW36w3, mapPhiIP, mapPhiOP, mapPhiIM,
+    mapFracIP, mapFracOP, mapFracIM, mapFracOM,
+    tau_psr, L_pfr, V_pfr, heatLossFrac,
+    velocity, Lchar, Dfh, Lpremix, Vpremix,
+    measO2, measCO2, measCO, measUHC, measH2,
+    fuelFlowKgs, fuelCostUsdPerMmbtuLhv, costPeriod,
+    fuel, ox,
+  ]);
+
   return(
     <UnitCtx.Provider value={units}>
     <AccurateCtx.Provider value={{accurate:accurate&&hasOnline,setAccurate,available:hasOnline}}>
@@ -14625,25 +14691,12 @@ export default function App(){
                 Conditionally mounting would destroy all panel-internal
                 state on every navigation. */}
             <div style={{display: tab==="automate" ? "block" : "none"}}>
-              <AutomatePanel mode={mode} baseline={{
-                // Snapshot every input the runner needs as a per-row baseline.
-                // Anything the user doesn't vary stays at this value across rows.
-                // Field names here MUST match the override() keys used in the
-                // runner (App.jsx runAutomationMatrix inputs object).
-                phi, T_air:T0, T_fuel, P, WFR, water_mode:waterMode,
-                engine:cycleEngine, P_amb:cyclePamb, T_amb:cycleTamb, RH:cycleRH,
-                load_pct:cycleLoad, T_cool:cycleTcool, com_air_frac:cycleAirFrac,
-                bleed_open_pct:bleedOpenPct,
-                bleed_valve_size_pct:bleedValveSizePct,
-                emissionsMode,
-                mapW36w3, mapPhiIP, mapPhiOP, mapPhiIM,
-                mapFracIP, mapFracOP, mapFracIM, mapFracOM,
-                tau_psr, L_pfr, V_pfr, heatLossFrac,
-                velocity, Lchar, Dfh, Lpremix, Vpremix,
-                measO2, measCO2, measCO, measUHC, measH2,
-                fuelFlowKgs, fuelCostUsdPerMmbtuLhv, costPeriod,
-                fuel, ox,
-              }}/>
+              {/* baseline is memoized above (automateBaseline) so its
+                  identity is stable across unrelated re-renders, otherwise
+                  PlotPanel's useEffect([autoCharts]) wipes the user's
+                  selected charts on every keystroke elsewhere. Field names
+                  must match override() keys in runAutomationMatrix. */}
+              <AutomatePanel mode={mode} baseline={automateBaseline}/>
             </div>
             {tab==="nomenclature"&&<NomenclaturePanel/>}
             {tab==="assumptions"&&<AssumptionsPanel/>}
