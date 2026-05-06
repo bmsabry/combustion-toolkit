@@ -1464,7 +1464,7 @@ if(cycleResult && _showCycle){
     ["Ambient Temperature",fmtN(uv(u,"T",cycleTamb),2),uu(u,"T")],
     ["Relative Humidity",fmtN(cycleRH,1),"%"],
     ["Load",fmtN(cycleLoad,1),"%"],
-    ["Intercooler Coolant T (LMS100 only)",cycleEngine==="LMS100PB+"?fmtN(uv(u,"T",cycleTcool),2):"n/a",uu(u,"T")],
+    ["Intercooler Coolant T",cycleEngine==="LMS100PB+"?fmtN(uv(u,"T",cycleTcool),2):"n/a",uu(u,"T")],
     ["Combustor Air Fraction (flame/total)",fmtN(cycleAirFrac,3),"—"],
     ["Fuel Temp",fmtN(uv(u,"T",cr.T_fuel_K??cycleTamb),2),uu(u,"T")],
     ["Water/Fuel Mass Ratio (WFR)",fmtN(cr.WFR??WFR,3),"kg_water/kg_fuel"],
@@ -1684,7 +1684,7 @@ const sA=[
   ["","Bleed air","0%","No customer bleed / cooling-air extraction."],
   ["","Mechanical efficiency","1.00","Shaft/gearbox losses folded into deck cap."],
 
-  ["4. Intercooler (LMS100 only)","Outlet T","T_coolant_in + 0 K","Infinite-surface limit."],
+  ["4. Intercooler","Outlet T","T_coolant_in + 0 K","Infinite-surface limit."],
   ["","Pressure drop","0 bar","Not modeled."],
   ["","Heat rejected","Q_IC = mdot · Δh","Diagnostic only; not used in MW calc."],
 
@@ -1719,7 +1719,7 @@ const sA=[
   ["","Low-LHV warning","LHV_vol < 800 BTU/scf","Dilute fuel — doubles fuel flow."],
   ["","Derate application","MW_net = MW_uncapped · (1 − derate%)","Stacks with part-load, not with ambient droop."],
 
-  ["10. Engine Deck Anchors","LMS100PB+","109.2 MW @ 44 °F / 80% RH","T3 644 K · P3 44.4 bar · T4 1800 K (2780°F) · η_LHV 44.9% · HR 8016 kJ/kWh · intercooled. Now driven by user-supplied 100%-load deck table (P3, T3, T4, MW vs T_amb). Additional engines are in development."],
+  ["10. Engine Deck Anchors","Simulated IC Engine","109.2 MW @ 44 °F / 80% RH","T3 644 K · P3 44.4 bar · T4 1800 K (2780°F) · η_LHV 44.9% · HR 8016 kJ/kWh · intercooled. Now driven by user-supplied 100%-load deck table (P3, T3, T4, MW vs T_amb). Additional engines are in development."],
   ["","Anchor method","combustor_bypass_frac + η_isen_turb","Two per-engine knobs fit MW and η at anchor."],
 
   ["11. Off-design Scaling","Density lapse","mdot_air ∝ ρ_amb · VGV(T_amb)","Engine-specific lapse curve."],
@@ -2359,10 +2359,10 @@ function HelpModal({show,onClose}){if(!show)return null;
 
       {_h("Left Sidebar")}
       {_sub("Engine & Ambient")}
-      <p><strong>Engine</strong> — currently calibrated for the LMS100PB+ DLE IC (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives MW cap, T4 firing temperature, and the Combustor Mapping panel. Additional engines are in development.</p>
+      <p><strong>Engine</strong> — currently calibrated for the Simulated IC Engine (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives MW cap, T4 firing temperature, and the Combustor Mapping panel. Additional engines are in development.</p>
       <p><strong>Ambient P / T / RH</strong> — site conditions. The cycle uses these for compressor inlet density and humid-air properties.</p>
       <p><strong>Load %</strong> — gas turbine load. The big number in the green box. <strong>± buttons</strong> bump by the editable <strong>Step (%)</strong> just below — default 5, persists across reloads, accepts any integer 1–50. The slider also uses this step.</p>
-      <p><strong>Intercooler coolant T</strong> — only shown for LMS100PB+. Sets the HPC inlet temperature (architectural intercooler benefit).</p>
+      <p><strong>Intercooler coolant T</strong> — sets the HPC inlet temperature (architectural intercooler benefit).</p>
       <p><strong>Combustor air fraction</strong> — flame-zone air ÷ total combustor inflow. Higher = leaner flame zone. Drives T_Bulk vs T4 split.</p>
       <p><strong>Bleed (Auto / Manual)</strong> — compressor bleed valve. <em>Auto</em> follows a load schedule. <em>Manual</em> exposes the open % slider with a chip-selectable step (1, 15, 30, 45, 60, 75, 90 %). Valve size sets the maximum bleed fraction at 100 % open.</p>
       <p><strong>Emissions Mode</strong> — when ON, the Combustor Mapping panel and Live Mapping use the BD G staging ladder (DLE behavior). When OFF, the engine runs in BD D. In Live Mapping, toggling ON triggers a BD D → BD F → BD G ramp; toggling OFF cancels any ramp in progress.</p>
@@ -2384,10 +2384,10 @@ function HelpModal({show,onClose}){if(!show)return null;
       <p>Single-glance dashboard: cycle MW, T3, P3, T4, T_Bulk, NOx15/CO15/PX36 at the current operating point. Pulls live from Cycle and Combustor Mapping. No inputs of its own — change conditions in the sidebar.</p>
 
       {_sub("🛠️ Cycle (Gas Turbine)")}
-      <p>Anchored cycle deck for the LMS100PB+ DLE IC. <strong>Inputs</strong>: ambient, load, RH, intercooler coolant T, combustor air fraction, T_fuel, WFR, water mode, bleed. <strong>Outputs</strong>: every station state (1, 2, 2c, 3, 4, 5), MW_gross / MW_cap / MW_net, heat rate, η_LHV, fuel-flexibility derate (MWI), warnings. Additional engines are in development.</p>
+      <p>Anchored cycle deck for the Simulated IC Engine. <strong>Inputs</strong>: ambient, load, RH, intercooler coolant T, combustor air fraction, T_fuel, WFR, water mode, bleed. <strong>Outputs</strong>: every station state (1, 2, 2c, 3, 4, 5), MW_gross / MW_cap / MW_net, heat rate, η_LHV, fuel-flexibility derate (MWI), warnings. Additional engines are in development.</p>
       <p>Run <strong>Cycle</strong> → its results propagate through the linkages into every other panel.</p>
 
-      {_sub("🎯 Combustor Mapping (LMS100 only)")}
+      {_sub("🎯 Combustor Mapping")}
       <p>4-circuit DLE correlation: per-circuit T_AFT (complete-combustion solve) plus a linear-anchored emissions / dynamics model centered on the LMS100 design point. <strong>Inputs</strong>: W36/W3 ratio, per-circuit air fractions (Pt2/Pt1/PM2/PM1), per-circuit φ (Pt2/Pt1/PM2 — PM1 is the residual). <strong>Outputs</strong>: NOx15, CO15, PX36_SEL, PX36_SEL_HI, plus stage-by-stage diagnostics (linear → φ_Pt1 mult → P3 scaling).</p>
       <p><strong>Mapping Tables</strong> — editable φ-vs-T3 lookups for BRNDMD ∈ {"{B, D, F, G}"}. Edits persist via localStorage. The <strong>Reset</strong> button is a bimodal switch between two named presets — <strong>UNMAPPED</strong> (raw factory lookups, the default seed for fresh sessions) and <strong>MAPPED</strong> (rig-calibrated lookups). The button label flips after each click to show which preset will load on the next click. <strong>Export to Excel</strong> writes the four BRNDMD lookups in their current state to a standalone .xlsx. Used to seed circuit φ inputs as ambient changes.</p>
       <p><strong>Emissions Transfer Function</strong> — per-BRNDMD post-multipliers on NOx, CO, and PX36_SEL. Trim knob; defaults to 1.0. Persists.</p>
@@ -5099,7 +5099,7 @@ const NOMENCLATURE_LONGNAMES = {
   T_ad_complete_comb:"Tad_CC reference value displayed alongside the kinetic PSR/PFR temperatures.",
   T1:                "Compressor inlet T (≡ ambient).",
   T2:                "Low-pressure compressor exit T.",
-  T2c:               "Intercooler exit T (LMS100 only).",
+  T2c:               "Intercooler exit T.",
   T3:                "Combustor inlet T = high-pressure compressor exit T.",
   T4:                "Combustor exit / turbine inlet T (firing temperature).",
   T5:                "Turbine exit T.",
@@ -5424,7 +5424,7 @@ function AssumptionsPanel(){
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ How to read this page">
       <p style={{margin:"0 0 6px"}}>Every number below is baked into the cycle and combustion solvers. They are exposed here so you can audit them, map deviations, and know exactly what the app is and is not modeling.</p>
-      <p style={{margin:"0 0 6px"}}><span style={hs.em}>In-spec for design-point anchors only.</span> LMS100PB+ off-design behavior is driven by a measured 100%-load deck table (P3, T3, T4, MW vs T_amb) anchored at the published design point. Additional engines are in development.</p>
+      <p style={{margin:"0 0 6px"}}><span style={hs.em}>In-spec for design-point anchors only.</span> Simulated IC Engine off-design behavior is driven by a measured 100%-load deck table (P3, T3, T4, MW vs T_amb) anchored at the published design point. Additional engines are in development.</p>
       <p style={{margin:0}}><span style={hs.warn}>Not a design tool.</span> The cycle is a reduced-order anchored correlation, not a station-by-station match of the OEM deck. Use high-fidelity tools for design, permitting, or emissions reporting.</p>
     </HelpBox>
 
@@ -5449,7 +5449,7 @@ function AssumptionsPanel(){
       <Assumption label="Mechanical efficiency" value="1.00" note="Shaft friction and gearbox losses ignored (folded into the overall cap)."/>
     </AssumptionsGroup>
 
-    <AssumptionsGroup title="4. Intercooler (LMS100 only)" subtitle="The LMS100's water-to-air intercooler sits between the LPC and HPC. Modeled as a fixed outlet temperature equal to the coolant supply.">
+    <AssumptionsGroup title="4. Intercooler" subtitle="The intercooler sits between the LPC and HPC. Modeled as a fixed outlet temperature equal to the coolant supply.">
       <Assumption label="Outlet T" value="T_coolant_in + 0 K" note="Infinite-surface limit. T_IC_out = T_cool_in (user input, default 288.15 K)."/>
       <Assumption label="Pressure drop" value="0 bar" note="Not modeled. P_IC_out = P_LPC_out."/>
       <Assumption label="Heat rejected" value="Q_IC = mdot · (h_LPC_out − h_IC_out)" note="Reported as diagnostic, not used in MW calculation."/>
@@ -5498,7 +5498,7 @@ function AssumptionsPanel(){
     </AssumptionsGroup>
 
     <AssumptionsGroup title="10. Engine Deck Anchors" subtitle="Design-point numbers each off-design scaling law is anchored at. These must match the published deck exactly.">
-      <Assumption label="LMS100PB+" value="109.2 MW @ 44 °F / 80% RH" note="T3 644 K · P3 44.4 bar · T4 1800 K (2780 °F) · η_LHV 44.9% · HR 8016 kJ/kWh · with intercooler. Now driven by the user-supplied 100%-load deck table (P3, T3, T4, MW vs T_amb). Additional engines are in development."/>
+      <Assumption label="Simulated IC Engine" value="109.2 MW @ 44 °F / 80% RH" note="T3 644 K · P3 44.4 bar · T4 1800 K (2780 °F) · η_LHV 44.9% · HR 8016 kJ/kWh · with intercooler. Now driven by the user-supplied 100%-load deck table (P3, T3, T4, MW vs T_amb). Additional engines are in development."/>
       <Assumption label="Anchor method" value="Calibrate combustor_bypass_frac + eta_isen_turb" note="Two per-engine knobs fit both MW and η at anchor. Everything else is physical."/>
     </AssumptionsGroup>
 
@@ -5590,7 +5590,7 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <InlineBusyBanner loading={accurate&&loading}/>
     <HelpBox title="ℹ️ Gas Turbine Cycle — How It Works">
-      <p style={{margin:"0 0 6px"}}>This panel computes the full thermodynamic cycle of the <span style={hs.em}>LMS100PB+ DLE IC</span> aero-derivative gas turbine at the ambient and load you set. Additional engines are in development.</p>
+      <p style={{margin:"0 0 6px"}}>This panel computes the full thermodynamic cycle of the <span style={hs.em}>Simulated IC Engine</span> aero-derivative gas turbine at the ambient and load you set. Additional engines are in development.</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>You change:</span> engine, ambient pressure, ambient temperature, relative humidity, load %, intercooler coolant T (LMS100), combustor air fraction, fuel composition, water injection, and compressor bleed.</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>You get:</span> station states (T1 / T2 / T3 / T4 / T5 and P1 / P2 / P3 / P_exhaust), all mass flows, gross and net power, heat rate, efficiency, fuel-flexibility derate, and the flame-zone bulk values (T_Bulk, φ_Bulk, FAR_Bulk).</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>Linkages.</span> Seven toggles pipe T3, P3, φ_Bulk, the humid-air oxidizer, the cycle ṁ_fuel, and the Mapping CO15/UHC slip back into the sidebar / Exhaust panel so every downstream panel runs at the engine's actual flame-zone state. Each toggle has a <strong>BREAK · OFF</strong> button so you can run sensitivity studies on any single variable, and a <strong>RE-LINK ALL TO CYCLE</strong> button restores the engine-as-designed coupling in one click.</p>
@@ -13008,10 +13008,10 @@ function EngineAmbientSidebar({
     <div style={sec}>Engine & Ambient {dim&&<span style={{fontSize:9,color:C.warm,fontWeight:600,letterSpacing:".4px",textTransform:"none",marginLeft:6}}>(Accurate Mode required)</span>}</div>
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
       <div>
-        <label style={lbl} title="Engine deck. Currently calibrated for the LMS100PB+ DLE IC (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives engine-specific calibration constants (η_isen, MW cap, T4 firing temp, combustor bypass).">Engine</label>
+        <label style={lbl} title="Engine deck. Currently calibrated for the Simulated IC Engine (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives engine-specific calibration constants (η_isen, MW cap, T4 firing temp, combustor bypass).">Engine</label>
         <select style={S.sel} value={engine} onChange={e=>setEngine(e.target.value)}
-          title="Engine deck selector. LMS100PB+ DLE IC is the only deck currently shipping; additional engines are in development.">
-          <option value="LMS100PB+">LMS100PB+ DLE IC</option>
+          title="Engine deck selector. Simulated IC Engine is the only deck currently shipping; additional engines are in development.">
+          <option value="LMS100PB+">Simulated IC Engine</option>
         </select>
       </div>
       {/* ── EMISSIONS MODE — toggle button (affects BRNDMD ladder) ───── */}
@@ -13182,7 +13182,7 @@ const APP_MODES = [
     requiresSub: true,
     accent: "accent3",
     bannerStrong: "🛠️ GAS TURBINE SIMULATOR",
-    bannerBody: "Engine-deck performance for the LMS100PB+ DLE IC (intercooled aero-derivative). Off-design power, heat rate, T3 / T4 / P3, bleed scheduling, BR-mode ladder. Powered by Cantera HP-equilibrium combustion and Cantera turbine expansion. Additional engine decks are in development.",
+    bannerBody: "Engine-deck performance for the Simulated IC Engine (intercooled aero-derivative). Off-design power, heat rate, T3 / T4 / P3, bleed scheduling, BR-mode ladder. Powered by Cantera HP-equilibrium combustion and Cantera turbine expansion. Additional engine decks are in development.",
   },
   {
     id: "advanced", label: "Advanced Mode", icon: "🔬",

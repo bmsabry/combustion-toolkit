@@ -30,7 +30,7 @@ export const AUTOMATABLE_PANELS = [
   { id: "cycle",     label: "Cycle (Gas Turbine)",     icon: "🛠️",
     desc: "Engine deck. Drives MW, η, T3, P3, T4, fuel/air/bleed flows. Required by Combustor Mapping.",
     typicalCost: 2.5 },
-  { id: "mapping",   label: "Combustor Mapping (LMS100 4-circuit)", icon: "🎯",
+  { id: "mapping",   label: "Combustor Mapping (4-circuit)", icon: "🎯",
     desc: "DLE correlation: NOx15, CO15, PX36_SEL/HI, per-circuit T_AFT. Auto-runs Cycle for T3/P3/W3.",
     typicalCost: 3.0, requires: ["cycle"] },
   { id: "aft",       label: "Flame Temp & Properties", icon: "🔥",
@@ -147,7 +147,7 @@ export const AUTO_VARS = [
     panels: ["cycle"], kind: "enum",
     default: "LMS100PB+",
     choices: [{ value: "LM6000PF",  label: "LM6000PF DLE" },
-              { value: "LMS100PB+", label: "LMS100PB+ DLE IC" }],
+              { value: "LMS100PB+", label: "Simulated IC Engine" }],
     desc: "Switches MW cap, T4 firing target, η_isen calibration." },
 
   { id: "P_amb", label: "Ambient Pressure",
@@ -173,7 +173,7 @@ export const AUTO_VARS = [
     default: 100, range: [20, 100], step: 5, unit_si: "%", unit_en: "%",
     desc: "GT load as % of rated. Drives MW_cap and T4 droop at part-load." },
 
-  { id: "T_cool", label: "Intercooler Coolant T (LMS100 only)",
+  { id: "T_cool", label: "Intercooler Coolant T",
     panels: ["cycle"], kind: "number",
     default: 288.15, range: [273, 320], step: 1,
     unit_si: "K", unit_en: "°F",
