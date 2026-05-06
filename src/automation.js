@@ -195,7 +195,7 @@ export const AUTO_VARS = [
     default: 3.3, range: [0, 100], step: 0.5, unit_si: "%", unit_en: "%",
     desc: "Maximum bleed % at fully-open valve. Combines with bleed_open_pct to set the actual fraction the cycle deck dumps to ambient." },
 
-  { id: "emissionsMode", label: "Emissions Mode (BD7 ladder)",
+  { id: "emissionsMode", label: "Emissions Mode (BD G ladder)",
     panels: ["cycle", "mapping"], kind: "bool",
     default: true,
     desc: "Enables full BD7 ladder. Disabled = engine holds at BD4." },
@@ -206,37 +206,37 @@ export const AUTO_VARS = [
     default: 0.75, range: [0.30, 0.95], step: 0.01, unit_si: "—", unit_en: "—",
     desc: "Fraction of compressor air going to combustor dome." },
 
-  { id: "mapPhiIP", label: "φ Inner Pilot",
+  { id: "mapPhiIP", label: "φ Pilot 2",
     panels: ["mapping"], kind: "number",
     default: 0.25, range: [0.05, 0.80], step: 0.02, unit_si: "—", unit_en: "—",
     desc: "Inner pilot circuit equivalence ratio." },
 
-  { id: "mapPhiOP", label: "φ Outer Pilot",
+  { id: "mapPhiOP", label: "φ Pilot 1",
     panels: ["mapping"], kind: "number",
     default: 0.65, range: [0.40, 0.90], step: 0.02, unit_si: "—", unit_en: "—",
     desc: "Outer pilot circuit equivalence ratio. Drives PX36 dynamics." },
 
-  { id: "mapPhiIM", label: "φ Inner Main",
+  { id: "mapPhiIM", label: "φ Premixer 2",
     panels: ["mapping"], kind: "number",
     default: 0.50, range: [0.20, 0.80], step: 0.02, unit_si: "—", unit_en: "—",
     desc: "Inner main circuit equivalence ratio." },
 
-  { id: "mapFracIP", label: "Air % Inner Pilot",
+  { id: "mapFracIP", label: "Air % Pilot 2",
     panels: ["mapping"], kind: "number",
     default: 2.3, range: [0.5, 30], step: 0.5, unit_si: "%", unit_en: "%",
     desc: "Inner pilot air fraction (% of flame air)." },
 
-  { id: "mapFracOP", label: "Air % Outer Pilot",
+  { id: "mapFracOP", label: "Air % Pilot 1",
     panels: ["mapping"], kind: "number",
     default: 2.2, range: [0.5, 30], step: 0.5, unit_si: "%", unit_en: "%",
     desc: "Outer pilot air fraction (% of flame air)." },
 
-  { id: "mapFracIM", label: "Air % Inner Main",
+  { id: "mapFracIM", label: "Air % Premixer 2",
     panels: ["mapping"], kind: "number",
     default: 39.9, range: [10, 80], step: 1.0, unit_si: "%", unit_en: "%",
     desc: "Inner main air fraction (% of flame air). IP+OP+IM+OM should sum to 100." },
 
-  { id: "mapFracOM", label: "Air % Outer Main",
+  { id: "mapFracOM", label: "Air % Premixer 1",
     panels: ["mapping"], kind: "number",
     default: 55.6, range: [10, 80], step: 1.0, unit_si: "%", unit_en: "%",
     desc: "Outer main air fraction (% of flame air). IP+OP+IM+OM should sum to 100." },
