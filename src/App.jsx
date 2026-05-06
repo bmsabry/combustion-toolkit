@@ -1554,7 +1554,7 @@ if(_showMapping){
   const m100  =mr?.correlations_100pct_load||{};
   const mLin  =mr?.correlations_linear||{};
   const sMP=[
-    ["═══ COMBUSTOR MAPPING — 4-CIRCUIT DLE (LMS100) ═══"],
+    ["═══ COMBUSTOR MAPPING — 4-CIRCUIT DLE (Simulated Engine) ═══"],
     ["Correlation-based emissions and dynamics. No reactor-network kinetics."],[],
     ["═══ OPERATING MODE ═══"],
     ["Parameter","Value","Unit"],
@@ -1623,7 +1623,7 @@ if(_showMapping){
     ["After φ_OP mult (Step 2)",  fmtN(m100.NOx15,3),fmtN(m100.CO15,2),fmtN(m100.PX36_SEL,4),fmtN(m100.PX36_SEL_HI,4)],
     ["Final (after P3 scaling)",  fmtN(mFinal.NOx15,3),fmtN(mFinal.CO15,2),fmtN(mFinal.PX36_SEL,4),fmtN(mFinal.PX36_SEL_HI,4)],
     [],
-    ["═══ REFERENCE DESIGN POINT (LMS100 DLE, 100% load, 44 °F) ═══"],
+    ["═══ REFERENCE DESIGN POINT (Simulated Engine DLE, 100% load, 44 °F) ═══"],
     ["Parameter","Value","Unit"],
     ["NOx15 ref",fmtN(mr?.reference?.values?.NOx15,2),"ppmvd"],
     ["CO15 ref", fmtN(mr?.reference?.values?.CO15,2),"ppmvd"],
@@ -1670,7 +1670,7 @@ const sA=[
   ["Group","Parameter","Value","Basis / Rationale"],
 
   ["1. Ambient & Inlet","Reference pressure","1.01325 bar","Sea-level ISA. P_amb input overrides for off-design."],
-  ["","Reference temperature","LMS100 anchored at 44 °F / 80% RH","288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."],
+  ["","Reference temperature","Simulated Engine anchored at 44 °F / 80% RH","288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."],
   ["","Relative humidity","User input 0–100%","Default 60%. Enters via humid-air R and cp."],
   ["","Inlet pressure drop","0 bar","No filter / silencer loss."],
   ["","Inlet ram recovery","1.0","Stationary ground operation."],
@@ -1689,14 +1689,14 @@ const sA=[
   ["","Heat rejected","Q_IC = mdot · Δh","Diagnostic only; not used in MW calc."],
 
   ["5. Combustor","Combustor ΔP","4%","P4 = 0.96 · P3."],
-  ["","Combustor bypass fraction","LMS100: 0.747","Per-engine calibration. Core-to-casing split."],
+  ["","Combustor bypass fraction","Simulated Engine: 0.747","Per-engine calibration. Core-to-casing split."],
   ["","Combustor air fraction (flame/total)","0.88 (both)","Flame vs dilution zone split."],
-  ["","T4 target","LMS100: 1800 K (2780 °F) at 100% load","Firing temperature — commanded by deck. Now driven by the user-supplied 100%-load deck table."],
+  ["","T4 target","Simulated Engine: 1800 K (2780 °F) at 100% load","Firing temperature — commanded by deck. Now driven by the user-supplied 100%-load deck table."],
   ["","φ4 solve","Cantera equilibrate(\"HP\")","Back-solved so product T = T4. Equilibrium only."],
   ["","T_Bulk","equilibrate(\"HP\") at (T3,P3,φ_Bulk)","Drives downstream panels when linked."],
   ["","Heat loss","0%","Adiabatic combustor (AFT panel has separate HL input)."],
 
-  ["6. Turbine","η_isen_turb","LMS100: 0.7805","Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."],
+  ["6. Turbine","η_isen_turb","Simulated Engine: 0.7805","Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."],
   ["","Expansion path","gas.SP = s_in, P_exh; η correction","Equilibrium products, Cantera enthalpy."],
   ["","P_exhaust","1.05 bar","Stack + HRSG backpressure."],
   ["","Cooling air","In bypass fraction","No re-injection mixing."],
@@ -1723,7 +1723,7 @@ const sA=[
   ["","Anchor method","combustor_bypass_frac + η_isen_turb","Two per-engine knobs fit MW and η at anchor."],
 
   ["11. Off-design Scaling","Density lapse","mdot_air ∝ ρ_amb · VGV(T_amb)","Engine-specific lapse curve."],
-  ["","LMS100 intercooler benefit","Architectural","HPC inlet pinned to T_cool_in. LMS100 loses less on hot days than non-intercooled engines."],
+  ["","Simulated Engine intercooler benefit","Architectural","HPC inlet pinned to T_cool_in. Simulated Engine loses less on hot days than non-intercooled engines."],
   ["","Load line","Linear in cap","Cap = load_pct · rated_ambient. Gross super-linear at low load."],
   ["","Humidity","Via humid-air R only","Higher RH → more volumetric mdot."],
   ["","Altitude","Not modeled","Use P_amb input if needed."],
@@ -1747,7 +1747,7 @@ const sA=[
   ["","Steam","Gas phase, no h_fg","Joins inlet stream as superheated H2O at T_air."],
   ["","Cycle effect","Water passes through turbine","Adds turbine mdot. Power ↑, η ↓."],
 
-  ["15. Combustor Mapping (LMS100 4-circuit DLE)","Reference design point","100% load, 44 °F","NOx15=45, CO15=130, PX36=4.3, PX36_HI=2.2 / DT_Main=450°F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035°F · T3=700°F · P3=638 psia."],
+  ["15. Combustor Mapping (Simulated Engine 4-circuit DLE)","Reference design point","100% load, 44 °F","NOx15=45, CO15=130, PX36=4.3, PX36_HI=2.2 / DT_Main=450°F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035°F · T3=700°F · P3=638 psia."],
   ["","Per-circuit T_AFT","complete_combustion(T3, P3, φ)","Cantera complete-combustion (no dissociation)."],
   ["","PM1 circuit","Residual fuel mass","m_fuel_PM1 = total − (Pt2+Pt1+PM2). φ_PM1 solved & clamped to [0,3]."],
   ["","Linear correction (Step 1)","Y = Y_ref + Σ ∂Y/∂xₖ · (xₖ − xₖ_ref)","Vars: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (≥0.25 floor), Tflame, T3. All four outputs treat ∂/∂DT_Main piecewise: NOx15 linear above 150 °F floor / frozen below; CO15 linear above 75 °F / flat 25–75 / reversed below 25; PX36_SEL/HI linear up to 650 °F ceiling / frozen above."],
@@ -2353,7 +2353,7 @@ function HelpModal({show,onClose}){if(!show)return null;
 
       {_h("Header Bar")}
       <p><strong>Unit toggle</strong> — flips the entire UI between SI (K, bar, m/s, MJ/kg) and English (°F, psia, ft/s, BTU/lb). Calculations stay in SI internally; this only changes display.</p>
-      <p><strong>Application Mode picker</strong> — the button labeled <code>MODE: …</code>. Four choices: <em>Free</em> (combustion-only panels, in-browser reduced-order JS, accurate for φ ≤ 1.0), <em>Combustion Toolkit</em> (full Cantera combustion + DOE Automation, all φ regimes), <em>Gas Turbine Simulator</em> (Operations Summary + Cycle + LMS100 Mapping, Cantera-backed), and <em>Advanced Mode</em> (everything). The three non-Free modes require an active subscription. The mode banner directly under the tab bar describes the active choice.</p>
+      <p><strong>Application Mode picker</strong> — the button labeled <code>MODE: …</code>. Four choices: <em>Free</em> (combustion-only panels, in-browser reduced-order JS, accurate for φ ≤ 1.0), <em>Combustion Toolkit</em> (full Cantera combustion + DOE Automation, all φ regimes), <em>Gas Turbine Simulator</em> (Operations Summary + Cycle + Simulated Engine Mapping, Cantera-backed), and <em>Advanced Mode</em> (everything). The three non-Free modes require an active subscription. The mode banner directly under the tab bar describes the active choice.</p>
       <p><strong>Theme toggle</strong> — flips the entire UI between dark and light palettes. Affects on-screen panels and exported PNG figures. Persists across sessions.</p>
       <p><strong>Help (?)</strong> — this dialog. <strong>Export Excel</strong> — downloads two workbooks (one in SI, one in English) containing every input, output, sweep, and setting from every panel. <strong>Account</strong> — sign in / out, manage subscription.</p>
 
@@ -2388,7 +2388,7 @@ function HelpModal({show,onClose}){if(!show)return null;
       <p>Run <strong>Cycle</strong> → its results propagate through the linkages into every other panel.</p>
 
       {_sub("🎯 Combustor Mapping")}
-      <p>4-circuit DLE correlation: per-circuit T_AFT (complete-combustion solve) plus a linear-anchored emissions / dynamics model centered on the LMS100 design point. <strong>Inputs</strong>: W36/W3 ratio, per-circuit air fractions (Pt2/Pt1/PM2/PM1), per-circuit φ (Pt2/Pt1/PM2 — PM1 is the residual). <strong>Outputs</strong>: NOx15, CO15, PX36_SEL, PX36_SEL_HI, plus stage-by-stage diagnostics (linear → φ_Pt1 mult → P3 scaling).</p>
+      <p>4-circuit DLE correlation: per-circuit T_AFT (complete-combustion solve) plus a linear-anchored emissions / dynamics model centered on the Simulated Engine design point. <strong>Inputs</strong>: W36/W3 ratio, per-circuit air fractions (Pt2/Pt1/PM2/PM1), per-circuit φ (Pt2/Pt1/PM2 — PM1 is the residual). <strong>Outputs</strong>: NOx15, CO15, PX36_SEL, PX36_SEL_HI, plus stage-by-stage diagnostics (linear → φ_Pt1 mult → P3 scaling).</p>
       <p><strong>Mapping Tables</strong> — editable φ-vs-T3 lookups for BRNDMD ∈ {"{B, D, F, G}"}. Edits persist via localStorage. The <strong>Reset</strong> button is a bimodal switch between two named presets — <strong>UNMAPPED</strong> (raw factory lookups, the default seed for fresh sessions) and <strong>MAPPED</strong> (rig-calibrated lookups). The button label flips after each click to show which preset will load on the next click. <strong>Export to Excel</strong> writes the four BRNDMD lookups in their current state to a standalone .xlsx. Used to seed circuit φ inputs as ambient changes.</p>
       <p><strong>Emissions Transfer Function</strong> — per-BRNDMD post-multipliers on NOx, CO, and PX36_SEL. Trim knob; defaults to 1.0. Persists.</p>
       <p><strong>Live Mapping</strong> — real-time HMI-style trace dashboard. <strong>▶ Start</strong> begins a 2 Hz recording for up to 10 minutes. Six charts (PX36_SEL, PX36_SEL_HI, NOx15, CO15, MWI, MW Net) with sensor-realistic noise + first-order lag (each metric has its own deadtime and time constant). Per-chart <strong>y-axis Min/Max</strong> inputs persist; auto-extend if data exceeds your bounds.</p>
@@ -2419,9 +2419,9 @@ function HelpModal({show,onClose}){if(!show)return null;
       <p><strong>Export Excel</strong> downloads <strong>two</strong> .xlsx files in one click: <code>ProReadyEngineer_CombustionReport_SI.xlsx</code> and <code>..._English.xlsx</code>. Each file contains parallel sheets for Flame Temp, Flame Speed, Combustor Network, Exhaust, Cycle Results, Combustor Mapping, Mapping Tables, Thermo Database, Assumptions, and UI Settings — covering every input, output, sweep, and setting visible in the app.</p>
 
       {_h("Disclaimer")}
-      <p style={{fontSize:11,color:C.warm}}><strong>This simulator may not be representative of the LMS100 engine behavior.</strong> All results are reduced-order approximations for educational and preliminary-estimation purposes. Not certified for design, permitting, or safety-critical decisions. See the footer for the full liability disclaimer.</p>
+      <p style={{fontSize:11,color:C.warm}}><strong>This simulator may not be representative of any real engine behavior.</strong> All results are reduced-order approximations for educational and preliminary-estimation purposes. Not certified for design, permitting, or safety-critical decisions. See the footer for the full liability disclaimer.</p>
 
-      <p style={{fontSize:10.5,color:C.txtMuted,marginTop:14}}>Calculations use NASA Glenn thermodynamic polynomials, Gülder / Metghalchi-Keck flame speed correlations, global Arrhenius kinetics, extended Zeldovich NOx, Cantera GRI-Mech 3.0 / Glarborg 2018 (Combustion Toolkit / Advanced modes), and an LMS100 4-circuit DLE correlation anchored to the design point.</p>
+      <p style={{fontSize:10.5,color:C.txtMuted,marginTop:14}}>Calculations use NASA Glenn thermodynamic polynomials, Gülder / Metghalchi-Keck flame speed correlations, global Arrhenius kinetics, extended Zeldovich NOx, Cantera GRI-Mech 3.0 / Glarborg 2018 (Combustion Toolkit / Advanced modes), and a Simulated Engine 4-circuit DLE correlation anchored to the design point.</p>
     </div></div></div>);}
 
 function PricingModal({show,onClose,onRequestSignin}){if(!show)return null;
@@ -3976,7 +3976,7 @@ function FlameSpeedPanel({fuel,ox,phi,T0,P,Tfuel,WFR=0,waterMode="liquid",veloci
       {/* ── LBO calibration row (LP-band approach; K_LBO hidden) ─────── */}
       <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:10,padding:"8px 10px",background:`${C.accent3}08`,border:`1px solid ${C.accent3}30`,borderRadius:6,fontSize:10.5,fontFamily:"monospace"}}>
         <span style={{fontSize:10,fontWeight:700,color:C.accent3,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".8px",textTransform:"uppercase"}}>LBO band:</span>
-        <Tip text={`Lefebvre LP-band approach (Lefebvre & Ballal 2010 Eq. 5.27 reformulated).\n\nUnder the hood: loading parameter LP = ṁ_air/(V_pz · P_3_atm^1.3) is swept over the typical industrial-GT design range LP ∈ [${_LBO_LP_LOW}, ${_LBO_LP_HIGH}] kg/(s·m³·atm^1.3). This brackets the typical industrial DLN design space (well-loaded sound design through high-loaded marginal design).\n\nq_LBO = K · LP / (304.1 · exp(T_3/300) · H_r);  φ_LBO = (q_LBO/FAR_stoich) × m_fuel\n\nA constant (K) hidden under the hood — fixed at the premixed-gas calibration value (anchored to LMS100 NG-DLN baseline). Sweeping LP drops dependency on V_pz and ṁ_air entirely (calibration-fragile pair), and the multiplicative fuel-composition correction m_fuel handles fuel reactivity shifts.`}>
+        <Tip text={`Lefebvre LP-band approach (Lefebvre & Ballal 2010 Eq. 5.27 reformulated).\n\nUnder the hood: loading parameter LP = ṁ_air/(V_pz · P_3_atm^1.3) is swept over the typical industrial-GT design range LP ∈ [${_LBO_LP_LOW}, ${_LBO_LP_HIGH}] kg/(s·m³·atm^1.3). This brackets the typical industrial DLN design space (well-loaded sound design through high-loaded marginal design).\n\nq_LBO = K · LP / (304.1 · exp(T_3/300) · H_r);  φ_LBO = (q_LBO/FAR_stoich) × m_fuel\n\nA constant (K) hidden under the hood — fixed at the premixed-gas calibration value (anchored to Simulated Engine NG-DLN baseline). Sweeping LP drops dependency on V_pz and ṁ_air entirely (calibration-fragile pair), and the multiplicative fuel-composition correction m_fuel handles fuel reactivity shifts.`}>
           <span style={{color:C.txtDim,fontStyle:"italic",cursor:"help"}}>LP {_LBO_LP_LOW}–{_LBO_LP_HIGH} kg/(s·m³·atm^1.3) · m_fuel = {_lbo_band.fuel_mult.toFixed(3)} (H₂ {((fuel.H2||0)/Math.max(Object.values(fuel).reduce((a,b)=>a+b,0),1e-9)*100).toFixed(0)}%, C₃H₈ {((fuel.C3H8||0)/Math.max(Object.values(fuel).reduce((a,b)=>a+b,0),1e-9)*100).toFixed(0)}%) ⓘ</span>
         </Tip>
       </div>
@@ -4768,7 +4768,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:3}}>
         <div style={{display:"flex",alignItems:"center",gap:6}}>
-          <Tip text={`Measured unburned hydrocarbons in exhaust, expressed as ppmvd CH₄ (dry, actual O₂ basis — NOT 15% O₂ corrected). Speciated FTIR readings should be totaled and reported on a CH₄ basis. Used in the energy-loss formula via LHV_CH₄ = 802.31 kJ/mol.${linkExhaustUHC?" Currently linked to Mapping CO15 (UHC = CO/3 per LMS100 mapping convention). Break the link below to type a manual value.":""}`}>
+          <Tip text={`Measured unburned hydrocarbons in exhaust, expressed as ppmvd CH₄ (dry, actual O₂ basis — NOT 15% O₂ corrected). Speciated FTIR readings should be totaled and reported on a CH₄ basis. Used in the energy-loss formula via LHV_CH₄ = 802.31 kJ/mol.${linkExhaustUHC?" Currently linked to Mapping CO15 (UHC = CO/3 per Simulated Engine mapping convention). Break the link below to type a manual value.":""}`}>
             <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
               Measured UHC as CH₄ (ppmvd dry, actual) ⓘ:
             </label>
@@ -4826,7 +4826,7 @@ function ExhaustPanel({fuel,ox,T0,P,Tfuel,WFR=0,waterMode="liquid",measO2,setMea
       <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
         <div style={{display:"flex",flexDirection:"column",gap:3}}>
           <div style={{display:"flex",alignItems:"center",gap:6}}>
-            <Tip text="Total mass flow of fuel metered to the combustor. Default = 40,000 lb/hr (typical heavy-duty GT baseload, e.g. an LMS100 at full load). Stored internally in kg/s; the field shows lb/hr in English units, kg/hr in SI. In Gas Turbine Simulator and Advanced modes this field is linked to the Cycle's ṁ_fuel by default — break the link to override manually.">
+            <Tip text="Total mass flow of fuel metered to the combustor. Default = 40,000 lb/hr (typical heavy-duty GT baseload). Stored internally in kg/s; the field shows lb/hr in English units, kg/hr in SI. In Gas Turbine Simulator and Advanced modes this field is linked to the Cycle's ṁ_fuel by default — break the link to override manually.">
               <label style={{fontSize:10.5,color:C.txtDim,fontFamily:"monospace",cursor:"help"}}>
                 Fuel Flow ({units==="ENG"?"lb/hr":"kg/hr"}) ⓘ:
               </label>
@@ -5162,7 +5162,7 @@ const NOMENCLATURE_EXTRA = [
   { symbol: "linkExhaustCO", fullName: "Mapping linkage: Exhaust CO ← Mapping CO15 (corrected to actual O₂ via Phi_Exhaust)", unit: "—", group: "Cycle linkages",
     desc: "When ON (default in GTS / Advanced modes), the Exhaust panel's measured-CO input is computed from the Mapping correlation's CO15 (15% O₂ basis) using CO_actual = CO15 × (20.9 − O₂_dry%) / 5.9 at Phi_Exhaust. In GTS mode the link is non-breakable; in Advanced mode the BREAK button drops to manual entry. Hidden in Free / Combustion Toolkit (no Mapping panel)." },
   { symbol: "linkExhaustUHC", fullName: "Mapping linkage: Exhaust UHC ← Mapping CO15 (UHC = CO_linked / 3)", unit: "—", group: "Cycle linkages",
-    desc: "When ON (default in GTS / Advanced modes), the Exhaust panel's measured-UHC input is set to CO_linked / 3, per LMS100 mapping convention. In GTS mode the link is non-breakable; in Advanced mode the BREAK button drops to manual entry. Hidden in Free / Combustion Toolkit (no Mapping panel)." },
+    desc: "When ON (default in GTS / Advanced modes), the Exhaust panel's measured-UHC input is set to CO_linked / 3, per Simulated Engine mapping convention. In GTS mode the link is non-breakable; in Advanced mode the BREAK button drops to manual entry. Hidden in Free / Combustion Toolkit (no Mapping panel)." },
   { symbol: "Phi_Exhaust", fullName: "Equivalence ratio computed from cycle's air & fuel mass flows", unit: "—", group: "Combustion efficiency & slip",
     desc: "Phi_Exhaust = (cycle.mdot_fuel_kg_s / cycle.mdot_air_post_bleed_kg_s) / FAR_stoich. Used by the CO/UHC Mapping linkages on the Exhaust panel to convert mapping CO15 (15% O₂ basis) to the actual-O₂ basis. Distinct from cycle.phi4 — uses the panel-side flows directly." },
   { symbol: "Fuel_Split", fullName: "Per-circuit fuel-flow share of total fuel", unit: "% of total", group: "Combustor model",
@@ -5186,7 +5186,7 @@ const NOMENCLATURE_EXTRA = [
 
   // ── Operating-point cost & money ────────────────────────────────────
   { symbol: "Fuel Flow", fullName: "Fuel mass flow rate at this operating point", unit: "lb/hr or kg/hr (input) · kg/s (storage)", group: "Cost & money",
-    desc: "Default 40,000 lb/hr (LMS100-class baseload). Stored internally as kg/s. Linked to cycle ṁ_fuel in GTS / Advanced modes; manually editable after BREAK." },
+    desc: "Default 40,000 lb/hr (Simulated Engine baseload). Stored internally as kg/s. Linked to cycle ṁ_fuel in GTS / Advanced modes; manually editable after BREAK." },
   { symbol: "Fuel Cost", fullName: "Fuel price ($/MMBTU LHV)", unit: "$/MMBTU LHV", group: "Cost & money",
     desc: "Default $4.00/MMBTU LHV — typical 2024-2026 industrial U.S. natural-gas benchmark (sources: EIA Industrial NG monthly, Henry Hub spot + transport adder). Adjust to the operator's actual contract." },
   { symbol: "Period", fullName: "Cost-rollup time period", unit: "—", group: "Cost & money",
@@ -5430,7 +5430,7 @@ function AssumptionsPanel(){
 
     <AssumptionsGroup title="1. Ambient & Inlet" subtitle="Ambient state feeding the LP compressor inlet. No ram recovery, no inlet loss.">
       <Assumption label="Reference pressure" value="1.01325 bar" note="Sea-level ISA. Cycle input P_amb overrides for off-design."/>
-      <Assumption label="Reference temperature" value="LMS100 anchored at 44 °F / 80% RH" note="288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."/>
+      <Assumption label="Reference temperature" value="Simulated Engine anchored at 44 °F / 80% RH" note="288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."/>
       <Assumption label="Relative humidity" value="User input 0–100%" note="Default 60%. Enters via humid-air R and cp."/>
       <Assumption label="Inlet pressure drop" value="0 bar" note="No filter / silencer loss modeled. T1/P1 ≡ ambient."/>
       <Assumption label="Inlet ram recovery" value="1.0" note="Stationary (aero-derivative on ground). No Mach effect."/>
@@ -5442,7 +5442,7 @@ function AssumptionsPanel(){
       <Assumption label="Mixture thermodynamics" value="Cantera GRI-Mech 3.0" note="Enthalpies, entropies, cp, R from the same mechanism as combustion."/>
     </AssumptionsGroup>
 
-    <AssumptionsGroup title="3. Compressor" subtitle="Compressors are modeled with a single isentropic efficiency and mechanical efficiency = 1. HPC and LPC use the same efficiency for the LMS100 three-spool.">
+    <AssumptionsGroup title="3. Compressor" subtitle="Compressors are modeled with a single isentropic efficiency and mechanical efficiency = 1. HPC and LPC use the same efficiency for the Simulated Engine three-spool.">
       <Assumption label="Isentropic efficiency (both engines)" value="0.88" note="Applied to LPC and HPC separately. h_out = h_in + (h_out,s − h_in)/η_isen."/>
       <Assumption label="Working fluid" value="Humid air" note="Real Cantera enthalpy difference — no dry-air ideal-gas shortcut."/>
       <Assumption label="Bleed air" value="0%" note="No customer bleed / cooling-air extraction modeled."/>
@@ -5457,16 +5457,16 @@ function AssumptionsPanel(){
 
     <AssumptionsGroup title="5. Combustor" subtitle="Two states — flame zone (bulk) and combustor exit (station 4). The flame zone sees only the primary air; dilution air is added after to meet T4.">
       <Assumption label="Combustor pressure drop" value="4%" note="P4 = 0.96 · P3. Fixed. Typical DLE range is 3–5%."/>
-      <Assumption label="Combustor bypass fraction" value="LMS100: 0.747" note="Fraction of compressor discharge routed to the combustor core. Remainder is casing/HPT cooling. Private per-engine calibration so design-point MW and η land exactly."/>
+      <Assumption label="Combustor bypass fraction" value="Simulated Engine: 0.747" note="Fraction of compressor discharge routed to the combustor core. Remainder is casing/HPT cooling. Private per-engine calibration so design-point MW and η land exactly."/>
       <Assumption label="Combustor air fraction (flame/total)" value="0.88 (both)" note="Flame zone gets 88% of combustor air; dilution zone gets 12%. FAR_Bulk = FAR4 / 0.88."/>
-      <Assumption label="T4 target" value="LMS100: 1800 K (2780 °F) at 100% load" note="Firing temperature. Commanded by the deck, not solved. The LMS100 anchor was lowered from 1825 K to 1800 K (2826 °F → 2780 °F) for the PB+ uprate. Now driven by the user-supplied 100%-load deck table at every ambient point."/>
+      <Assumption label="T4 target" value="Simulated Engine: 1800 K (2780 °F) at 100% load" note="Firing temperature. Commanded by the deck, not solved. The Simulated Engine anchor was lowered from 1825 K to 1800 K (2826 °F → 2780 °F) for the PB+ uprate. Now driven by the user-supplied 100%-load deck table at every ambient point."/>
       <Assumption label="φ4 solve" value="Cantera equilibrate(&quot;HP&quot;)" note="Back-solved so equilibrium product T at (T3, P3) equals T4. No kinetics — equilibrium only."/>
       <Assumption label="T_Bulk (flame zone)" value="Cantera equilibrate(&quot;HP&quot;) at (T3, P3, φ_Bulk)" note="Adiabatic equilibrium. Drives downstream flame-speed / blowoff / autoignition panels when linked."/>
       <Assumption label="Heat loss" value="0%" note="Adiabatic combustor. The AFT panel has a separate heat-loss option for hand analysis."/>
     </AssumptionsGroup>
 
     <AssumptionsGroup title="6. Turbine" subtitle="Turbine work comes from an actual Cantera isentropic expansion — not a prescribed η_thermal. This is the core of Option A (energy-balance cycle).">
-      <Assumption label="Isentropic efficiency η_isen,turb" value="LMS100: 0.7805" note="Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."/>
+      <Assumption label="Isentropic efficiency η_isen,turb" value="Simulated Engine: 0.7805" note="Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."/>
       <Assumption label="Expansion path" value="gas.SP = s_in, P_exhaust; h_out = h_in − η·(h_in−h_out,s)" note="Equilibrium products; full Cantera enthalpy at outlet."/>
       <Assumption label="Exhaust pressure" value="1.05 bar" note="Stack + HRSG backpressure. Fixed — not a function of ambient."/>
       <Assumption label="Cooling air" value="Accounted in bypass fraction" note="No re-injection mixing — modeled as energy not delivered to the turbine."/>
@@ -5504,7 +5504,7 @@ function AssumptionsPanel(){
 
     <AssumptionsGroup title="11. Off-design Scaling" subtitle="How the deck behaves away from its anchor. Not all of this is modeled — the list below states what IS.">
       <Assumption label="Density lapse" value="mdot_air ∝ ρ_amb · VGV(T_amb)" note="VGV is a simple function of ambient — folded into an engine-specific lapse curve."/>
-      <Assumption label="LMS100 intercooler benefit" value="Architectural" note="LMS100 loses less on hot days than non-intercooled engines because HPC inlet is fixed at T_cool_in. Verified in regression tests."/>
+      <Assumption label="Simulated Engine intercooler benefit" value="Architectural" note="Simulated Engine loses less on hot days than non-intercooled engines because HPC inlet is fixed at T_cool_in. Verified in regression tests."/>
       <Assumption label="Load line" value="Linear in rated" note="MW_net = load_pct · MW_rated_ambient · derate. Part-load T4 droops so MW_gross is super-linear at low load (diagnostic only — does not affect MW_net)."/>
       <Assumption label="Humidity" value="Via humid-air R only" note="Higher RH → lower molecular weight → more volumetric mdot at fixed corrected flow."/>
       <Assumption label="Altitude" value="Not modeled" note="Use P_amb input if needed; scales density directly."/>
@@ -5520,7 +5520,7 @@ function AssumptionsPanel(){
       <Assumption label="Units" value="SI internally" note="K, Pa, m, kg/s, W. UI converts to ENG (°F, psia, BTU/kWh) on display."/>
     </AssumptionsGroup>
 
-    <AssumptionsGroup title="13. Compressor Bleed" subtitle="Optional compressor air dump used to hold combustor T4 at part-load. Active only on the LMS100 deck.">
+    <AssumptionsGroup title="13. Compressor Bleed" subtitle="Optional compressor air dump used to hold combustor T4 at part-load. Active only on the Simulated Engine deck.">
       <Assumption label="Modes" value="AUTO  /  MANUAL" note="AUTO: bleed_open % is a continuous function of load — 100% open below 75% load, 0% above 95%, linear between. MANUAL: user sets the open % directly."/>
       <Assumption label="Valve size (max bleed)" value="User input, 0–100% of W3" note="Sets the upper bound on bleed_air_frac at 100% open. bleed_air_frac = (open_pct/100) × (valve_size_pct/100)."/>
       <Assumption label="Bleed destination" value="Dumped to ambient" note="No re-injection or HRSG mix; the air leaves the cycle. mdot_air_post_bleed = W3 × (1 − bleed_air_frac)."/>
@@ -5535,8 +5535,8 @@ function AssumptionsPanel(){
       <Assumption label="Cycle effect" value="Water mass passes through turbine" note="Adds turbine mdot, increases W_turb. T4 floats — power ↑, η ↓ (extra energy spent vaporizing). Reported in cycle outputs."/>
     </AssumptionsGroup>
 
-    <AssumptionsGroup title="15. Combustor Mapping (LMS100 4-circuit DLE — correlation)" subtitle="Per-circuit T_AFT from a complete-combustion solve, then linear-anchored emissions / dynamics. No reactor kinetics. Drives the Combustor Mapping panel and the Operations Summary.">
-      <Assumption label="Reference design point" value="LMS100 DLE, 100% load, 44 °F" note="NOx15=45 ppmvd · CO15=130 ppmvd · PX36_SEL=4.3 psi · PX36_SEL_HI=2.2 psi. DT_Main=450 °F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035 °F · T3=700 °F · P3=638 psia."/>
+    <AssumptionsGroup title="15. Combustor Mapping (Simulated Engine 4-circuit DLE — correlation)" subtitle="Per-circuit T_AFT from a complete-combustion solve, then linear-anchored emissions / dynamics. No reactor kinetics. Drives the Combustor Mapping panel and the Operations Summary.">
+      <Assumption label="Reference design point" value="Simulated Engine DLE, 100% load, 44 °F" note="NOx15=45 ppmvd · CO15=130 ppmvd · PX36_SEL=4.3 psi · PX36_SEL_HI=2.2 psi. DT_Main=450 °F · Phi_PT1=0.65 · C3=7.5% · N2=0.5% · Tflame=3035 °F · T3=700 °F · P3=638 psia."/>
       <Assumption label="Per-circuit T_AFT" value="complete_combustion at (T3, P3, φ_circuit)" note="Cantera complete-combustion (no dissociation) at the circuit-specific φ. Falls back to T_air when φ ≈ 0."/>
       <Assumption label="PM1 circuit" value="Residual fuel mass" note="m_fuel_PM1 = m_fuel_total − (m_fuel_Pt2 + m_fuel_Pt1 + m_fuel_PM2). φ_PM1 is back-solved and clamped to [0, 3]."/>
       <Assumption label="Linear correction (Step 1)" value="Y_lin = Y_ref + Σₖ (∂Y/∂xₖ)·(xₖ − xₖ_ref)" note="Variables: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (above 0.25 floor), Tflame, T3. Per-output derivatives baked into the module — see combustor_mapping.py. All four outputs treat ∂/∂DT_Main piecewise (the entries in the linear-derivative table are 0; per-output helpers do the work): NOx15 — linear above the 150 °F floor and frozen below (so very flat IM/OM splits don't drag NOx down without bound); CO15 — linear above 75 °F (slope +0.424 ppm/°F), flat plateau between 25 and 75 °F (frozen at −159 ppm), reversed slope below 25 °F (the contribution climbs back up as DT_Main falls further); PX36_SEL and PX36_SEL_HI — linear up to a 650 °F ceiling and frozen above."/>
@@ -5591,7 +5591,7 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
     <InlineBusyBanner loading={accurate&&loading}/>
     <HelpBox title="ℹ️ Gas Turbine Cycle — How It Works">
       <p style={{margin:"0 0 6px"}}>This panel computes the full thermodynamic cycle of the <span style={hs.em}>Simulated IC Engine</span> aero-derivative gas turbine at the ambient and load you set. Additional engines are in development.</p>
-      <p style={{margin:"0 0 6px"}}><span style={hs.em}>You change:</span> engine, ambient pressure, ambient temperature, relative humidity, load %, intercooler coolant T (LMS100), combustor air fraction, fuel composition, water injection, and compressor bleed.</p>
+      <p style={{margin:"0 0 6px"}}><span style={hs.em}>You change:</span> engine, ambient pressure, ambient temperature, relative humidity, load %, intercooler coolant T, combustor air fraction, fuel composition, water injection, and compressor bleed.</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>You get:</span> station states (T1 / T2 / T3 / T4 / T5 and P1 / P2 / P3 / P_exhaust), all mass flows, gross and net power, heat rate, efficiency, fuel-flexibility derate, and the flame-zone bulk values (T_Bulk, φ_Bulk, FAR_Bulk).</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>Linkages.</span> Seven toggles pipe T3, P3, φ_Bulk, the humid-air oxidizer, the cycle ṁ_fuel, and the Mapping CO15/UHC slip back into the sidebar / Exhaust panel so every downstream panel runs at the engine's actual flame-zone state. Each toggle has a <strong>BREAK · OFF</strong> button so you can run sensitivity studies on any single variable, and a <strong>RE-LINK ALL TO CYCLE</strong> button restores the engine-as-designed coupling in one click.</p>
       <p style={{margin:0,fontSize:11,color:C.txtMuted}}>Engine-deck anchors, calibration, and off-design scaling are documented in the <strong>Assumptions</strong> tab.</p>
@@ -5618,7 +5618,7 @@ function CyclePanel({linkT3,setLinkT3,linkP3,setLinkP3,linkFAR,setLinkFAR,linkOx
             {on:linkOx,set:setLinkOx,label:"Oxidizer comp → humid air @ ambient",tip:"Sidebar Oxidizer composition ← cycle's computed humid-air mol % at ambient T/RH. Required for T_ad on Flame Temp to match T4 on this panel (they use the same mechanism and same air)."},
             {on:linkFuelFlow,set:setLinkFuelFlow,label:"Fuel Flow → cycle ṁ_fuel",tip:"Exhaust panel Fuel Flow (kg/s) ← cycle ṁ_fuel. Drives the heat-input / fuel-cost / penalty calcs on the Exhaust panel."},
             {on:linkExhaustCO,set:setLinkExhaustCO,label:"Exhaust CO → Mapping CO15",tip:"Exhaust panel measured CO ← Mapping CO15 (corrected from 15% O₂ basis to actual O₂ basis using Phi_Exhaust)."},
-            {on:linkExhaustUHC,set:setLinkExhaustUHC,label:"Exhaust UHC → Mapping CO15 ÷ 3",tip:"Exhaust panel measured UHC ← Mapping CO15 ÷ 3 (LMS100 mapping convention) with the same O₂-basis correction."},
+            {on:linkExhaustUHC,set:setLinkExhaustUHC,label:"Exhaust UHC → Mapping CO15 ÷ 3",tip:"Exhaust panel measured UHC ← Mapping CO15 ÷ 3 (Simulated Engine mapping convention) with the same O₂-basis correction."},
           ].map(l=>(
             <div key={l.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",border:`1px solid ${l.on?C.accent:C.border}`,borderRadius:6,marginBottom:6,background:l.on?`${C.accent}10`:"transparent"}}>
               <div style={{fontSize:11,color:C.txt,fontFamily:"monospace"}} title={l.tip}>
@@ -6935,7 +6935,7 @@ function CombustorMappingPanel({
     <InlineBusyBanner loading={accurate&&(bkCycle?.loading||bkMap.loading)}/>
 
     <HelpBox title="ℹ️ Combustor Mapping — How It Works">
-      <p style={{margin:"0 0 6px"}}>This panel maps the <span style={hs.em}>LMS100 four-circuit DLE combustor</span> — Inner Pilot, Outer Pilot, Inner Main, Outer Main — at the cycle's operating point. Outer Main is the float circuit (fuel and φ back-solved from the total).</p>
+      <p style={{margin:"0 0 6px"}}>This panel maps the <span style={hs.em}>Simulated Engine four-circuit DLE combustor</span> — Pilot 2, Pilot 1, Premixer 2, Premixer 1 — at the cycle's operating point. Premixer 1 is the float circuit (fuel and φ back-solved from the total).</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>You change:</span> per-circuit fuel splits and equivalence ratios, dome air fraction (W36/W3), and an emissions transfer-function trim if you want to bias the result.</p>
       <p style={{margin:"0 0 6px"}}><span style={hs.em}>You get:</span> per-circuit flame temperature (T_AFT), total NOx@15%O₂ and CO@15%O₂, dynamics signals (PX36_SEL low-frequency and PX36_SEL_HI high-frequency), and the temperature spread DT_Main between Outer Main and Inner Main.</p>
       <p style={{margin:0,fontSize:11,color:C.txtMuted}}>Reference design point, anchor calibration, and the correction chain are documented in the <strong>Assumptions</strong> tab.</p>
@@ -8235,7 +8235,7 @@ function OperationsSummaryPanel({
         <Hero flex={0} small label="Load" value={cycleResult.load_pct.toFixed(0)} unit="%" color={C.accent2}
           tip="Percent of max-on-day power at current ambient conditions. Set in sidebar."/>
         <Hero flex={0} small label="T₃ (comb inlet)" value={uv(units,"T",cycleResult.T3_K).toFixed(0)} unit={uu(units,"T")} color={C.warm}
-          tip="Compressor-exit / combustor-inlet temperature. Anchored to 700 °F at 100 % load and 660 °F at 75 % load for LMS100; linearly interpolated between / outside."/>
+          tip="Compressor-exit / combustor-inlet temperature. Anchored to 700 °F at 100 % load and 660 °F at 75 % load for Simulated Engine; linearly interpolated between / outside."/>
         <Hero flex={0} small label="P₃" value={units==="SI"?(cycleResult.P3_bar).toFixed(1):(cycleResult.P3_bar*14.5038).toFixed(0)} unit={units==="SI"?"bar":"psia"} color={C.accent3}
           tip="Compressor-exit / combustor-inlet pressure. Drives the pressure-ratio scaling of NOx, CO, and PX36 dynamics via the (P3/638)^exp terms in the correlation."/>
         <Hero flex={0} small label="T₄ (firing)" value={fmtT(T4_fromCycle).split(" ")[0]} unit={uu(units,"T")} color={C.warm}
@@ -13178,7 +13178,7 @@ const APP_MODES = [
   },
   {
     id: "gts", label: "Gas Turbine Simulator", icon: "🛠️",
-    subtitle: "Engine deck · cycle + LMS100 four-circuit mapping",
+    subtitle: "Engine deck · cycle + Simulated Engine four-circuit mapping",
     requiresSub: true,
     accent: "accent3",
     bannerStrong: "🛠️ GAS TURBINE SIMULATOR",
@@ -13190,7 +13190,7 @@ const APP_MODES = [
     requiresSub: true,
     accent: "violet",
     bannerStrong: "🔬 ADVANCED MODE",
-    bannerBody: "Full toolkit — combustion analysis + engine cycle + LMS100 four-circuit mapping + DOE automation. Cantera Accurate mode active across all panels.",
+    bannerBody: "Full toolkit — combustion analysis + engine cycle + Simulated Engine four-circuit mapping + DOE automation. Cantera Accurate mode active across all panels.",
   },
 ];
 function _modeById(id){ return APP_MODES.find(m => m.id === id) || APP_MODES[0]; }
@@ -14655,7 +14655,7 @@ export default function App(){
         <div style={{borderTop:`1px solid ${C.border}`,background:C.bg,flexShrink:0}}>
           <div style={{padding:"10px 20px",borderBottom:`1px solid ${C.border}`}}>
             <div style={{fontSize:9,color:C.txtMuted,fontFamily:"monospace",lineHeight:1.55,textAlign:"justify",maxWidth:1400,margin:"0 auto"}}>
-              <span style={{color:C.accent,fontWeight:700,letterSpacing:".5px"}}>DISCLAIMER &amp; LIMITATION OF LIABILITY —</span> This software and all results herein (&quot;the Software&quot;) are provided <span style={{fontWeight:700}}>&quot;AS IS&quot;</span> without warranties of any kind, express or implied, for <span style={{fontWeight:700}}>educational and preliminary-estimation purposes only</span>. <span style={{color:C.warm,fontWeight:700}}>This simulator may not be representative of the LMS100 engine behavior.</span> Outputs are best-effort approximations from reduced-order models and may deviate materially from real-world behavior or high-fidelity CFD / chemistry solvers. ProReadyEngineer LLC, its owners, employees, and contributors disclaim all liability for any direct, indirect, incidental, consequential, or punitive damages, losses, or claims arising from use of or reliance on the Software. Not certified for design, permitting, regulatory, emissions-reporting, or safety-critical decisions. Users assume all risk and must independently verify every result with qualified licensed engineers, validated software, and applicable codes and standards before any engineering or operational decision. By using the Software you accept these terms.
+              <span style={{color:C.accent,fontWeight:700,letterSpacing:".5px"}}>DISCLAIMER &amp; LIMITATION OF LIABILITY —</span> This software and all results herein (&quot;the Software&quot;) are provided <span style={{fontWeight:700}}>&quot;AS IS&quot;</span> without warranties of any kind, express or implied, for <span style={{fontWeight:700}}>educational and preliminary-estimation purposes only</span>. <span style={{color:C.warm,fontWeight:700}}>This simulator may not be representative of any real engine behavior.</span> Outputs are best-effort approximations from reduced-order models and may deviate materially from real-world behavior or high-fidelity CFD / chemistry solvers. ProReadyEngineer LLC, its owners, employees, and contributors disclaim all liability for any direct, indirect, incidental, consequential, or punitive damages, losses, or claims arising from use of or reliance on the Software. Not certified for design, permitting, regulatory, emissions-reporting, or safety-critical decisions. Users assume all risk and must independently verify every result with qualified licensed engineers, validated software, and applicable codes and standards before any engineering or operational decision. By using the Software you accept these terms.
             </div>
           </div>
           <div style={{padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>

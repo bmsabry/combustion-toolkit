@@ -178,7 +178,7 @@ export const AUTO_VARS = [
     default: 288.15, range: [273, 320], step: 1,
     unit_si: "K", unit_en: "°F",
     siToEn: K_to_F, enToSi: F_to_K,
-    desc: "Sets HPC inlet T on LMS100. Ignored on LM6000." },
+    desc: "Sets HPC inlet T on the Simulated Engine. Ignored on engines without an intercooler." },
 
   { id: "com_air_frac", label: "Combustor Air Fraction (flame)",
     panels: ["cycle"], kind: "number",
