@@ -100,7 +100,9 @@ export const AUTO_VARS = [
 
   { id: "T_flame", label: "TFlame_CC",
     panels: ["aft", "combustor", "flame"], kind: "number",
-    default: 1900, range: [1500, 2400], step: 50,
+    // User-specified DOE preset: 2700-3100 °F step 75 °F.
+    // SI: K = (°F + 459.67) × 5/9. step is a delta so step_K = step_F × 5/9.
+    default: 1900, range: [1755.3722, 1977.5944], step: 41.6667,
     unit_si: "K", unit_en: "°F",
     siToEn: K_to_F, enToSi: F_to_K,
     linkage: "linkFAR", group: "operating_point",
@@ -108,7 +110,8 @@ export const AUTO_VARS = [
 
   { id: "T_air", label: "Air Temp",
     panels: ["aft", "combustor", "flame"], kind: "number",
-    default: 810.93, range: [250, 900], step: 10,
+    // User-specified DOE preset: 700-1100 °F step 100 °F (in SI: 644.26-866.48 K, step 55.5556 K).
+    default: 810.93, range: [644.2611, 866.4833], step: 55.5556,
     unit_si: "K", unit_en: "°F",
     siToEn: K_to_F, enToSi: F_to_K,
     linkage: "linkT3",
@@ -123,7 +126,9 @@ export const AUTO_VARS = [
 
   { id: "P", label: "Pressure",
     panels: ["aft", "combustor", "flame"], kind: "number",
-    default: 27.22, range: [0.5, 50], step: 0.5,
+    // User-specified DOE preset: 300-600 psia step 150 psia.
+    // SI is atm. 1 psia = 0.0680459 atm. 300 psia = 20.4138, 600 = 40.8275, step 150 = 10.2069.
+    default: 27.22, range: [20.4138, 40.8275], step: 10.2069,
     unit_si: "atm", unit_en: "psia",
     siToEn: atm_to_psia, enToSi: psia_to_atm,
     linkage: "linkP3",
@@ -131,7 +136,8 @@ export const AUTO_VARS = [
 
   { id: "WFR", label: "Water/Fuel Ratio",
     panels: ["aft", "combustor", "cycle"], kind: "number",
-    default: 0, range: [0, 2.0], step: 0.1,
+    // User-specified DOE preset: 0-1.5 step 0.5.
+    default: 0, range: [0, 1.5], step: 0.5,
     unit_si: "kg/kg", unit_en: "kg/kg",
     desc: "Water injection per unit fuel mass. 0 = no injection." },
 
@@ -249,7 +255,9 @@ export const AUTO_VARS = [
 
   { id: "L_pfr", label: "L_PFR",
     panels: ["combustor"], kind: "number",
-    default: 0.30, range: [0.05, 2.0], step: 0.05,
+    // User-specified DOE preset: 0.45-2 ft step 0.5 ft.
+    // SI: m = ft × 0.3048. 0.45 ft = 0.13716 m, 2 ft = 0.6096 m, step 0.5 ft = 0.1524 m.
+    default: 0.30, range: [0.13716, 0.6096], step: 0.1524,
     unit_si: "m", unit_en: "ft",
     siToEn: m_to_ft, enToSi: ft_to_m,
     desc: "Burnout-zone length. Longer → more CO burnout, more NOx." },
@@ -269,21 +277,26 @@ export const AUTO_VARS = [
   // ── Flame Speed & Blowoff ──
   { id: "velocity", label: "V_ref (approach velocity)",
     panels: ["flame"], kind: "number",
-    default: 30, range: [1, 200], step: 5,
+    // User-specified DOE preset: 50-200 ft/s step 50 ft/s.
+    // SI: m/s = ft/s × 0.3048. 50 = 15.24, 200 = 60.96, step 50 = 15.24.
+    default: 30, range: [15.24, 60.96], step: 15.24,
     unit_si: "m/s", unit_en: "ft/s",
     siToEn: mps_to_fps, enToSi: fps_to_mps,
     desc: "Reference approach velocity at the flameholder." },
 
   { id: "Lchar", label: "L_char (recirculation length)",
     panels: ["flame"], kind: "number",
-    default: 0.05, range: [0.005, 0.5], step: 0.005,
+    // User-specified DOE preset: 0.01-0.1 ft step 0.01 ft.
+    // SI: m = ft × 0.3048. 0.01 = 0.003048, 0.1 = 0.03048, step 0.01 = 0.003048.
+    default: 0.05, range: [0.003048, 0.03048], step: 0.003048,
     unit_si: "m", unit_en: "ft",
     siToEn: m_to_ft, enToSi: ft_to_m,
     desc: "Characteristic recirculation length (flameholder width / step)." },
 
   { id: "Dfh", label: "D_flameholder",
     panels: ["flame"], kind: "number",
-    default: 0.02, range: [0.005, 0.2], step: 0.002,
+    // User-specified DOE preset: 0.01-0.1 ft step 0.01 ft.
+    default: 0.02, range: [0.003048, 0.03048], step: 0.003048,
     unit_si: "m", unit_en: "ft",
     siToEn: m_to_ft, enToSi: ft_to_m,
     desc: "Flameholder diameter (used for Zukoski τ_BO)." },
@@ -297,7 +310,9 @@ export const AUTO_VARS = [
 
   { id: "Vpremix", label: "V_premix",
     panels: ["flame"], kind: "number",
-    default: 60, range: [5, 200], step: 5,
+    // User-specified DOE preset: 50-300 ft/s step 100 ft/s.
+    // SI: m/s = ft/s × 0.3048. 50 = 15.24, 300 = 91.44, step 100 = 30.48.
+    default: 60, range: [15.24, 91.44], step: 30.48,
     unit_si: "m/s", unit_en: "ft/s",
     siToEn: mps_to_fps, enToSi: fps_to_mps,
     desc: "Premixer bulk velocity." },
@@ -356,7 +371,8 @@ export const AUTO_VARS = [
     kind: "fuel_species", species: "C4H10", default: 0, range: [0, 100], step: 1,
     unit_si: "mol %", unit_en: "mol %", desc: "n-Butane mole %." },
   { id: "fuel.H2",    label: "Fuel H₂",    panels: ["aft","cycle","mapping","combustor","flame"],
-    kind: "fuel_species", species: "H2",    default: 0, range: [0, 100], step: 5,
+    // User-specified DOE preset: 0-100 mol% step 25 mol%.
+    kind: "fuel_species", species: "H2",    default: 0, range: [0, 100], step: 25,
     unit_si: "mol %", unit_en: "mol %", desc: "Hydrogen mole %. Drives flashback risk above 30%." },
   { id: "fuel.CO",    label: "Fuel CO",    panels: ["aft","cycle","mapping","combustor","flame"],
     kind: "fuel_species", species: "CO",    default: 0, range: [0, 100], step: 5,
@@ -770,6 +786,73 @@ export const AUTO_OUTPUTS = [
 export function outputsForPanels(panels){
   const set = new Set(panels);
   return AUTO_OUTPUTS.filter(o => set.has(o.panel));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Default DOE bounds from baseline (per-user-spec rule).
+//
+//  The user supplied an explicit DOE preset (TFlame, P, T_air, WFR,
+//  fuel.H2, L_pfr, V_ref, L_char, D_flameholder, V_premix) — those vars
+//  use the catalog's range/step verbatim (already encoded as SI defaults
+//  in AUTO_VARS above).
+//
+//  Every OTHER varied numeric variable uses a baseline-relative default:
+//      min  = baseline × 0.75
+//      max  = baseline × 1.25
+//      step = (max − min) / 5    (5 grid points across the window)
+//
+//  Slide rule for variables with hard physical bounds (per user spec —
+//  "use logic for things that cannot go beyond a certain value... just
+//  move the 50% to one side"): when one edge of the naive ±25 % window
+//  exceeds the catalog's [min, max], the entire 50 % swing is shifted to
+//  the other side rather than centered. So load_pct baseline 100 with
+//  catalog max 100 yields [50, 100] (lower 50 % moved down) instead of
+//  the impossible [75, 125]. RH baseline 90 → [55, 100]. com_air_frac
+//  baseline 0.88 → [0.56, 1.00]. fuel.CH4 baseline 93 → [56, 100].
+//
+//  Returns null if baseline is missing or zero (caller falls back to
+//  catalog defaults — the baseline×0.75 rule produces a degenerate
+//  zero-width window otherwise).
+// ─────────────────────────────────────────────────────────────────────────
+export const USER_SPECIFIED_DOE_DEFAULTS = new Set([
+  "T_flame", "P", "T_air", "WFR", "fuel.H2",
+  "L_pfr", "velocity", "Lchar", "Dfh", "Vpremix",
+]);
+
+export function defaultDoeBoundsFromBaseline(varDef, baselineVal){
+  if (!varDef) return null;
+  // Apply to continuous-valued variables only. enum/bool stays on its
+  // catalog list of choices.
+  const isNumeric = varDef.kind === "number"
+                 || varDef.kind === "fuel_species"
+                 || varDef.kind === "ox_species";
+  if (!isNumeric) return null;
+  if (!Number.isFinite(baselineVal) || baselineVal === 0) return null;
+
+  const mag   = Math.abs(baselineVal);
+  const swing = 0.5 * mag;     // total window width = 50 % of |baseline|
+  let lo = baselineVal - 0.25 * mag;
+  let hi = baselineVal + 0.25 * mag;
+  const catLo = Number.isFinite(varDef.range?.[0]) ? varDef.range[0] : -Infinity;
+  const catHi = Number.isFinite(varDef.range?.[1]) ? varDef.range[1] :  Infinity;
+
+  // Slide rule. If the swing in either direction exceeds the catalog's
+  // hard bound, slide the entire 50 % window to the other side. If the
+  // catalog range is itself narrower than the swing we want, fall back
+  // to the full catalog range.
+  if (hi > catHi){
+    hi = catHi;
+    lo = hi - swing;
+    if (lo < catLo) lo = catLo;     // catalog range too narrow; clamp.
+  } else if (lo < catLo){
+    lo = catLo;
+    hi = lo + swing;
+    if (hi > catHi) hi = catHi;
+  }
+  // Final degenerate-window guard (can happen if catalog range is zero).
+  if (!(hi > lo)) return null;
+  const step = (hi - lo) / 5;
+  return { min: lo, max: hi, step };
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ import {
   outputUnitFor, outputDisplayValue,
   affectingVarIds, pruneFullFactorial,
   countPrunedSize, generatePrunedMatrix, enumerateValues,
+  USER_SPECIFIED_DOE_DEFAULTS, defaultDoeBoundsFromBaseline,
 } from "./automation";
 import { useAuth, AuthModal } from "./auth.jsx";
 import { AccountPanel } from "./AccountPanel.jsx";
@@ -12105,17 +12106,47 @@ function AutomatePanel(props){
     return candidateOutputs.filter(o => set.has(o.id));
   }, [candidateOutputs, selectedOutputIds]);
 
-  // Build the active varSpecs (only those the user selected, with their config)
+  // Build the active varSpecs (only those the user selected, with their config).
+  //
+  // Default min/max/step rule:
+  //   • Variables in USER_SPECIFIED_DOE_DEFAULTS (TFlame, P, T_air, WFR,
+  //     fuel.H2, L_pfr, V_ref, L_char, D_flameholder, V_premix) use the
+  //     catalog's range/step verbatim — those are baked from the user-
+  //     supplied DOE preset.
+  //   • Every OTHER numeric variable uses baseline ±25 % (5 grid points).
+  //     If either edge would exceed the catalog's hard physical bound, the
+  //     entire 50 % swing is slid to the other side instead of clamping
+  //     symmetrically (per user spec).
+  //   • Once the user customizes via the form (cfg.min/max/step/list set),
+  //     their values override the defaults.
   const activeVarSpecs = useMemo(() => {
     return selectedVarIds.map(id => {
       const def = AUTO_VARS.find(v => v.id === id);
       const cfg = varSpecs[id] || {};
+
+      // Compute default min/max/step.
+      let defMin = def.range?.[0];
+      let defMax = def.range?.[1];
+      let defStep = def.step;
+      if (!USER_SPECIFIED_DOE_DEFAULTS.has(id)){
+        // Read baseline value for this variable.
+        let baseVal;
+        if (def.kind === "fuel_species") baseVal = baseline?.fuel?.[def.species];
+        else if (def.kind === "ox_species") baseVal = baseline?.ox?.[def.species];
+        else baseVal = baseline?.[id];
+        const bb = defaultDoeBoundsFromBaseline(def, baseVal);
+        if (bb){
+          defMin = bb.min; defMax = bb.max; defStep = bb.step;
+        }
+        // else: fall through to catalog defaults (already assigned above).
+      }
+
       const baseSpec = {
         ...def,
         mode: cfg.mode || (def.kind === "enum" || def.kind === "bool" ? "list" : "range"),
-        min: cfg.min ?? def.range?.[0] ?? 0,
-        max: cfg.max ?? def.range?.[1] ?? 1,
-        step: cfg.step ?? def.step ?? 0.1,
+        min: cfg.min ?? defMin ?? 0,
+        max: cfg.max ?? defMax ?? 1,
+        step: cfg.step ?? defStep ?? 0.1,
         list: cfg.list ?? (def.kind === "enum" ? def.choices.map(c => c.value)
                           : def.kind === "bool" ? [true, false]
                           : null),
@@ -12133,7 +12164,7 @@ function AutomatePanel(props){
       };
       return baseSpec;
     });
-  }, [selectedVarIds, varSpecs]);
+  }, [selectedVarIds, varSpecs, baseline]);
 
   // Full-factorial size — cheap multiplier-only count (never enumerates
   // anything). Used for the "you'd run X if you didn't prune" callout
