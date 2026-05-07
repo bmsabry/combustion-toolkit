@@ -116,6 +116,46 @@ try {
   # every sub-module (routers/*, science/*, etc.) without us having to
   # list each one as --hidden-import.
   $apiPath = Join-Path $repo "api"
+
+  # ── DLL hunt: Anaconda Python's _ctypes.pyd depends on libffi-*.dll;
+  # numpy/scipy/cantera transitively pull in MKL, OpenBLAS, intel-openmp,
+  # libcrypto, libssl, etc. PyInstaller's analyzer doesn't follow native
+  # DLL→DLL graphs reliably on Windows when the source is a base venv on
+  # top of Anaconda — it bundles the .pyd extension modules but skips
+  # the transitive .dll deps that live in `<Anaconda>\Library\bin\`.
+  # Result: at runtime _ctypes (or scipy._fft, etc.) fails with
+  # "DLL load failed while importing _ctypes: The specified module could
+  # not be found." (the actual error the May 7 build hit).
+  #
+  # Fix: locate every .dll in <Anaconda>\Library\bin\ — Anaconda's
+  # canonical "shared C/Fortran libs" directory — and pass each to
+  # PyInstaller via --add-binary so they sit next to ctk-solver.exe in
+  # the frozen bundle. This bundles ~200 MB of DLLs we don't strictly
+  # need, but it guarantees no missing-DLL errors at runtime; it's the
+  # standard Anaconda+PyInstaller workaround. Onedir would solve this
+  # more elegantly but onefile is what main.js + electron-builder are
+  # already wired for.
+  #
+  # $python is the python.exe path Find-Python returned; its directory is
+  # the Anaconda root. Library\bin\ is sibling to python.exe.
+  $pythonDir = Split-Path $python -Parent
+  $libBin    = Join-Path $pythonDir "Library\bin"
+  $extraBinaries = @()
+  if (Test-Path $libBin) {
+    Write-Host "Hunting Anaconda DLLs in $libBin ..."
+    $dlls = Get-ChildItem -Path $libBin -Filter "*.dll" -ErrorAction SilentlyContinue
+    Write-Host "  Found $($dlls.Count) DLLs to bundle."
+    foreach ($d in $dlls) {
+      $extraBinaries += "--add-binary"
+      # PyInstaller --add-binary takes "src;dest" on Windows. dest "."
+      # places the DLL next to ctk-solver.exe in the temp extraction dir
+      # at runtime, which is on Windows's DLL search path.
+      $extraBinaries += "$($d.FullName);."
+    }
+  } else {
+    Write-Host "WARNING: Anaconda Library\bin not found at $libBin — _ctypes / numpy / scipy may fail at runtime."
+  }
+
   # Custom Cantera mechanisms (Glarborg etc.) live at api/app/mechanisms/.
   # mixture.py loads them via os.path.dirname(__file__)/../mechanisms — in
   # the frozen EXE that path resolves inside the PyInstaller temp dir, so
@@ -150,6 +190,10 @@ try {
     "--collect-all", "scipy",
     $bootstrapPath
   )
+  # Splice in every --add-binary for the Anaconda Library\bin DLLs. Done
+  # after the @() literal because PowerShell's @() initializer balks at
+  # mixing a fixed list with a dynamic array spread.
+  $pyiArgs = $pyiArgs[0..($pyiArgs.Length - 2)] + $extraBinaries + $pyiArgs[-1]
   & $venvPy @pyiArgs 2>&1 | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 } finally {
