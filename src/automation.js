@@ -1260,13 +1260,16 @@ export function pruneFullFactorial(rows, varSpecs, selectedOutputs, selectedPane
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  Matrix size cap. The full factorial of 4 variables with default step
-//  sizes can explode to 2 M+ rows (e.g. T_air × H2 × τ_PSR × L_PFR =
-//  66 × 21 × 40 × 40 ≈ 2.2 M). Even Free-mode JS would freeze the tab for
-//  minutes; Accurate mode would take days. Cap at 10 000 rows — beyond
-//  that the user must narrow ranges or remove variables.
+//  Matrix size cap. Backstop ONLY — not a refusal-to-run gate. The pruner
+//  drops every row that's provably redundant (no selected output reads a
+//  different value), so the user controls the row count by the variables
+//  and outputs they pick. We keep a soft cap at 1,000,000 to avoid the
+//  browser allocating tens of millions of JS objects in a single sub-
+//  factorial — that's a memory/UX failure mode, not an opinion about
+//  what's "too large to be useful". Realistic usage stays orders of
+//  magnitude below this even with wide thermo sweeps.
 // ─────────────────────────────────────────────────────────────────────────
-export const MAX_MATRIX_SIZE = 10000;
+export const MAX_MATRIX_SIZE = 1000000;
 
 // Cheaply compute the cross-product row count WITHOUT enumerating any
 // values. Used by the UI to display the count + gate matrix generation

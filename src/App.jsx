@@ -12761,6 +12761,11 @@ function AutomatePanel(props){
       locked={matrixSize === 0}>
       {/* Hard-stop banner when the cross product would explode. Shown
           BEFORE matrix enumeration so the tab doesn't freeze. */}
+      {/* No artificial "too large" refusal. The pruner already drops
+          every row that doesn't move a selected output, so the row
+          count is exactly what you've asked for. The hard cap below
+          (1 M) is a browser-memory backstop only — if you legitimately
+          want to run more, narrow ranges or split into multiple runs. */}
       {matrixOversized && (
         <div style={{padding:"10px 14px", background:`${C.strong}18`,
           border:`2px solid ${C.strong}`, borderRadius:6, fontSize:12,
@@ -12768,27 +12773,26 @@ function AutomatePanel(props){
           <div style={{fontSize:13, fontWeight:700, color:C.strong,
             fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px",
             marginBottom:4, textTransform:"uppercase"}}>
-            ⚠ MATRIX TOO LARGE — {prunedSizeUB.toLocaleString()} unique runs
+            ⚠ Pruned matrix exceeds {MAX_MATRIX_SIZE.toLocaleString()} rows —
+            browser-memory backstop
           </div>
           Full factorial: <strong>{matrixSize.toLocaleString()}</strong> rows.
-          After dependency pruning (rows that don't move any selected output
-          are dropped): <strong>~{prunedSizeUB.toLocaleString()}</strong> unique
-          runs. Cap: <strong>{MAX_MATRIX_SIZE.toLocaleString()}</strong>.
-          {prunedSizeUB < matrixSize && (
-            <span style={{color:C.good, fontWeight:700}}>
-              {" "}Pruning already saved you {(matrixSize - prunedSizeUB).toLocaleString()} rows
-              ({Math.round(100*(1 - prunedSizeUB/matrixSize))}%);
-            </span>
-          )}
-          {" "}narrow the highest-multiplier ranges further to fit under the cap.
-          <div style={{marginTop:8, fontSize:11, color:C.txtMuted, fontFamily:"monospace", lineHeight:1.5}}>
-            Cost driver: a variable that multiplies the unique-run count is
-            one that affects at least one selected output. Variables that
-            ONLY affect outputs you don't care about are already free —
-            they were pruned. To shrink further, increase the step size of
-            a high-cardinality dep variable (e.g. L_char at 0.01-0.1 ft
-            step 0.01 = 10 points; step 0.02 = 5 points cuts that axis 2×).
-          </div>
+          After dependency pruning: <strong>~{prunedSizeUB.toLocaleString()}</strong> unique
+          runs. The {MAX_MATRIX_SIZE.toLocaleString()}-row cap is a memory
+          backstop (allocating that many JS objects can crash the tab),
+          not an opinion about runtime. To proceed, either narrow a range
+          slightly or split the design into two runs and merge results.
+        </div>
+      )}
+      {!matrixOversized && prunedSizeUB > 5000 && (
+        <div style={{padding:"8px 12px", background:`${C.accent2}10`,
+          border:`1px solid ${C.accent2}55`, borderRadius:4, fontSize:11,
+          color:C.txtDim, marginBottom:8, fontFamily:"'Barlow',sans-serif", lineHeight:1.55}}>
+          <strong style={{color:C.accent2}}>Heads-up:</strong>{" "}
+          {prunedSizeUB.toLocaleString()} unique runs after pruning
+          (full factorial: {matrixSize.toLocaleString()}). Estimated runtime:{" "}
+          {formatRuntime(estimatedSec)}.
+          {" "}No automatic refusal — run when ready.
         </div>
       )}
       {brokenLinkages.length > 0 && (
@@ -12812,17 +12816,24 @@ function AutomatePanel(props){
         </div>
       )}
       <div style={{display:"flex", gap:14, marginBottom:8, flexWrap:"wrap", fontSize:11, fontFamily:"'Barlow',sans-serif"}}>
-        {/* "Runs" shows the PRUNED row count — what the runner actually
-            executes. Full factorial is shown beside it when the pruner
-            dropped any rows, so the user sees the savings. The pruner is
-            sound: dropped rows are byte-equal to a kept row for every
-            selected output (verified by source-trace dependency map). */}
+        {/* "Runs" shows what the runner actually executes (pruned count).
+            Full factorial shown beside it so the user sees the savings.
+            Dropped rows are PROVABLY byte-equal to a kept row for every
+            selected output (source-traced dependency map); the runner
+            cannot tell the difference. */}
         <Stat label="Runs"
-          value={prunedDropped > 0
-            ? `${matrix.length.toLocaleString()} of ${matrixSize.toLocaleString()}`
-            : matrixSize.toLocaleString()}
-          color={matrixOversized ? C.strong : (prunedDropped > 0 ? C.good : C.txt)}/>
-        {prunedDropped > 0 && (
+          value={(() => {
+            if (matrixOversized){
+              // Matrix not built (memory backstop). Show analytical UB.
+              return `~${prunedSizeUB.toLocaleString()} of ${matrixSize.toLocaleString()}`;
+            }
+            if (matrix.length === matrixSize){
+              return matrixSize.toLocaleString();
+            }
+            return `${matrix.length.toLocaleString()} of ${matrixSize.toLocaleString()}`;
+          })()}
+          color={matrixOversized ? C.strong : (matrix.length < matrixSize ? C.good : C.txt)}/>
+        {!matrixOversized && prunedDropped > 0 && (
           <Stat label="Pruned (no-op rows)"
             value={`−${prunedDropped.toLocaleString()} (${(100*prunedDropped/Math.max(matrixSize,1)).toFixed(0)}%)`}
             color={C.good}/>
