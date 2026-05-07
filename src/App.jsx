@@ -12283,38 +12283,40 @@ function AutomatePanel(props){
     [activeVarSpecs],
   );
 
-  // Build the pruned matrix DIRECTLY — union of per-output sub-factorials,
-  // deduped on a canonical signature over all varied vars. Avoids ever
-  // allocating the full factorial when it would be huge but the pruned set
-  // is small (e.g. 8 M full → 17 pruned for the user's screenshot case).
-  const matrix = useMemo(() => {
+  // Build the pruned matrix.
+  //
+  // CORRECTNESS INVARIANT: pruned matrix ⊆ full factorial. The pruned
+  // count is always ≤ the full-factorial count. (Earlier attempts at a
+  // direct-build union-of-sub-factorials violated this — sub-factorial
+  // rows had non-deps vars unset, which the runner reads as baseline,
+  // and baseline isn't necessarily one of the swept values, so those
+  // rows weren't actually members of the full factorial. Total kept
+  // could exceed the full factorial size, which is mathematically
+  // impossible for a "drop redundant rows" pruner.)
+  //
+  // Path: enumerate the full factorial (capped by MAX_MATRIX_SIZE for
+  // memory) and walk it via pruneFullFactorial — keep a row iff it
+  // contributes a (output, dependency-projection) pair no kept row
+  // already has. This is what the user originally asked for: drop
+  // redundant rows from the full factorial.
+  const fullMatrix = useMemo(() => {
     if (!matrixSpecs.length || matrixOversized) return [];
-    return generatePrunedMatrix(matrixSpecs, effectiveOutputs, effectivePanels);
-  }, [matrixSpecs, effectiveOutputs, effectivePanels, matrixOversized]);
-  const prunedDropped = Math.max(0, matrixSize - matrix.length);
-
-  // For diagnostics: the same per-output dep map the pruner used (so the
-  // UI can show "this output depends on X, Y, Z" if asked). Hooked off
-  // affectingVarIds so it stays consistent with the pruner.
-  const perOutputDeps = useMemo(() => {
-    const m = new Map();
-    const variedSet = new Set(activeVarSpecs.map(s => s.id));
-    for (const o of effectiveOutputs){
-      const deps = [...affectingVarIds(o.id, effectivePanels)]
-        .filter(v => variedSet.has(v))
-        .sort();
-      m.set(o.id, deps);
+    return generateMatrix(matrixSpecs);
+  }, [matrixSpecs, matrixOversized]);
+  const _prune = useMemo(() => {
+    if (fullMatrix.length === 0){
+      return { rows: [], dropped: 0, perOutputDeps: new Map() };
     }
-    return m;
-  }, [activeVarSpecs, effectiveOutputs, effectivePanels]);
+    return pruneFullFactorial(
+      fullMatrix, activeVarSpecs, effectiveOutputs, effectivePanels,
+    );
+  }, [fullMatrix, activeVarSpecs, effectiveOutputs, effectivePanels]);
+  const matrix = _prune.rows;
+  const prunedDropped = _prune.dropped;
 
-  // For the baselineMismatches detector and the preview, we need a sample
-  // of "what the user configured" — not what the runner actually executes.
-  // Generating the FULL factorial for that purpose would defeat the whole
-  // pruning effort on huge designs, so we expose only the pruned set as
-  // fullMatrix. baselineMismatches uses the catalog's enumerateValues
-  // (per-spec) directly instead — see below.
-  const fullMatrix = matrix;
+  // perOutputDeps comes straight from the pruner so it can never get out of
+  // sync with the row decisions.
+  const perOutputDeps = _prune.perOutputDeps;
 
   // T_flame as an operating-condition variable triggers the per-row
   // /calc/solve-phi-for-tflame bisection — it adds non-trivial time
@@ -12808,9 +12810,20 @@ function AutomatePanel(props){
           const dispMin  = toDisplay(def, siMin, units);
           const dispMax  = toDisplay(def, siMax, units);
           const dispStep = toDisplayDelta(def, siStep, units);
-          // Points-count: compute from display units (math is identical, just
-          // shown for the user's UX).
-          const pointCount = Math.max(1, Math.floor(((dispMax - dispMin) / Math.max(dispStep, 1e-12)) + 1.0001));
+          // Points-count: must match enumerateValues exactly — base
+          // floor((max-min)/step)+1 PLUS the endpoint-inclusion top-up
+          // when the last stepped value falls short of max. Without the
+          // top-up, the displayed "→ N pts" disagrees with what
+          // generateMatrix actually enumerates (reported as a 4-vs-5 bug
+          // for L_char / D_flameholder / V_premix on uneven step sweeps).
+          const pointCount = (() => {
+            const step = Math.max(dispStep, 1e-12);
+            const n = Math.floor((dispMax - dispMin) / step + 1e-9);
+            let c = n + 1;
+            const lastStepped = dispMin + n * step;
+            if (Math.abs(lastStepped - dispMax) > step * 1e-3) c += 1;
+            return Math.max(1, c);
+          })();
           // 7-column grid: name | mode | min | max | step | pts | balance.
           // Every row paints the same columns at the same x-positions so
           // values line up across rows even when only some have a Balance.
