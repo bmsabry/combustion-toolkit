@@ -16,6 +16,11 @@ try {
 }
 
 export default defineConfig({
+  // Relative base so the same build works both on Render (served at /)
+  // and inside Electron (loaded via file://). Without this, Vite emits
+  // <script src="/assets/...">, which Electron resolves to C:\assets\
+  // (filesystem root), causing ERR_FILE_NOT_FOUND and a blank window.
+  base: './',
   plugins: [react()],
   define: {
     __BUILD_SHA__: JSON.stringify(buildSha),
