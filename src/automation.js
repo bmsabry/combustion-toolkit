@@ -773,6 +773,369 @@ export function outputsForPanels(panels){
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+//  Variable-to-output dependency oracle (the prune-able DOE map).
+//
+//  affectingVarIds(outputId, hasCycleSelected) returns the SET of variable
+//  ids whose value can change the value of `outputId`. A variable NOT in
+//  that set is provably equivalent across all rows for that output —
+//  varying it produces byte-identical output values.
+//
+//  The map is hand-built from a source-trace through:
+//    api/app/science/cycle.py             - cycle.run signature & body
+//    api/app/science/aft.py               - aft.run signature
+//    api/app/science/combustor.py         - PSR/PFR construction & exit reads
+//    api/app/science/flame_speed.py       - 1-D flame solver inputs
+//    api/app/science/exhaust.py           - phi-inversion inputs
+//    api/app/science/combustor_mapping.py - 4-circuit mapping inputs
+//    src/App.jsx runAutomationMatrix      - per-row inputs object & linkage
+//    src/App.jsx _buildPanelArgs          - per-panel arg adapter
+//    src/App.jsx runFlameForAutomation    - JS-side flame post-processing
+//                                           (BOT, BLF, gates A/B/C/D, etc.)
+//    src/App.jsx computeExhaustSlipForRow - slip + Fuel & Money block
+//
+//  Linkage rule (runAutomationMatrix lines 8458-8460):
+//    breaksLinkT3  = userVarying.has("T_air")
+//    breaksLinkP3  = userVarying.has("P")
+//    breaksLinkFAR = userVarying.has("phi")
+//  When cycle is in the active panel set AND the linkage is NOT broken,
+//  cycle outputs T3_K / P3_bar / phi_Bulk override sidebar T_air / P / phi
+//  on the fly. Therefore every cycle-deck variable transitively affects
+//  every downstream-panel output through that linkage.
+//
+//  The pruner uses ONLY this function; if it ever gets out of sync with
+//  the runner, downstream pruning could drop a row whose value was
+//  actually different. Treat additions to AUTO_VARS / AUTO_OUTPUTS as
+//  requiring a matching update here.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Globals: every fuel mole-fraction key.
+const _FUEL_VAR_IDS = [
+  "fuel.CH4", "fuel.C2H6", "fuel.C3H8", "fuel.C4H10",
+  "fuel.H2", "fuel.CO", "fuel.CO2", "fuel.N2",
+];
+
+// Cycle-deck inputs to cycle.run. Plus T_fuel, WFR, water_mode go straight
+// in too. fuel.* go in via fuel_pct.
+const _CYCLE_DECK_VAR_IDS = [
+  "engine", "P_amb", "T_amb", "RH", "load_pct", "T_cool",
+  "com_air_frac", "bleed_open_pct", "bleed_valve_size_pct",
+];
+
+// Sidebar thermodynamic-state inputs that are passed to AFT/Combustor/
+// Flame/Exhaust panel calls.
+const _THERMO_VAR_IDS = [
+  // Operating-point mutex (FAR & T_flame both back-solve into phi):
+  "phi", "FAR", "T_flame",
+  "T_air", "P", "T_fuel",
+  "WFR", "water_mode",
+  ..._FUEL_VAR_IDS,
+];
+
+// Mapping circuit inputs. Schema: combustor_mapping.run signature.
+const _MAPPING_LOCAL_VAR_IDS = [
+  "mapW36w3", "mapPhiIP", "mapPhiOP", "mapPhiIM",
+  "mapFracIP", "mapFracOP", "mapFracIM", "mapFracOM",
+];
+
+// Flame-output dependency on geometry vars. Encodes EVERY output the
+// JS-side runFlameForAutomation produces.
+//
+// Rule: an output appears in the returned set iff varying that geometry
+// variable (with all others fixed) changes the output's numeric value.
+// Verified line-by-line against runFlameForAutomation source.
+function _flameGeometryDeps(outputId){
+  const out = new Set();
+  switch (outputId){
+    // Pure backend / thermo (no geometry dep):
+    case "S_L_cms": case "tau_chem_ms": case "alpha_th": case "g_c":
+    case "tau_ign_ms":
+    case "Le_eff": case "Le_E": case "Le_D": case "Ma": case "Ze":
+    case "delta_F": case "nu_u":
+    case "phi_LBO_low": case "phi_LBO_high": case "lbo_status":
+    case "lbo_safe_lefebvre": case "lbo_fuel_mult": case "Da_crit_x":
+    case "g_c_eff": case "shaffer_T_tip": case "civb_threshold":
+    case "pm_tau_hc_ms":
+      break;
+    // Single-geom-var:
+    case "tau_BO_ms":              out.add("Dfh"); break;
+    case "blowoff_velocity":       out.add("Lchar"); break;
+    case "ST_damkohler":           out.add("velocity"); break;
+    // velocity + Lchar (Bradley/Damköhler/Borghi/V_BO/PM ratio):
+    case "tau_flow_ms": case "Damkohler": case "stable":
+    case "ReT_diag": case "Ka_diag": case "Da_diag":
+    case "ST_bradley": case "borghi_regime":
+    case "V_BO_card2":
+    case "pm_tau_sl_ms": case "pm_ratio": case "pm_lbo_safe":
+      out.add("velocity"); out.add("Lchar"); break;
+    // Lpremix + Vpremix:
+    case "tau_res_ms": case "ignition_safe":
+    case "tau_res_99_ms": case "ign_margin_card3": case "gateD_pass":
+    case "premixer_safe":
+      out.add("Lpremix"); out.add("Vpremix"); break;
+    // Vpremix only:
+    case "flashback_margin":
+    case "gateA_pass": case "gateA_margin": case "Ka_flashback":
+    case "piCIVB": case "gateB_pass":
+    case "v_st_margin": case "gateC_pass":
+      out.add("Vpremix"); break;
+    // 4-gate composite uses Vpremix and Lpremix (gateD).
+    case "card3_status":
+      out.add("Vpremix"); out.add("Lpremix"); break;
+    // Unknown: fail safe — assume EVERY geometry var affects.
+    default:
+      out.add("velocity"); out.add("Lchar"); out.add("Dfh");
+      out.add("Lpremix"); out.add("Vpremix");
+  }
+  return out;
+}
+
+// Combustor PSR/PFR dependency map. Verified against combustor.py:
+//   PSR-state outputs (T_psr, NOx/CO PSR, conv_psr): tau_psr + heat-loss.
+//   PFR-exit outputs (T_exit, NOx/CO exit, O2_dry): tau_psr + heat-loss + L_pfr + V_pfr.
+//   τ_pfr_ms = L_pfr / V_pfr only.
+//   τ_total = τ_psr + τ_pfr.
+//   T_ad_eq, T_ad_complete are reference equilibrium temps — independent of every
+//     combustor-local geometry var (they re-equilibrate from the inlet).
+function _combustorLocalDeps(outputId){
+  const out = new Set();
+  switch (outputId){
+    case "T_psr": case "psr_NO_ppm": case "psr_CO_ppm":
+    case "NOx_15_psr": case "CO_15_psr": case "conv_psr_pct":
+      out.add("tau_psr"); out.add("heatLossFrac"); break;
+    case "T_exit": case "exit_NO_ppm": case "exit_CO_ppm":
+    case "O2_dry_pct":
+      out.add("tau_psr"); out.add("heatLossFrac");
+      out.add("L_pfr"); out.add("V_pfr"); break;
+    case "tau_pfr_ms":
+      out.add("L_pfr"); out.add("V_pfr"); break;
+    case "tau_total_ms":
+      out.add("tau_psr"); out.add("L_pfr"); out.add("V_pfr"); break;
+    case "T_ad_equilibrium": case "T_ad_complete_comb":
+      break;
+    default:
+      // Unknown combustor output — fail safe.
+      out.add("tau_psr"); out.add("heatLossFrac");
+      out.add("L_pfr"); out.add("V_pfr");
+  }
+  return out;
+}
+
+// Exhaust output dependency on the panel-local measurement vars.
+// computeExhaustSlipForRow + runExhaustForAutomation source-trace.
+function _exhaustLocalDeps(outputId){
+  const out = new Set();
+  // Pure O2 inversion (no slip):
+  if (outputId === "exh_phi_from_O2" || outputId === "exh_T_ad_from_O2" ||
+      outputId === "exh_FAR_from_O2" || outputId === "exh_AFR_from_O2"){
+    out.add("measO2"); return out;
+  }
+  if (outputId === "exh_phi_from_CO2" || outputId === "exh_T_ad_from_CO2" ||
+      outputId === "exh_FAR_from_CO2" || outputId === "exh_AFR_from_CO2"){
+    out.add("measCO2"); return out;
+  }
+  // O2-side slip block:
+  if (outputId === "exh_eta_c_o2" || outputId === "exh_phi_fed_o2" ||
+      outputId === "exh_FAR_fed_o2" || outputId === "exh_AFR_fed_o2" ||
+      outputId === "exh_T_ad_eff_o2"){
+    out.add("measO2"); out.add("measCO"); out.add("measUHC"); out.add("measH2");
+    return out;
+  }
+  if (outputId === "exh_eta_c_co2" || outputId === "exh_phi_fed_co2" ||
+      outputId === "exh_FAR_fed_co2" || outputId === "exh_AFR_fed_co2" ||
+      outputId === "exh_T_ad_eff_co2"){
+    out.add("measCO2"); out.add("measCO"); out.add("measUHC"); out.add("measH2");
+    return out;
+  }
+  // Air flow uses O2 inversion's FAR_burn:
+  if (outputId === "exh_air_flow_kg_s"){
+    out.add("measO2"); out.add("fuelFlowKgs"); return out;
+  }
+  if (outputId === "exh_heat_input_MW"){
+    out.add("fuelFlowKgs"); return out;
+  }
+  if (outputId === "exh_total_cost_per_hr"){
+    out.add("fuelFlowKgs"); out.add("fuelCostUsdPerMmbtuLhv"); return out;
+  }
+  // Penalty = total_cost × (1 - eta_c).
+  if (outputId.startsWith("exh_penalty_per_") && outputId.endsWith("_o2")){
+    out.add("measO2"); out.add("measCO"); out.add("measUHC"); out.add("measH2");
+    out.add("fuelFlowKgs"); out.add("fuelCostUsdPerMmbtuLhv"); return out;
+  }
+  if (outputId.startsWith("exh_penalty_per_") && outputId.endsWith("_co2")){
+    out.add("measCO2"); out.add("measCO"); out.add("measUHC"); out.add("measH2");
+    out.add("fuelFlowKgs"); out.add("fuelCostUsdPerMmbtuLhv"); return out;
+  }
+  // Cycle-derived blocks have no local vars — handled by the cycle deps.
+  return out;
+}
+
+// Main oracle. Returns the SET of variable ids whose value can change the
+// value of `outputId`. Caller passes the active panel set so cycle-linkage
+// transitive deps can be resolved correctly.
+export function affectingVarIds(outputId, selectedPanels){
+  const out = AUTO_OUTPUTS.find(o => o.id === outputId);
+  if (!out) return new Set();
+  const panel = out.panel;
+  // Cycle is "active" when the user picked Cycle OR Mapping (Mapping
+  // auto-includes Cycle in expandPanelDeps). Cycle outputs feeding
+  // downstream panels matters only when cycle ran for that row.
+  const cycleOn =
+    selectedPanels.includes("cycle") || selectedPanels.includes("mapping");
+
+  // ── CYCLE outputs: deps are cycle.run inputs only. ──
+  if (panel === "cycle"){
+    const s = new Set();
+    for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
+    s.add("T_fuel"); s.add("WFR"); s.add("water_mode");
+    for (const v of _FUEL_VAR_IDS) s.add(v);
+    return s;
+  }
+
+  // ── MAPPING outputs: cycle deps (T3/P3/W3/oxidizer come from cycle.run)
+  //    PLUS mapping-local-circuit args PLUS T_fuel/WFR/water_mode/fuel.
+  //    Sidebar phi/T_air/P NEVER reach mapping (it uses cycle.T3/P3 instead). ──
+  if (panel === "mapping"){
+    const s = new Set();
+    for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
+    for (const v of _MAPPING_LOCAL_VAR_IDS) s.add(v);
+    s.add("T_fuel"); s.add("WFR"); s.add("water_mode");
+    for (const v of _FUEL_VAR_IDS) s.add(v);
+    return s;
+  }
+
+  // ── AFT outputs: depend on the entire thermo state passed to aft.run.
+  //    If cycle is on, cycle deck vars also affect (they change T3/P3/phi
+  //    via linkage). T_fuel always feeds AFT directly. ──
+  if (panel === "aft"){
+    const s = new Set(_THERMO_VAR_IDS);
+    if (cycleOn) for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
+    return s;
+  }
+
+  // ── COMBUSTOR outputs: thermo state + per-output PSR/PFR-local deps.
+  //    Cycle-linkage included when cycle is on. ──
+  if (panel === "combustor"){
+    const s = new Set(_THERMO_VAR_IDS);
+    if (cycleOn) for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
+    for (const v of _combustorLocalDeps(outputId)) s.add(v);
+    return s;
+  }
+
+  // ── FLAME outputs: thermo state + per-output geometry deps.
+  //    Cycle-linkage included when cycle is on. ──
+  if (panel === "flame"){
+    const s = new Set(_THERMO_VAR_IDS);
+    if (cycleOn) for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
+    for (const v of _flameGeometryDeps(outputId)) s.add(v);
+    return s;
+  }
+
+  // ── EXHAUST outputs: thermo + per-output measurement vars + cycle (for
+  //    cycle-derived sub-block) + mapping (for CO_linked / UHC_linked). ──
+  if (panel === "exhaust"){
+    const s = new Set(_THERMO_VAR_IDS);
+    if (cycleOn) for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
+    for (const v of _exhaustLocalDeps(outputId)) s.add(v);
+    // CO_linked / UHC_linked also depend on mapping-local vars (Mapping CO15
+    // is the source). exh_phi_exhaust + o2_dry_at_phi_exhaust depend on
+    // cycle.mdot — already covered by cycleOn deck vars above.
+    if (outputId === "exh_CO_linked" || outputId === "exh_UHC_linked"){
+      for (const v of _MAPPING_LOCAL_VAR_IDS) s.add(v);
+    }
+    return s;
+  }
+
+  return new Set();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  pruneFullFactorial(rows, varSpecs, selectedOutputs, selectedPanels)
+//
+//  Drops rows from the full factorial whose presence is provably
+//  redundant. A row r is kept iff there exists at least one selected
+//  output O such that the projection of r onto D(O) ∩ varied is a
+//  combination not yet produced by an earlier kept row.
+//
+//  D(O) comes from affectingVarIds(O, panels). After intersecting with
+//  the user's actual varied-vars set, two rows that match on every
+//  varied dependency of every selected output are byte-identical —
+//  every output picker reads the same data. Keeping only the first
+//  representative of each equivalence class collapses duplicate work.
+//
+//  Returns: { rows: keptRows, dropped: int, perOutputDeps: Map<outId,
+//             string[]> }
+//  - perOutputDeps lets the UI explain WHY rows were dropped.
+//
+//  Algorithm: greedy single-pass. Walk rows in matrix order; for each
+//  row compute its (per-output) projection tuple. A row is "novel" if
+//  any of its projections is unseen for that output. Accept it; mark
+//  every projection from this row as seen.
+//
+//  Greedy is exact-optimal (= |union of per-output factorials|) when
+//  matrix order visits the outermost-varying axes first; cache-locality
+//  reordering already does that. Worst case it overcounts by at most a
+//  small constant — never under-counts (no kept-row's seen-projection is
+//  ever wrongly considered novel).
+// ─────────────────────────────────────────────────────────────────────────
+function _readVarFromRow(row, varId){
+  if (!row) return null;
+  // Fuel species: row.fuel.<species>. Species id is "fuel.CH4" → species "CH4".
+  if (varId.startsWith("fuel.") && row.fuel){
+    const sp = varId.slice(5);
+    if (Object.prototype.hasOwnProperty.call(row.fuel, sp)) return row.fuel[sp];
+    return null;   // not in this row → at baseline
+  }
+  if (Object.prototype.hasOwnProperty.call(row, varId)) return row[varId];
+  return null;
+}
+
+export function pruneFullFactorial(rows, varSpecs, selectedOutputs, selectedPanels){
+  if (!rows || rows.length === 0){
+    return { rows: [], dropped: 0, perOutputDeps: new Map() };
+  }
+  const variedVarIds = new Set(varSpecs.map(s => s.id));
+  // Per-output: list of varied vars that affect this output. Empty list
+  // means the output is constant across the entire matrix.
+  const perOutputDeps = new Map();
+  for (const o of selectedOutputs){
+    const all = affectingVarIds(o.id, selectedPanels);
+    const variedDeps = [...all].filter(v => variedVarIds.has(v));
+    // Sort for deterministic projection keys.
+    variedDeps.sort();
+    perOutputDeps.set(o.id, variedDeps);
+  }
+  // Per-output set of seen projection signatures.
+  const seen = new Map();
+  for (const o of selectedOutputs) seen.set(o.id, new Set());
+
+  const kept = [];
+  for (const r of rows){
+    let novel = false;
+    // Compute projection for each output. We scan all outputs even after
+    // finding novelty so we can mark ALL their projections seen for the
+    // accepted row.
+    const projs = new Map();
+    for (const [outId, deps] of perOutputDeps){
+      // Use a delimiter that can't appear in a number/string value to
+      // build a unique signature.
+      const sig = deps.length === 0
+        ? "_const_"
+        : deps.map(v => {
+            const val = _readVarFromRow(r, v);
+            return val === null ? "_b_" : String(val);
+          }).join("");
+      projs.set(outId, sig);
+      if (!seen.get(outId).has(sig)) novel = true;
+    }
+    if (novel){
+      for (const [outId, sig] of projs) seen.get(outId).add(sig);
+      kept.push(r);
+    }
+  }
+  return { rows: kept, dropped: rows.length - kept.length, perOutputDeps };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 //  Matrix size cap. The full factorial of 4 variables with default step
 //  sizes can explode to 2 M+ rows (e.g. T_air × H2 × τ_PSR × L_PFR =
 //  66 × 21 × 40 × 40 ≈ 2.2 M). Even Free-mode JS would freeze the tab for

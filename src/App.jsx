@@ -11,6 +11,7 @@ import {
   reorderForCacheLocality,
   unitFor, toDisplay, toSi, toDisplayDelta, toSiDelta,
   outputUnitFor, outputDisplayValue,
+  affectingVarIds, pruneFullFactorial,
 } from "./automation";
 import { useAuth, AuthModal } from "./auth.jsx";
 import { AccountPanel } from "./AccountPanel.jsx";
@@ -12151,10 +12152,28 @@ function AutomatePanel(props){
     () => reorderForCacheLocality(activeVarSpecs),
     [activeVarSpecs],
   );
-  const matrix = useMemo(
+  // Full factorial — built once. The pruner walks this set and drops rows
+  // whose every-selected-output projection duplicates an earlier kept row.
+  const fullMatrix = useMemo(
     () => (matrixSpecs.length && !matrixOversized) ? generateMatrix(matrixSpecs) : [],
     [matrixSpecs, matrixOversized],
   );
+  // Dependency-pruned matrix — what the runner actually executes.
+  // Equivalent to the full factorial for every selected output (same
+  // {output, projection} space) but with provably redundant rows removed.
+  // Greedy single-pass over fullMatrix; per-output dependency map is
+  // hand-derived from the source-traced affectingVarIds() oracle.
+  const _pruneResult = useMemo(() => {
+    if (fullMatrix.length === 0){
+      return { rows: [], dropped: 0, perOutputDeps: new Map() };
+    }
+    return pruneFullFactorial(
+      fullMatrix, activeVarSpecs, effectiveOutputs, effectivePanels,
+    );
+  }, [fullMatrix, activeVarSpecs, effectiveOutputs, effectivePanels]);
+  const matrix = _pruneResult.rows;
+  const prunedDropped = _pruneResult.dropped;
+  const perOutputDeps = _pruneResult.perOutputDeps;
 
   // T_flame as an operating-condition variable triggers the per-row
   // /calc/solve-phi-for-tflame bisection — it adds non-trivial time
@@ -12171,14 +12190,18 @@ function AutomatePanel(props){
   // {seconds, source, sampleCount} bundle lets the UI flag whether the
   // estimate is `default` (a guess) or `calibrated` (tuned to your
   // actual hardware + network + load history).
+  // Runtime estimate uses the PRUNED row count (matrix.length), not the
+  // full factorial (matrixSize). Pruned rows are exactly what the runner
+  // executes; factorials with redundant rows would over-estimate and
+  // mislead the user about the wait.
   const estimate = useMemo(() => {
     return estimateRunSeconds(
       effectivePanels,
       accurate ? "accurate" : "free",
       needsBisection,
-      matrixSize,
+      matrix.length || matrixSize,
     );
-  }, [effectivePanels, accurate, needsBisection, matrixSize]);
+  }, [effectivePanels, accurate, needsBisection, matrix.length, matrixSize]);
   const estimatedSec = Math.round(estimate.seconds);
 
   // Any auto-broken linkages?
@@ -12249,16 +12272,19 @@ function AutomatePanel(props){
   //    after they've spent compute time only to see a fallback warning
   //    in the chart caption.
   const baselineMismatches = useMemo(() => {
-    if (matrix.length === 0) return [];
+    // Read swept values from the FULL factorial — pruning may collapse
+    // a variable to a single value if it doesn't affect any selected
+    // output, which would falsely flag a baseline mismatch. The
+    // mismatch warning is about what the user CONFIGURED to sweep.
+    if (fullMatrix.length === 0) return [];
     const out = [];
     for (const v of activeVarSpecs){
-      // Read swept distinct values for this var directly from the matrix.
       const colKey = v.id;
       const isFuelSp = v.kind === "fuel_species";
       const isOxSp   = v.kind === "ox_species";
       const sweptSet = new Set();
       const sweptDisplay = [];
-      for (const row of matrix){
+      for (const row of fullMatrix){
         let val;
         if (isFuelSp) val = row.fuel ? row.fuel[v.species] : (row[colKey]);
         else if (isOxSp) val = row.ox ? row.ox[v.species] : (row[colKey]);
@@ -12279,7 +12305,7 @@ function AutomatePanel(props){
       }
     }
     return out;
-  }, [matrix, activeVarSpecs, baseline]);
+  }, [fullMatrix, activeVarSpecs, baseline]);
 
   // Modal state for the pre-run baseline warning. `pendingRun` set to
   // true when the user clicked Run but the warning is showing → after
@@ -12767,8 +12793,21 @@ function AutomatePanel(props){
         </div>
       )}
       <div style={{display:"flex", gap:14, marginBottom:8, flexWrap:"wrap", fontSize:11, fontFamily:"'Barlow',sans-serif"}}>
-        <Stat label="Runs"            value={matrixSize.toLocaleString()}
-          color={matrixOversized ? C.strong : C.txt}/>
+        {/* "Runs" shows the PRUNED row count — what the runner actually
+            executes. Full factorial is shown beside it when the pruner
+            dropped any rows, so the user sees the savings. The pruner is
+            sound: dropped rows are byte-equal to a kept row for every
+            selected output (verified by source-trace dependency map). */}
+        <Stat label="Runs"
+          value={prunedDropped > 0
+            ? `${matrix.length.toLocaleString()} of ${matrixSize.toLocaleString()}`
+            : matrixSize.toLocaleString()}
+          color={matrixOversized ? C.strong : (prunedDropped > 0 ? C.good : C.txt)}/>
+        {prunedDropped > 0 && (
+          <Stat label="Pruned (no-op rows)"
+            value={`−${prunedDropped.toLocaleString()} (${(100*prunedDropped/Math.max(matrixSize,1)).toFixed(0)}%)`}
+            color={C.good}/>
+        )}
         <Stat label="Inputs / row"    value={selectedVarIds.length}/>
         <Stat label="Outputs / row"   value={effectiveOutputs.length}/>
         <Stat label="Mode"            value={accurate ? "Accurate" : "Simple"}
