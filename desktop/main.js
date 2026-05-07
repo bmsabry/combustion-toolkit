@@ -173,9 +173,14 @@ function startSolver(licenseToken) {
     };
     solverProc = spawn(bin, [], { env, stdio: ["ignore", "pipe", "pipe"] });
 
+    // Capture every stdout/stderr line so we can surface a useful error
+    // instead of the bare "failed to start within Ns" if the timeout fires.
     let resolved = false;
+    let stdoutBuf = "";
+    let stderrBuf = "";
     solverProc.stdout.on("data", (buf) => {
       const s = buf.toString();
+      stdoutBuf += s;
       process.stdout.write(`[solver] ${s}`);
       if (!resolved) {
         const m = s.match(/CTK_PORT=(\d+)/);
@@ -187,18 +192,40 @@ function startSolver(licenseToken) {
       }
     });
     solverProc.stderr.on("data", (buf) => {
-      process.stderr.write(`[solver-err] ${buf.toString()}`);
+      const s = buf.toString();
+      stderrBuf += s;
+      process.stderr.write(`[solver-err] ${s}`);
     });
     solverProc.on("exit", (code) => {
       console.log(`solver exited code=${code}`);
       solverProc = null;
-      if (!resolved) reject(new Error(`solver exited before reporting port (code=${code})`));
+      if (!resolved) {
+        const tail = (stderrBuf || stdoutBuf).split(/\r?\n/).slice(-12).join("\n");
+        reject(new Error(
+          `solver exited before reporting port (code=${code}).\n` +
+          `Last output:\n${tail || "(no output captured)"}`
+        ));
+      }
     });
 
-    // Fail fast if the solver never starts.
+    // Cold-start budget: PyInstaller-bundled Python+Cantera typically
+    // boots in 5-15s on a warm system, but the FIRST launch on a fresh
+    // machine pays a Windows-Defender cloud-scan tax that can stretch
+    // 30-90s while Defender analyzes the unknown 79 MB binary. Subsequent
+    // launches drop back to the warm baseline. We give 120s on first run
+    // to keep that case from looking like a build failure to the user.
     setTimeout(() => {
-      if (!resolved) reject(new Error("solver failed to start within 20s"));
-    }, 20000);
+      if (!resolved) {
+        const tail = (stderrBuf || stdoutBuf).split(/\r?\n/).slice(-12).join("\n");
+        reject(new Error(
+          `solver failed to start within 120s. This usually means Windows ` +
+          `Defender is still scanning ctk-solver.exe (first-run cloud check) ` +
+          `or the binary is on a slow / OneDrive-synced drive. Try moving ` +
+          `the extracted folder to a local SSD path like C:\\Apps\\ and ` +
+          `relaunching.\n\nLast output:\n${tail || "(no output captured)"}`
+        ));
+      }
+    }, 120000);
   });
 }
 
