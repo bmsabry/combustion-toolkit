@@ -95,99 +95,116 @@ $bootstrapLines = @(
 )
 Set-Content -Path $bootstrapPath -Value $bootstrapLines -Encoding ascii
 
-# ---- run PyInstaller ----
-Write-Host "Running PyInstaller ..."
+# ---- run PyInstaller via .spec file ----
+# Why a .spec file instead of CLI args: bundling 454 DLLs from Anaconda's
+# Library\bin via individual --add-binary args blows past Windows'
+# 32K command-line limit (CreateProcess fails with "The filename or
+# extension is too long"). A .spec file is read by Python as source, so
+# the DLL list goes into a Python list literal with no length cap.
+Write-Host "Running PyInstaller (via .spec file) ..."
 Push-Location $repo
 try {
   $workPath = Join-Path $out "build"
-  # Build the PyInstaller arg list as a flat array (avoids all of
-  # PowerShell's line-continuation parsing). PyInstaller writes warnings
-  # to stderr; with $ErrorActionPreference = Continue (set above) those
-  # are fine. We check $LASTEXITCODE explicitly after.
-  # CRITICAL: --paths so PyInstaller can resolve the `from app.desktop_main`
-  # import in the bootstrap. The app package lives at api/app/, not at the
-  # repo root. Without --paths, PyInstaller analyzes the bootstrap, cannot
-  # resolve app, still produces an EXE, and the EXE crashes at runtime
-  # with ModuleNotFoundError: No module named app.
-  #
-  # --collect-submodules app tells PyInstaller to walk api/app/ and bundle
-  # every sub-module (routers, science, etc.) without us having to list
-  # each one as --hidden-import.
-  $apiPath = Join-Path $repo "api"
+  $apiPath  = Join-Path $repo "api"
+  $mechSrc  = Join-Path $apiPath "app\mechanisms"
 
-  # DLL hunt: Anaconda Python _ctypes.pyd needs libffi-X.dll; numpy /
-  # scipy / cantera transitively need MKL, OpenBLAS, intel-openmp,
-  # libcrypto, libssl. PyInstaller's analyzer does not follow the native
-  # DLL graph on Windows when the source venv inherits from Anaconda; it
-  # bundles the .pyd extension modules but skips the .dll transitive
-  # deps that live in <Anaconda>\Library\bin\. Result: at runtime
-  # ctypes (or scipy.fft, etc.) fails with "DLL load failed while
-  # importing _ctypes: The specified module could not be found".
-  #
-  # Fix: locate every .dll in <Anaconda>\Library\bin\ and pass each one
-  # to PyInstaller via --add-binary so they sit next to ctk-solver.exe
-  # in the frozen bundle. Adds ~200 MB but guarantees no missing-DLL
-  # errors at runtime. Standard Anaconda + PyInstaller workaround.
-  #
-  # $python is the python.exe path Find-Python returned; its directory is
-  # the Anaconda root. Library\bin\ is sibling to python.exe.
+  # Hunt DLLs from <Anaconda>\Library\bin so _ctypes/numpy/scipy/cantera
+  # find their transitive native deps at runtime. PyInstaller's analyzer
+  # does not follow the native DLL graph for Anaconda-sourced extension
+  # modules, so we bundle the whole set explicitly.
   $pythonDir = Split-Path $python -Parent
   $libBin    = Join-Path $pythonDir "Library\bin"
-  $extraBinaries = @()
+  $dlls = @()
   if (Test-Path $libBin) {
     Write-Host "Hunting Anaconda DLLs in $libBin ..."
     $dlls = Get-ChildItem -Path $libBin -Filter "*.dll" -ErrorAction SilentlyContinue
     Write-Host ("  Found {0} DLLs to bundle." -f $dlls.Count)
-    foreach ($d in $dlls) {
-      $extraBinaries += "--add-binary"
-      # PyInstaller --add-binary takes "src;dest" on Windows. dest "."
-      # places the DLL next to ctk-solver.exe in the temp extraction dir
-      # at runtime, which is on Windows DLL search path.
-      $extraBinaries += ("{0};." -f $d.FullName)
-    }
   } else {
     Write-Host ("WARNING: Anaconda Library\bin not found at {0}. _ctypes / numpy / scipy may fail at runtime." -f $libBin)
   }
 
-  # Custom Cantera mechanisms (Glarborg etc.) live at api/app/mechanisms/.
-  # mixture.py loads them via os.path.dirname(__file__) + /../mechanisms.
-  # In the frozen EXE that path resolves inside the PyInstaller temp dir,
-  # so the YAML files must be bundled there as data. Cantera GRI-Mech is
-  # already covered by --collect-all cantera.
-  $mechSrc = Join-Path $apiPath "app\mechanisms"
-  $mechSpec = ("{0};app/mechanisms" -f $mechSrc)
-  $pyiArgs = @(
-    "-m", "PyInstaller",
-    "--clean", "--noconfirm", "--onefile",
-    "--name", "ctk-solver",
-    "--distpath", $out,
-    "--workpath", $workPath,
-    "--specpath", $out,
-    "--paths", $apiPath,
-    "--collect-submodules", "app",
-    "--add-data", $mechSpec,
-    "--hidden-import", "app",
-    "--hidden-import", "app.desktop_main",
-    "--hidden-import", "cantera",
-    "--hidden-import", "uvicorn.logging",
-    "--hidden-import", "uvicorn.loops",
-    "--hidden-import", "uvicorn.loops.auto",
-    "--hidden-import", "uvicorn.protocols",
-    "--hidden-import", "uvicorn.protocols.http",
-    "--hidden-import", "uvicorn.protocols.http.auto",
-    "--hidden-import", "uvicorn.protocols.websockets",
-    "--hidden-import", "uvicorn.protocols.websockets.auto",
-    "--hidden-import", "uvicorn.lifespan",
-    "--hidden-import", "uvicorn.lifespan.on",
-    "--collect-all", "cantera",
-    "--collect-all", "scipy",
-    $bootstrapPath
-  )
-  # Splice in every --add-binary for the Anaconda Library\bin DLLs. Done
-  # after the @() literal because PowerShell's @() initializer balks at
-  # mixing a fixed list with a dynamic array spread.
-  $pyiArgs = $pyiArgs[0..($pyiArgs.Length - 2)] + $extraBinaries + $pyiArgs[-1]
-  & $venvPy @pyiArgs 2>&1 | ForEach-Object { Write-Host $_ }
+  # Build the binaries list as Python source. Each entry is (src, dest).
+  # dest "." places the DLL next to ctk-solver.exe in the unpacked tmpdir
+  # at runtime, which is on Windows' DLL search path. Use raw strings
+  # (r'...') so backslashes in Windows paths do not get interpreted.
+  $binaryEntries = @()
+  foreach ($d in $dlls) {
+    $binaryEntries += "    (r'{0}', '.')," -f $d.FullName
+  }
+  $binariesPython = ($binaryEntries -join "`r`n")
+
+  # Forward-slash the api/mechanisms paths so the embedded raw strings
+  # work consistently regardless of repo-clone path.
+  $bootstrapPy = $bootstrapPath
+  $apiPathPy   = $apiPath
+  $mechSrcPy   = $mechSrc
+
+  $specPath = Join-Path $out "ctk-solver.spec"
+  $specBody = @"
+# -*- mode: python ; coding: utf-8 -*-
+# Auto-generated by build-solver.ps1. Do not edit by hand; rerun the
+# script to regenerate.
+from PyInstaller.utils.hooks import collect_submodules, collect_all
+
+cantera_datas, cantera_binaries, cantera_hidden = collect_all('cantera')
+scipy_datas,   scipy_binaries,   scipy_hidden   = collect_all('scipy')
+app_hidden = collect_submodules('app')
+
+extra_dlls = [
+$binariesPython
+]
+
+uvicorn_hidden = [
+    'uvicorn.logging',
+    'uvicorn.loops', 'uvicorn.loops.auto',
+    'uvicorn.protocols',
+    'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
+    'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',
+    'uvicorn.lifespan', 'uvicorn.lifespan.on',
+]
+
+a = Analysis(
+    [r'$bootstrapPy'],
+    pathex=[r'$apiPathPy'],
+    binaries=cantera_binaries + scipy_binaries + extra_dlls,
+    datas=cantera_datas + scipy_datas + [(r'$mechSrcPy', 'app/mechanisms')],
+    hiddenimports=app_hidden + cantera_hidden + scipy_hidden + uvicorn_hidden + [
+        'app', 'app.desktop_main', 'cantera',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
+pyz = PYZ(a.pure, a.zipped_data)
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='ctk-solver',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+"@
+  Set-Content -Path $specPath -Value $specBody -Encoding utf8
+  Write-Host ("Wrote spec: {0}" -f $specPath)
+
+  # Now invoke PyInstaller with just the spec file path - tiny command
+  # line, no length issues.
+  & $venvPy -m PyInstaller --clean --noconfirm --distpath $out --workpath $workPath $specPath 2>&1 | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 } finally {
   Pop-Location
