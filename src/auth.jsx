@@ -89,13 +89,20 @@ export function AuthProvider({ children }) {
   // primary path; this is the belt-and-suspenders client-side guarantee
   // requested for full unconditional access.
   const _adminOverride = _isAdminEmail(user?.email);
+  // Desktop mode runs against a bundled local solver. The Electron preload
+  // sets window.__CTK_API_BASE__ to the loopback solver URL; if that's
+  // present, "online access" is always true (the local solver IS the
+  // backend, no cloud login required). Without this, panel calcs that gate
+  // on hasOnlineAccess (cycle, AFT, etc.) silently never fire on desktop
+  // because the user activated a license but never logged into the cloud.
+  const _isDesktop = typeof window !== "undefined" && !!window.__CTK_API_BASE__;
   const value = {
     user, subscription, loading, error,
     signin, signup, signout, refresh,
     isAuthenticated: !!user,
     isAdminEmail: _adminOverride,
-    hasOnlineAccess:   _adminOverride || !!(subscription && subscription.has_online_access),
-    hasDownloadAccess: _adminOverride || !!(subscription && subscription.has_download_access),
+    hasOnlineAccess:   _isDesktop || _adminOverride || !!(subscription && subscription.has_online_access),
+    hasDownloadAccess: _isDesktop || _adminOverride || !!(subscription && subscription.has_download_access),
   };
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
