@@ -104,37 +104,30 @@ try {
   # PowerShell's line-continuation parsing). PyInstaller writes warnings
   # to stderr; with $ErrorActionPreference = Continue (set above) those
   # are fine. We check $LASTEXITCODE explicitly after.
-  # CRITICAL: --paths "$repo\api" so PyInstaller can resolve the
-  # `from app.desktop_main import main` import in the bootstrap. Without
-  # this, PyInstaller analyzes the bootstrap, can't find the `app` package
-  # (it's at api/app/, not at the repo root), still produces an EXE
-  # because there's no fail-fast on missing imports, and the EXE crashes
-  # at runtime with "ModuleNotFoundError: No module named 'app'" — exactly
-  # the error the May 7 build hit.
+  # CRITICAL: --paths so PyInstaller can resolve the `from app.desktop_main`
+  # import in the bootstrap. The app package lives at api/app/, not at the
+  # repo root. Without --paths, PyInstaller analyzes the bootstrap, cannot
+  # resolve app, still produces an EXE, and the EXE crashes at runtime
+  # with ModuleNotFoundError: No module named app.
   #
-  # --collect-submodules "app" tells PyInstaller to walk app/ and bundle
-  # every sub-module (routers/*, science/*, etc.) without us having to
-  # list each one as --hidden-import.
+  # --collect-submodules app tells PyInstaller to walk api/app/ and bundle
+  # every sub-module (routers, science, etc.) without us having to list
+  # each one as --hidden-import.
   $apiPath = Join-Path $repo "api"
 
-  # ── DLL hunt: Anaconda Python's _ctypes.pyd depends on libffi-*.dll;
-  # numpy/scipy/cantera transitively pull in MKL, OpenBLAS, intel-openmp,
-  # libcrypto, libssl, etc. PyInstaller's analyzer doesn't follow native
-  # DLL→DLL graphs reliably on Windows when the source is a base venv on
-  # top of Anaconda — it bundles the .pyd extension modules but skips
-  # the transitive .dll deps that live in `<Anaconda>\Library\bin\`.
-  # Result: at runtime _ctypes (or scipy._fft, etc.) fails with
-  # "DLL load failed while importing _ctypes: The specified module could
-  # not be found." (the actual error the May 7 build hit).
+  # DLL hunt: Anaconda Python _ctypes.pyd needs libffi-X.dll; numpy /
+  # scipy / cantera transitively need MKL, OpenBLAS, intel-openmp,
+  # libcrypto, libssl. PyInstaller's analyzer does not follow the native
+  # DLL graph on Windows when the source venv inherits from Anaconda; it
+  # bundles the .pyd extension modules but skips the .dll transitive
+  # deps that live in <Anaconda>\Library\bin\. Result: at runtime
+  # ctypes (or scipy.fft, etc.) fails with "DLL load failed while
+  # importing _ctypes: The specified module could not be found".
   #
-  # Fix: locate every .dll in <Anaconda>\Library\bin\ — Anaconda's
-  # canonical "shared C/Fortran libs" directory — and pass each to
-  # PyInstaller via --add-binary so they sit next to ctk-solver.exe in
-  # the frozen bundle. This bundles ~200 MB of DLLs we don't strictly
-  # need, but it guarantees no missing-DLL errors at runtime; it's the
-  # standard Anaconda+PyInstaller workaround. Onedir would solve this
-  # more elegantly but onefile is what main.js + electron-builder are
-  # already wired for.
+  # Fix: locate every .dll in <Anaconda>\Library\bin\ and pass each one
+  # to PyInstaller via --add-binary so they sit next to ctk-solver.exe
+  # in the frozen bundle. Adds ~200 MB but guarantees no missing-DLL
+  # errors at runtime. Standard Anaconda + PyInstaller workaround.
   #
   # $python is the python.exe path Find-Python returned; its directory is
   # the Anaconda root. Library\bin\ is sibling to python.exe.
@@ -144,25 +137,25 @@ try {
   if (Test-Path $libBin) {
     Write-Host "Hunting Anaconda DLLs in $libBin ..."
     $dlls = Get-ChildItem -Path $libBin -Filter "*.dll" -ErrorAction SilentlyContinue
-    Write-Host "  Found $($dlls.Count) DLLs to bundle."
+    Write-Host ("  Found {0} DLLs to bundle." -f $dlls.Count)
     foreach ($d in $dlls) {
       $extraBinaries += "--add-binary"
       # PyInstaller --add-binary takes "src;dest" on Windows. dest "."
       # places the DLL next to ctk-solver.exe in the temp extraction dir
-      # at runtime, which is on Windows's DLL search path.
-      $extraBinaries += "$($d.FullName);."
+      # at runtime, which is on Windows DLL search path.
+      $extraBinaries += ("{0};." -f $d.FullName)
     }
   } else {
-    Write-Host "WARNING: Anaconda Library\bin not found at $libBin — _ctypes / numpy / scipy may fail at runtime."
+    Write-Host ("WARNING: Anaconda Library\bin not found at {0}. _ctypes / numpy / scipy may fail at runtime." -f $libBin)
   }
 
   # Custom Cantera mechanisms (Glarborg etc.) live at api/app/mechanisms/.
-  # mixture.py loads them via os.path.dirname(__file__)/../mechanisms — in
-  # the frozen EXE that path resolves inside the PyInstaller temp dir, so
-  # the YAML files must be bundled there as data. Cantera's stock GRI-Mech
-  # comes from `--collect-all cantera` already.
+  # mixture.py loads them via os.path.dirname(__file__) + /../mechanisms.
+  # In the frozen EXE that path resolves inside the PyInstaller temp dir,
+  # so the YAML files must be bundled there as data. Cantera GRI-Mech is
+  # already covered by --collect-all cantera.
   $mechSrc = Join-Path $apiPath "app\mechanisms"
-  $mechSpec = "$mechSrc;app/mechanisms"
+  $mechSpec = ("{0};app/mechanisms" -f $mechSrc)
   $pyiArgs = @(
     "-m", "PyInstaller",
     "--clean", "--noconfirm", "--onefile",
