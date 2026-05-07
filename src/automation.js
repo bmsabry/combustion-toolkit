@@ -1381,8 +1381,21 @@ function countValues(spec){
   const min = +spec.min, max = +spec.max, step = +spec.step;
   if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(step) || step <= 0) return 0;
   if (max < min) return 1;
-  // Same +1 endpoint inclusion logic as enumerateValues so counts agree.
-  return Math.floor((max - min) / step + 1e-9) + 1;
+  // MUST match enumerateValues exactly — both the floor+1 base count AND
+  // the endpoint-inclusion top-up. enumerateValues appends `max` whenever
+  // the last stepped value falls short of `max` by more than step·1e-3
+  // (so a range like 2700-3100 step 75 produces 6 stepped values plus
+  // the explicit endpoint 3100, total 7). If countValues didn't mirror
+  // that, the displayed Runs / Pruned UB would disagree with the actual
+  // matrix the runner builds, which is exactly the disagreement the user
+  // hit ("450,285 unique" vs "987,046 to run").
+  const n = Math.floor((max - min) / step + 1e-9);
+  let count = n + 1;
+  const lastStepped = min + n * step;
+  if (Math.abs(lastStepped - max) > step * 1e-3){
+    count += 1;
+  }
+  return count;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
