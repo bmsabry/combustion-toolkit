@@ -12558,7 +12558,26 @@ function AutomatePanel(props){
       accurate, selectedPanels: effectivePanels, units, baseline,
     });
   };
-  const resetRun = () => { setResults(null); setProgress(null); setErrMsg(null); setShowPlots(false); };
+  // Full panel reset — wipes the entire wizard, not just the run output.
+  // Step 1 (panels), Step 2 (variables + output filter), Step 3 (per-var
+  // ranges), Step 4 (matrix preview reverts to empty since selectedPanels
+  // is empty), and Step 5 (results / progress / error / plots) all clear.
+  // Intentional: the user clicks Reset when they want to start a new
+  // sweep from scratch, not when they want to keep tweaking the same one.
+  const resetRun = () => {
+    setSelectedPanels([]);
+    setSelectedVarIds([]);
+    setVarSpecs({});
+    setSelectedOutputIds(null);
+    setResults(null);
+    setProgress(null);
+    setErrMsg(null);
+    setShowPlots(false);
+    setShowBaselineWarn(false);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(null);
+    abortRef.current = { aborted: false };
+  };
 
   // ─────────────────────────────────────────────────────────────────────
   //  UI helpers
