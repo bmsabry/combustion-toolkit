@@ -1001,7 +1001,11 @@ function _buildExportWorkbook(fuel,ox,phi,T0,P,units,ps){const wb=XLSX.utils.boo
   linkT3=true,linkP3=true,linkFAR=true,linkFuelFlow=true,linkExhaustCO=false,linkExhaustUHC=false,loadStepPct=5,bleedStepPct=15,
   appMode="advanced",
   // Lifted Cantera flame results (null in free mode or before activation).
-  flameBk=null,flameBkIgn=null,flameCanteraSweeps=null
+  flameBk=null,flameBkIgn=null,flameCanteraSweeps=null,
+  // Admin gate — proprietary reference points / derivatives / scaling
+  // exponents are emitted only for admin emails. Non-admin exports get
+  // the same workbook structure with proprietary lines redacted.
+  isAdminEmail=false
 }=ps||{};
   // ── MODE-BASED SHEET VISIBILITY ─────────────────────────────────────
   // Mirrors the panel-visibility filter on TABS_BASE so the workbook only
@@ -1618,7 +1622,9 @@ if(_showMapping){
     ["C3-effective fuel mole %",fmtN(md.C3_effective_pct,3),"%"],
     ["N₂ in fuel",fmtN(md.N2_pct,3),"%"],
     ["φ_OP multiplier (Step 2)",fmtN(md.phi_OP_mult,4),"—"],
-    ["P3 ratio (P3 / 638 psia)",fmtN(md.pressure_ratio,4),"—"],
+    isAdminEmail
+      ? ["P3 ratio (P3 / 638 psia)",fmtN(md.pressure_ratio,4),"—"]
+      : ["P3 ratio (P3 / P3_ref)",fmtN(md.pressure_ratio,4),"— (P3_ref proprietary)"],
     [],
     ["═══ CORRELATION OUTPUTS — STAGE BY STAGE ═══"],
     ["Stage","NOx15 (ppmvd)","CO15 (ppmvd)","PX36_SEL (psi)","PX36_SEL_HI (psi)"],
@@ -1626,14 +1632,21 @@ if(_showMapping){
     ["After φ_OP mult (Step 2)",  fmtN(m100.NOx15,3),fmtN(m100.CO15,2),fmtN(m100.PX36_SEL,4),fmtN(m100.PX36_SEL_HI,4)],
     ["Final (after P3 scaling)",  fmtN(mFinal.NOx15,3),fmtN(mFinal.CO15,2),fmtN(mFinal.PX36_SEL,4),fmtN(mFinal.PX36_SEL_HI,4)],
     [],
-    ["═══ REFERENCE DESIGN POINT (Simulated Engine DLE, 100% load, 44 °F) ═══"],
-    ["Parameter","Value","Unit"],
-    ["NOx15 ref",fmtN(mr?.reference?.values?.NOx15,2),"ppmvd"],
-    ["CO15 ref", fmtN(mr?.reference?.values?.CO15,2),"ppmvd"],
-    ["PX36_SEL ref",   fmtN(mr?.reference?.values?.PX36_SEL,3),"psi"],
-    ["PX36_SEL_HI ref",fmtN(mr?.reference?.values?.PX36_SEL_HI,3),"psi"],
-    ["DT_Main ref","450","°F"],["Phi_OP ref","0.65","—"],["C3 ref","7.5","%"],
-    ["N₂ ref","0.5","%"],["Tflame ref","3035","°F"],["T3 ref","700","°F"],["P3 ref","638","psia"],
+    // Reference design point block — admin-only. The numbers below are
+    // proprietary engine-specific anchor values; non-admin exports get
+    // a single redaction line in their place.
+    ...(isAdminEmail ? [
+      ["═══ REFERENCE DESIGN POINT (Simulated Engine DLE, 100% load, 44 °F) ═══"],
+      ["Parameter","Value","Unit"],
+      ["NOx15 ref",fmtN(mr?.reference?.values?.NOx15,2),"ppmvd"],
+      ["CO15 ref", fmtN(mr?.reference?.values?.CO15,2),"ppmvd"],
+      ["PX36_SEL ref",   fmtN(mr?.reference?.values?.PX36_SEL,3),"psi"],
+      ["PX36_SEL_HI ref",fmtN(mr?.reference?.values?.PX36_SEL_HI,3),"psi"],
+      ["DT_Main ref","450","°F"],["Phi_OP ref","0.65","—"],["C3 ref","7.5","%"],
+      ["N₂ ref","0.5","%"],["Tflame ref","3035","°F"],["T3 ref","700","°F"],["P3 ref","638","psia"],
+    ] : [
+      ["═══ REFERENCE DESIGN POINT — engine-specific (proprietary, not displayed) ═══"],
+    ]),
     [],
     // System Metrics summary mirrors the 5-row Category | Value table on
     // the Operating Snapshot card. PX36 / NOx15 / CO15 come from this
@@ -1673,7 +1686,9 @@ const sA=[
   ["Group","Parameter","Value","Basis / Rationale"],
 
   ["1. Ambient & Inlet","Reference pressure","1.01325 bar","Sea-level ISA. P_amb input overrides for off-design."],
-  ["","Reference temperature","Simulated Engine anchored at 44 °F / 80% RH","288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."],
+  isAdminEmail
+    ? ["","Reference temperature","Simulated Engine anchored at 44 °F / 80% RH","288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."]
+    : ["","Reference temperature","Engine-specific (proprietary)","Per-engine anchor points are not displayed."],
   ["","Relative humidity","User input 0–100%","Default 60%. Enters via humid-air R and cp."],
   ["","Inlet pressure drop","0 bar","No filter / silencer loss."],
   ["","Inlet ram recovery","1.0","Stationary ground operation."],
@@ -1692,14 +1707,20 @@ const sA=[
   ["","Heat rejected","Q_IC = mdot · Δh","Diagnostic only; not used in MW calc."],
 
   ["5. Combustor","Combustor ΔP","4%","P4 = 0.96 · P3."],
-  ["","Combustor bypass fraction","Simulated Engine: 0.747","Per-engine calibration. Core-to-casing split."],
+  isAdminEmail
+    ? ["","Combustor bypass fraction","Simulated Engine: 0.747","Per-engine calibration. Core-to-casing split."]
+    : ["","Combustor bypass fraction","Engine-specific (proprietary)","Per-engine calibration. Core-to-casing split."],
   ["","Combustor air fraction (flame/total)","0.88 (both)","Flame vs dilution zone split."],
-  ["","T4 target","Simulated Engine: 1800 K (2780 °F) at 100% load","Firing temperature — commanded by deck. Now driven by the user-supplied 100%-load deck table."],
+  isAdminEmail
+    ? ["","T4 target","Simulated Engine: 1800 K (2780 °F) at 100% load","Firing temperature — commanded by deck. Now driven by the user-supplied 100%-load deck table."]
+    : ["","T4 target","Engine-specific (proprietary)","Firing temperature — commanded by deck. Driven by the engine-specific 100%-load deck table."],
   ["","φ4 solve","Cantera equilibrate(\"HP\")","Back-solved so product T = T4. Equilibrium only."],
   ["","T_Bulk","equilibrate(\"HP\") at (T3,P3,φ_Bulk)","Drives downstream panels when linked."],
   ["","Heat loss","0%","Adiabatic combustor (AFT panel has separate HL input)."],
 
-  ["6. Turbine","η_isen_turb","Simulated Engine: 0.7805","Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."],
+  isAdminEmail
+    ? ["6. Turbine","η_isen_turb","Simulated Engine: 0.7805","Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."]
+    : ["6. Turbine","η_isen_turb","Engine-specific (proprietary)","Calibrated per engine so MW_gross matches MW_cap at the design anchor."],
   ["","Expansion path","gas.SP = s_in, P_exh; η correction","Equilibrium products, Cantera enthalpy."],
   ["","P_exhaust","1.05 bar","Stack + HRSG backpressure."],
   ["","Cooling air","In bypass fraction","No re-injection mixing."],
@@ -1715,18 +1736,32 @@ const sA=[
   ["","Reference LHV","CH4 909.4 / C2H6 1618.7 / C3H8 2314.9 / H2 273.8 BTU/scf","GPA SP 2172."],
 
   ["9. Fuel Flexibility — MWI Derate (Option B)","Definition","MWI = LHV_vol / √(SG · T_fuel_°R)","T in absolute Rankine."],
-  ["","In-spec band","40 ≤ MWI ≤ 54","No derate. Pure CH4 at 60 °F ≈ 53.6."],
-  ["","Marginal","35–40 or 54–60","Derate 5%."],
-  ["","Out-of-spec","MWI < 35 or > 60","Derate 20%."],
+  isAdminEmail
+    ? ["","In-spec band","40 ≤ MWI ≤ 54","No derate. Pure CH4 at 60 °F ≈ 53.6."]
+    : ["","In-spec band","Proprietary","Calibrated band derived from DLE combustor limits + field experience. No derate applied within band."],
+  isAdminEmail
+    ? ["","Marginal","35–40 or 54–60","Derate 5%."]
+    : ["","Marginal","Proprietary","Derate applied. Hardware will run but combustor may need tuning / liner life may be affected."],
+  isAdminEmail
+    ? ["","Out-of-spec","MWI < 35 or > 60","Derate 20%."]
+    : ["","Out-of-spec","Proprietary","Larger derate applied. Typical of very dilute or very heavy fuels."],
   ["","H2 warning","x_H2 > 30%","Flashback risk."],
   ["","Low-LHV warning","LHV_vol < 800 BTU/scf","Dilute fuel — doubles fuel flow."],
   ["","Derate application","MW_net = MW_uncapped · (1 − derate%)","Stacks with part-load, not with ambient droop."],
 
-  ["10. Engine Deck Anchors","Simulated IC Engine","109.2 MW @ 44 °F / 80% RH","T3 644 K · P3 44.4 bar · T4 1800 K (2780°F) · η_LHV 44.9% · HR 8016 kJ/kWh · intercooled. Now driven by user-supplied 100%-load deck table (P3, T3, T4, MW vs T_amb). Additional engines are in development."],
-  ["","Anchor method","combustor_bypass_frac + η_isen_turb","Two per-engine knobs fit MW and η at anchor."],
+  ...(isAdminEmail ? [
+    ["10. Engine Deck Anchors","Simulated IC Engine","109.2 MW @ 44 °F / 80% RH","T3 644 K · P3 44.4 bar · T4 1800 K (2780°F) · η_LHV 44.9% · HR 8016 kJ/kWh · intercooled. Now driven by user-supplied 100%-load deck table (P3, T3, T4, MW vs T_amb). Additional engines are in development."],
+    ["","Anchor method","combustor_bypass_frac + η_isen_turb","Two per-engine knobs fit MW and η at anchor."],
+  ] : [
+    ["10. Engine Deck Anchors","Status","Engine-specific anchor values are proprietary and not displayed.","Per-engine design-point numbers (rated MW, station Ts/Ps, η_LHV, heat rate) are calibrated and not exposed in non-admin exports."],
+  ]),
 
-  ["11. Off-design Scaling","Density lapse","mdot_air ∝ ρ_amb · VGV(T_amb)","Engine-specific lapse curve."],
-  ["","Simulated Engine intercooler benefit","Architectural","HPC inlet pinned to T_cool_in. Simulated Engine loses less on hot days than non-intercooled engines."],
+  isAdminEmail
+    ? ["11. Off-design Scaling","Density lapse","mdot_air ∝ ρ_amb · VGV(T_amb)","Engine-specific lapse curve."]
+    : ["11. Off-design Scaling","Density lapse","Engine-specific (proprietary)","Mass-flow scales with ambient density and an engine-specific VGV / lapse curve folded into the deck table."],
+  isAdminEmail
+    ? ["","Simulated Engine intercooler benefit","Architectural","HPC inlet pinned to T_cool_in. Simulated Engine loses less on hot days than non-intercooled engines."]
+    : ["","Intercooler benefit","Architectural (engine-specific)","Intercooled engines lose less on hot days because HPC inlet is fixed at T_cool_in. Magnitude is engine-specific and not displayed."],
   ["","Load line","Linear in cap","Cap = load_pct · rated_ambient. Gross super-linear at low load."],
   ["","Humidity","Via humid-air R only","Higher RH → more volumetric mdot."],
   ["","Altitude","Not modeled","Use P_amb input if needed."],
@@ -1750,14 +1785,26 @@ const sA=[
   ["","Steam","Gas phase, no h_fg","Joins inlet stream as superheated H2O at T_air."],
   ["","Cycle effect","Water passes through turbine","Adds turbine mdot. Power ↑, η ↓."],
 
-  ["15. Combustor Mapping (Simulated Engine 4-circuit DLE)","Reference design point","100% load, 44 °F","NOx15=45, CO15=130, PX36=4.3, PX36_HI=2.2 / DT_Main=450°F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035°F · T3=700°F · P3=638 psia."],
+  isAdminEmail
+    ? ["15. Combustor Mapping (Simulated Engine 4-circuit DLE)","Reference design point","100% load, 44 °F","NOx15=45, CO15=130, PX36=4.3, PX36_HI=2.2 / DT_Main=450°F · Phi_OP=0.65 · C3=7.5% · N2=0.5% · Tflame=3035°F · T3=700°F · P3=638 psia."]
+    : ["15. Combustor Mapping (4-circuit DLE)","Reference design point","Engine-specific (proprietary)","Anchor values for NOx, CO, PX36, DT_Main, Phi_OP, C3, N2, Tflame, T3, P3 are calibrated and not displayed."],
   ["","Per-circuit T_AFT","complete_combustion(T3, P3, φ)","Cantera complete-combustion (no dissociation)."],
   ["","PM1 circuit","Residual fuel mass","m_fuel_PM1 = total − (Pt2+Pt1+PM2). φ_PM1 solved & clamped to [0,3]."],
-  ["","Linear correction (Step 1)","Y = Y_ref + Σ ∂Y/∂xₖ · (xₖ − xₖ_ref)","Vars: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (≥0.25 floor), Tflame, T3. All four outputs treat ∂/∂DT_Main piecewise: NOx15 linear above 150 °F floor / frozen below; CO15 linear above 75 °F / flat 25–75 / reversed below 25; PX36_SEL/HI linear up to 650 °F ceiling / frozen above."],
-  ["","Phi_OP multiplier (Step 2)","HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45","Linear interp on the 0.10 band. PX36_SEL_HI only."],
-  ["","P3 scaling (Step 3)","(P3/638)^exp","NOx15=0.467, CO15=−1.0, SEL=1.35, SEL_HI=0.65."],
-  ["","C3-effective","0.8·(C2H6+C2H4+C2H2) + (C3+...+C8)","C2-class at 0.8; C3 and heavier at 1.0."],
-  ["","Tflame derivative (NOx)","Piecewise: 0.12 ≥2850, 0.04 between, 0 below 2750","Integrated continuously from T_ref = 3035 °F."],
+  isAdminEmail
+    ? ["","Linear correction (Step 1)","Y = Y_ref + Σ ∂Y/∂xₖ · (xₖ − xₖ_ref)","Vars: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (≥0.25 floor), Tflame, T3. All four outputs treat ∂/∂DT_Main piecewise: NOx15 linear above 150 °F floor / frozen below; CO15 linear above 75 °F / flat 25–75 / reversed below 25; PX36_SEL/HI linear up to 650 °F ceiling / frozen above."]
+    : ["","Linear correction (Step 1)","Linear-anchored departure model (proprietary)","Each output is a sum of small departures from its reference, weighted by per-variable derivative coefficients. Coefficient values, variable list, and piecewise breakpoints are calibrated and not displayed."],
+  isAdminEmail
+    ? ["","Phi_OP multiplier (Step 2)","HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45","Linear interp on the 0.10 band. PX36_SEL_HI only."]
+    : ["","Phi_OP multiplier (Step 2)","Engine-specific (proprietary)","Applies to PX36_SEL_HI only. Form and break-points are calibrated and not displayed."],
+  isAdminEmail
+    ? ["","P3 scaling (Step 3)","(P3/638)^exp","NOx15=0.467, CO15=−1.0, SEL=1.35, SEL_HI=0.65."]
+    : ["","P3 scaling (Step 3)","Power-law scaling (proprietary)","Each output scales as a power of (P3/P3_ref). Reference pressure and per-output exponents are calibrated and not displayed."],
+  isAdminEmail
+    ? ["","C3-effective","0.8·(C2H6+C2H4+C2H2) + (C3+...+C8)","C2-class at 0.8; C3 and heavier at 1.0."]
+    : ["","C3-effective","Higher-hydrocarbon aggregator (proprietary)","Composite measure of C2+ hydrocarbons in the fuel. Coefficients are calibrated and not displayed."],
+  isAdminEmail
+    ? ["","Tflame derivative (NOx)","Piecewise: 0.12 ≥2850, 0.04 between, 0 below 2750","Integrated continuously from T_ref = 3035 °F."]
+    : ["","Tflame derivative (NOx)","Piecewise (proprietary)","Derivative slopes and break-points are engine-calibrated and not displayed. Integrated continuously so contribution has no jumps."],
   ["","Emissions Transfer Function","Per-BRNDMD post-multipliers on NOx, CO, PX36","User-trim knob; default 1.0. PX36_SEL_HI not multiplied."],
   ["","Air flow split","W36 = W3 · (W36/W3); flame = W36 · com.Air Frac; effusion = W36 · (1 − com.Air Frac)","W36 enters the dome and is split across the 4 circuits. OM is the float circuit (fuel and φ back-solved)."],
 
@@ -2340,7 +2387,7 @@ function NumField({value,onCommit,decimals=4,style,title,disabled,...rest}){
 }
 
 /* ══════════════════ HELP MODAL ══════════════════ */
-function HelpModal({show,onClose}){if(!show)return null;
+function HelpModal({show,onClose}){const{isAdminEmail}=useAuth();if(!show)return null;
   const _h=(t)=>(<div style={{margin:"14px 0 6px",padding:"4px 0",borderBottom:`1px solid ${C.border}`,color:C.accent,fontSize:13,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".7px",textTransform:"uppercase"}}>{t}</div>);
   const _sub=(t)=>(<div style={{margin:"6px 0 2px",color:C.accent2,fontSize:11.5,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:".5px"}}>{t}</div>);
   return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
@@ -2362,7 +2409,9 @@ function HelpModal({show,onClose}){if(!show)return null;
 
       {_h("Left Sidebar")}
       {_sub("Engine & Ambient")}
-      <p><strong>Engine</strong> — currently calibrated for the Simulated IC Engine (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives MW cap, T4 firing temperature, and the Combustor Mapping panel. Additional engines are in development.</p>
+      {isAdminEmail
+        ? <p><strong>Engine</strong> — currently calibrated for the Simulated IC Engine (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives MW cap, T4 firing temperature, and the Combustor Mapping panel. Additional engines are in development.</p>
+        : <p><strong>Engine</strong> — engine deck selector. Drives MW cap, T4 firing temperature, and the Combustor Mapping panel. Specific calibration constants are proprietary and not displayed. Additional engines are in development.</p>}
       <p><strong>Ambient P / T / RH</strong> — site conditions. The cycle uses these for compressor inlet density and humid-air properties.</p>
       <p><strong>Load %</strong> — gas turbine load. The big number in the green box. <strong>± buttons</strong> bump by the editable <strong>Step (%)</strong> just below — default 5, persists across reloads, accepts any integer 1–50. The slider also uses this step.</p>
       <p><strong>Intercooler coolant T</strong> — sets the HPC inlet temperature (architectural intercooler benefit).</p>
@@ -5463,16 +5512,28 @@ function NomenclaturePanel(){
 }
 
 function AssumptionsPanel(){
+  // ADMIN-ONLY DECLARATIONS: the specific reference points, derivative
+  // coefficients, scaling exponents, and per-engine calibration knobs are
+  // proprietary IP belonging to ProReadyEngineer. Non-admin signed-in
+  // users see the SAME application behavior — every input still varies,
+  // every output still computes — but the textual declarations of those
+  // numbers are hidden. Admin emails are whitelisted in auth.jsx.
+  const { isAdminEmail } = useAuth();
+  const _adminOnly = (node) => isAdminEmail ? node : null;
   return(<div style={{display:"flex",flexDirection:"column",gap:12}}>
     <HelpBox title="ℹ️ How to read this page">
       <p style={{margin:"0 0 6px"}}>Every number below is baked into the cycle and combustion solvers. They are exposed here so you can audit them, map deviations, and know exactly what the app is and is not modeling.</p>
-      <p style={{margin:"0 0 6px"}}><span style={hs.em}>In-spec for design-point anchors only.</span> Simulated IC Engine off-design behavior is driven by a measured 100%-load deck table (P3, T3, T4, MW vs T_amb) anchored at the published design point. Additional engines are in development.</p>
+      {isAdminEmail
+        ? <p style={{margin:"0 0 6px"}}><span style={hs.em}>In-spec for design-point anchors only.</span> Simulated IC Engine off-design behavior is driven by a measured 100%-load deck table (P3, T3, T4, MW vs T_amb) anchored at the published design point. Additional engines are in development.</p>
+        : <p style={{margin:"0 0 6px"}}><span style={hs.em}>In-spec for design-point anchors only.</span> Engine-specific reference points, calibration constants, derivatives, and scaling laws are proprietary and not displayed. Additional engines are in development.</p>}
       <p style={{margin:0}}><span style={hs.warn}>Not a design tool.</span> The cycle is a reduced-order anchored correlation, not a station-by-station match of the OEM deck. Use high-fidelity tools for design, permitting, or emissions reporting.</p>
     </HelpBox>
 
     <AssumptionsGroup title="1. Ambient & Inlet" subtitle="Ambient state feeding the LP compressor inlet. No ram recovery, no inlet loss.">
       <Assumption label="Reference pressure" value="1.01325 bar" note="Sea-level ISA. Cycle input P_amb overrides for off-design."/>
-      <Assumption label="Reference temperature" value="Simulated Engine anchored at 44 °F / 80% RH" note="288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."/>
+      {isAdminEmail
+        ? <Assumption label="Reference temperature" value="Simulated Engine anchored at 44 °F / 80% RH" note="288.706 K (60 °F) is also used internally as the ISO reference. Additional engines are in development."/>
+        : <Assumption label="Reference temperature" value="Engine-specific (proprietary)" note="288.706 K (60 °F) is also used internally as the ISO reference. Per-engine anchor points are not displayed."/>}
       <Assumption label="Relative humidity" value="User input 0–100%" note="Default 60%. Enters via humid-air R and cp."/>
       <Assumption label="Inlet pressure drop" value="0 bar" note="No filter / silencer loss modeled. T1/P1 ≡ ambient."/>
       <Assumption label="Inlet ram recovery" value="1.0" note="Stationary (aero-derivative on ground). No Mach effect."/>
@@ -5499,16 +5560,22 @@ function AssumptionsPanel(){
 
     <AssumptionsGroup title="5. Combustor" subtitle="Two states — flame zone (bulk) and combustor exit (station 4). The flame zone sees only the primary air; dilution air is added after to meet T4.">
       <Assumption label="Combustor pressure drop" value="4%" note="P4 = 0.96 · P3. Fixed. Typical DLE range is 3–5%."/>
-      <Assumption label="Combustor bypass fraction" value="Simulated Engine: 0.747" note="Fraction of compressor discharge routed to the combustor core. Remainder is casing/HPT cooling. Private per-engine calibration so design-point MW and η land exactly."/>
+      {isAdminEmail
+        ? <Assumption label="Combustor bypass fraction" value="Simulated Engine: 0.747" note="Fraction of compressor discharge routed to the combustor core. Remainder is casing/HPT cooling. Private per-engine calibration so design-point MW and η land exactly."/>
+        : <Assumption label="Combustor bypass fraction" value="Engine-specific (proprietary)" note="Fraction of compressor discharge routed to the combustor core. Remainder is casing/HPT cooling. Per-engine calibration not displayed."/>}
       <Assumption label="Combustor air fraction (flame/total)" value="0.88 (both)" note="Flame zone gets 88% of combustor air; dilution zone gets 12%. FAR_Bulk = FAR4 / 0.88."/>
-      <Assumption label="T4 target" value="Simulated Engine: 1800 K (2780 °F) at 100% load" note="Firing temperature. Commanded by the deck, not solved. The Simulated Engine anchor was lowered from 1825 K to 1800 K (2826 °F → 2780 °F) for the PB+ uprate. Now driven by the user-supplied 100%-load deck table at every ambient point."/>
+      {isAdminEmail
+        ? <Assumption label="T4 target" value="Simulated Engine: 1800 K (2780 °F) at 100% load" note="Firing temperature. Commanded by the deck, not solved. The Simulated Engine anchor was lowered from 1825 K to 1800 K (2826 °F → 2780 °F) for the PB+ uprate. Now driven by the user-supplied 100%-load deck table at every ambient point."/>
+        : <Assumption label="T4 target" value="Engine-specific (proprietary)" note="Firing temperature. Commanded by the deck, not solved. Driven by the engine-specific 100%-load deck table at every ambient point."/>}
       <Assumption label="φ4 solve" value="Cantera equilibrate(&quot;HP&quot;)" note="Back-solved so equilibrium product T at (T3, P3) equals T4. No kinetics — equilibrium only."/>
       <Assumption label="T_Bulk (flame zone)" value="Cantera equilibrate(&quot;HP&quot;) at (T3, P3, φ_Bulk)" note="Adiabatic equilibrium. Drives downstream flame-speed / blowoff / autoignition panels when linked."/>
       <Assumption label="Heat loss" value="0%" note="Adiabatic combustor. The AFT panel has a separate heat-loss option for hand analysis."/>
     </AssumptionsGroup>
 
     <AssumptionsGroup title="6. Turbine" subtitle="Turbine work comes from an actual Cantera isentropic expansion — not a prescribed η_thermal. This is the core of Option A (energy-balance cycle).">
-      <Assumption label="Isentropic efficiency η_isen,turb" value="Simulated Engine: 0.7805" note="Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."/>
+      {isAdminEmail
+        ? <Assumption label="Isentropic efficiency η_isen,turb" value="Simulated Engine: 0.7805" note="Calibrated so MW_gross lands at MW_cap at the 44 °F design anchor (109.2 MW under the user-supplied deck table)."/>
+        : <Assumption label="Isentropic efficiency η_isen,turb" value="Engine-specific (proprietary)" note="Calibrated per engine so MW_gross matches MW_cap at the design anchor."/>}
       <Assumption label="Expansion path" value="gas.SP = s_in, P_exhaust; h_out = h_in − η·(h_in−h_out,s)" note="Equilibrium products; full Cantera enthalpy at outlet."/>
       <Assumption label="Exhaust pressure" value="1.05 bar" note="Stack + HRSG backpressure. Fixed — not a function of ambient."/>
       <Assumption label="Cooling air" value="Accounted in bypass fraction" note="No re-injection mixing — modeled as energy not delivered to the turbine."/>
@@ -5528,25 +5595,37 @@ function AssumptionsPanel(){
       <Assumption label="Reference LHV values" value="CH4 909.4, C2H6 1618.7, C3H8 2314.9, H2 273.8 BTU/scf" note="Standard gas-industry tabulated values (Cantera/GPA SP 2172)."/>
     </AssumptionsGroup>
 
-    <AssumptionsGroup title="9. Fuel Flexibility — MWI Derate (Option B)" subtitle="Modified Wobbe Index uses the absolute fuel temperature in the denominator. Derate reflects GE DLE combustor limits.">
+    <AssumptionsGroup title="9. Fuel Flexibility — MWI Derate (Option B)" subtitle="Modified Wobbe Index uses the absolute fuel temperature in the denominator. Derate reflects DLE combustor limits.">
       <Assumption label="Definition" value="MWI = LHV_vol / √(SG · T_fuel_°R)" note="LHV_vol in BTU/scf; T_fuel in absolute Rankine. Higher MWI → higher volumetric energy density."/>
-      <Assumption label="In-spec band" value="40 ≤ MWI ≤ 56" note="Nominal GE DLE range, widened on 2026-05-04 from 40–54 to 40–56 because typical pipeline NG with up to ~7.5% C₂ + 1.8% C₃ lands near MWI 54.4 and field experience shows no actual derate within this band. No derate applied. Default pure-CH4 at 60 °F gives MWI ≈ 53.6."/>
-      <Assumption label="Marginal band" value="35–40 or 56–60" note="Derate 5%. Hardware will run but combustor may need tuning / liner life may be affected."/>
-      <Assumption label="Out-of-spec" value="MWI &lt; 35 or &gt; 60" note="Derate 20%. Typical of very dilute or very heavy fuels."/>
+      {isAdminEmail
+        ? <Assumption label="In-spec band" value="40 ≤ MWI ≤ 56" note="Nominal GE DLE range, widened on 2026-05-04 from 40–54 to 40–56 because typical pipeline NG with up to ~7.5% C₂ + 1.8% C₃ lands near MWI 54.4 and field experience shows no actual derate within this band. No derate applied. Default pure-CH4 at 60 °F gives MWI ≈ 53.6."/>
+        : <Assumption label="In-spec band" value="Proprietary" note="Calibrated band derived from DLE combustor limits + field experience. No derate applied within band."/>}
+      {isAdminEmail
+        ? <Assumption label="Marginal band" value="35–40 or 56–60" note="Derate 5%. Hardware will run but combustor may need tuning / liner life may be affected."/>
+        : <Assumption label="Marginal band" value="Proprietary" note="Derate applied. Hardware will run but combustor may need tuning / liner life may be affected."/>}
+      {isAdminEmail
+        ? <Assumption label="Out-of-spec" value="MWI &lt; 35 or &gt; 60" note="Derate 20%. Typical of very dilute or very heavy fuels."/>
+        : <Assumption label="Out-of-spec" value="Proprietary" note="Larger derate applied. Typical of very dilute or very heavy fuels."/>}
       <Assumption label="H2 warning" value="x_H2 &gt; 30%" note="Flashback risk in DLE premixer — emitted as a warning regardless of MWI."/>
       <Assumption label="Low LHV warning" value="LHV_vol &lt; 800 BTU/scf" note="Dilute fuel; fuel flow roughly doubles. Emitted as a warning."/>
       <Assumption label="Derate application" value="MW_net = MW_cap · (1 − derate_pct/100)" note="Applied directly to the deck-anchored cap. Derate stacks with part-load and ambient droop (which both already live inside MW_cap)."/>
       <Assumption label="Operator override" value="DERATED badge on Mapping panel — click to toggle" note="When the model recommends a non-zero derate, a flashing green DERATED badge appears next to the Power row in the System Metrics summary. Clicking the badge sets MW_net = MW_cap regardless of MWI band (use when field experience contradicts the model's recommendation). Clicking again restores the recommended derate. Excel export records both the recommended derate and whether the override was active."/>
     </AssumptionsGroup>
 
+    {isAdminEmail && (
     <AssumptionsGroup title="10. Engine Deck Anchors" subtitle="Design-point numbers each off-design scaling law is anchored at. These must match the published deck exactly.">
       <Assumption label="Simulated IC Engine" value="109.2 MW @ 44 °F / 80% RH" note="T3 644 K · P3 44.4 bar · T4 1800 K (2780 °F) · η_LHV 44.9% · HR 8016 kJ/kWh · with intercooler. Now driven by the user-supplied 100%-load deck table (P3, T3, T4, MW vs T_amb). Additional engines are in development."/>
       <Assumption label="Anchor method" value="Calibrate combustor_bypass_frac + eta_isen_turb" note="Two per-engine knobs fit both MW and η at anchor. Everything else is physical."/>
     </AssumptionsGroup>
+    )}
 
     <AssumptionsGroup title="11. Off-design Scaling" subtitle="How the deck behaves away from its anchor. Not all of this is modeled — the list below states what IS.">
-      <Assumption label="Density lapse" value="mdot_air ∝ ρ_amb · VGV(T_amb)" note="VGV is a simple function of ambient — folded into an engine-specific lapse curve."/>
-      <Assumption label="Simulated Engine intercooler benefit" value="Architectural" note="Simulated Engine loses less on hot days than non-intercooled engines because HPC inlet is fixed at T_cool_in. Verified in regression tests."/>
+      {isAdminEmail
+        ? <Assumption label="Density lapse" value="mdot_air ∝ ρ_amb · VGV(T_amb)" note="VGV is a simple function of ambient — folded into an engine-specific lapse curve."/>
+        : <Assumption label="Density lapse" value="Engine-specific (proprietary)" note="Mass-flow scales with ambient density and an engine-specific VGV/lapse curve folded into the deck table."/>}
+      {isAdminEmail
+        ? <Assumption label="Simulated Engine intercooler benefit" value="Architectural" note="Simulated Engine loses less on hot days than non-intercooled engines because HPC inlet is fixed at T_cool_in. Verified in regression tests."/>
+        : <Assumption label="Intercooler benefit" value="Architectural (engine-specific)" note="Intercooled engines lose less on hot days because HPC inlet is fixed at T_cool_in. Magnitude is engine-specific and not displayed."/>}
       <Assumption label="Load line" value="Linear in rated" note="MW_net = load_pct · MW_rated_ambient · derate. Part-load T4 droops so MW_gross is super-linear at low load (diagnostic only — does not affect MW_net)."/>
       <Assumption label="Humidity" value="Via humid-air R only" note="Higher RH → lower molecular weight → more volumetric mdot at fixed corrected flow."/>
       <Assumption label="Altitude" value="Not modeled" note="Use P_amb input if needed; scales density directly."/>
@@ -5577,15 +5656,27 @@ function AssumptionsPanel(){
       <Assumption label="Cycle effect" value="Water mass passes through turbine" note="Adds turbine mdot, increases W_turb. T4 floats — power ↑, η ↓ (extra energy spent vaporizing). Reported in cycle outputs."/>
     </AssumptionsGroup>
 
-    <AssumptionsGroup title="15. Combustor Mapping (Simulated Engine 4-circuit DLE — correlation)" subtitle="Per-circuit T_AFT from a complete-combustion solve, then linear-anchored emissions / dynamics. No reactor kinetics. Drives the Combustor Mapping panel and the Operations Summary.">
-      <Assumption label="Reference design point" value="Simulated Engine DLE, 100% load, 44 °F" note="NOx15=45 ppmvd · CO15=130 ppmvd · PX36_SEL=4.3 psi · PX36_SEL_HI=2.2 psi. DT_Main=450 °F · Phi_PT1=0.65 · C3=7.5% · N2=0.5% · Tflame=3035 °F · T3=700 °F · P3=638 psia."/>
+    <AssumptionsGroup title="15. Combustor Mapping (4-circuit DLE — correlation)" subtitle="Per-circuit T_AFT from a complete-combustion solve, then linear-anchored emissions / dynamics. No reactor kinetics. Drives the Combustor Mapping panel and the Operations Summary.">
+      {isAdminEmail
+        ? <Assumption label="Reference design point" value="Simulated Engine DLE, 100% load, 44 °F" note="NOx15=45 ppmvd · CO15=130 ppmvd · PX36_SEL=4.3 psi · PX36_SEL_HI=2.2 psi. DT_Main=450 °F · Phi_PT1=0.65 · C3=7.5% · N2=0.5% · Tflame=3035 °F · T3=700 °F · P3=638 psia."/>
+        : <Assumption label="Reference design point" value="Engine-specific (proprietary)" note="Anchor values for NOx, CO, PX36, DT_Main, Phi_OP, C3, N2, Tflame, T3, P3 are calibrated to the specific engine and not displayed."/>}
       <Assumption label="Per-circuit T_AFT" value="complete_combustion at (T3, P3, φ_circuit)" note="Cantera complete-combustion (no dissociation) at the circuit-specific φ. Falls back to T_air when φ ≈ 0."/>
       <Assumption label="PM1 circuit" value="Residual fuel mass" note="m_fuel_PM1 = m_fuel_total − (m_fuel_Pt2 + m_fuel_Pt1 + m_fuel_PM2). φ_PM1 is back-solved and clamped to [0, 3]."/>
-      <Assumption label="Linear correction (Step 1)" value="Y_lin = Y_ref + Σₖ (∂Y/∂xₖ)·(xₖ − xₖ_ref)" note="Variables: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (above 0.25 floor), Tflame, T3. Per-output derivatives baked into the module — see combustor_mapping.py. All four outputs treat ∂/∂DT_Main piecewise (the entries in the linear-derivative table are 0; per-output helpers do the work): NOx15 — linear above the 150 °F floor and frozen below (so very flat IM/OM splits don't drag NOx down without bound); CO15 — linear above 75 °F (slope +0.424 ppm/°F), flat plateau between 25 and 75 °F (frozen at −159 ppm), reversed slope below 25 °F (the contribution climbs back up as DT_Main falls further); PX36_SEL and PX36_SEL_HI — linear up to a 650 °F ceiling and frozen above."/>
-      <Assumption label="Phi_OP multiplier (Step 2)" value="HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45" note="Linear interp on the 0.10 band between. PX36_SEL_HI is the only output that gets this multiplier."/>
-      <Assumption label="P3 scaling (Step 3)" value="(P3/638)^exp" note="Exponents: NOx15=0.467, CO15=−1.0, PX36_SEL=1.35, PX36_SEL_HI=0.65. Anchored at the design P3 = 638 psia."/>
-      <Assumption label="C3-effective" value="0.8·(C2H6+C2H4+C2H2) + (C3H8+C4H10+...+C8H18)" note="C2-class species at 0.8 coefficient; C3 and every heavier hydrocarbon at 1.0."/>
-      <Assumption label="Tflame derivative (NOx only)" value="Piecewise: 0.12 ppm/°F ≥2850, 0.04 between 2750–2850, 0 below 2750" note="Integrated continuously from T_ref = 3035 °F so the contribution has no jumps at breakpoints."/>
+      {isAdminEmail
+        ? <Assumption label="Linear correction (Step 1)" value="Y_lin = Y_ref + Σₖ (∂Y/∂xₖ)·(xₖ − xₖ_ref)" note="Variables: DT_Main, N2, C3-eff, Phi_OP, Phi_IP (above 0.25 floor), Tflame, T3. Per-output derivatives baked into the module — see combustor_mapping.py. All four outputs treat ∂/∂DT_Main piecewise (the entries in the linear-derivative table are 0; per-output helpers do the work): NOx15 — linear above the 150 °F floor and frozen below (so very flat IM/OM splits don't drag NOx down without bound); CO15 — linear above 75 °F (slope +0.424 ppm/°F), flat plateau between 25 and 75 °F (frozen at −159 ppm), reversed slope below 25 °F (the contribution climbs back up as DT_Main falls further); PX36_SEL and PX36_SEL_HI — linear up to a 650 °F ceiling and frozen above."/>
+        : <Assumption label="Linear correction (Step 1)" value="Linear-anchored departure model (proprietary)" note="Each output is computed as a sum of small departures from its reference value, weighted by per-variable derivative coefficients. The coefficient values, the variable list, and the piecewise breakpoints are calibrated to the specific engine and not displayed."/>}
+      {isAdminEmail
+        ? <Assumption label="Phi_OP multiplier (Step 2)" value="HI only: 1.0 ≥ φ ≥ 0.55, 0.8 ≤ 0.45" note="Linear interp on the 0.10 band between. PX36_SEL_HI is the only output that gets this multiplier."/>
+        : <Assumption label="Phi_OP multiplier (Step 2)" value="Engine-specific (proprietary)" note="Applies to PX36_SEL_HI only. Form and break-points are calibrated to the specific engine."/>}
+      {isAdminEmail
+        ? <Assumption label="P3 scaling (Step 3)" value="(P3/638)^exp" note="Exponents: NOx15=0.467, CO15=−1.0, PX36_SEL=1.35, PX36_SEL_HI=0.65. Anchored at the design P3 = 638 psia."/>
+        : <Assumption label="P3 scaling (Step 3)" value="Power-law scaling (proprietary)" note="Each output scales as a power of (P3/P3_ref). The reference pressure and per-output exponents are calibrated to the specific engine and not displayed."/>}
+      {isAdminEmail
+        ? <Assumption label="C3-effective" value="0.8·(C2H6+C2H4+C2H2) + (C3H8+C4H10+...+C8H18)" note="C2-class species at 0.8 coefficient; C3 and every heavier hydrocarbon at 1.0."/>
+        : <Assumption label="C3-effective" value="Higher-hydrocarbon aggregator (proprietary)" note="Composite measure of C2+ hydrocarbons in the fuel. Coefficients are calibrated and not displayed."/>}
+      {isAdminEmail
+        ? <Assumption label="Tflame derivative (NOx only)" value="Piecewise: 0.12 ppm/°F ≥2850, 0.04 between 2750–2850, 0 below 2750" note="Integrated continuously from T_ref = 3035 °F so the contribution has no jumps at breakpoints."/>
+        : <Assumption label="Tflame derivative (NOx only)" value="Piecewise (proprietary)" note="Derivative slopes and break-points are engine-calibrated and not displayed. Integrated continuously so contribution has no jumps."/>}
       <Assumption label="Emissions Transfer Function" value="Per-BRNDMD post-multipliers on NOx, CO, PX36" note="User-trim knob, default 1.0 for all. PX36_SEL_HI does NOT take this multiplier (its tuning is in Step 2). Stored per BRNDMD ∈ {2,4,6,7}."/>
       <Assumption label="Air flow split" value="W36 = W3 · (W36/W3); flame air = W36 · com.Air Frac; effusion / cooling = W36 · (1 − com.Air Frac)" note="W36 enters the dome and is split across the four fuel circuits. The remainder is effusion / cooling air. Premixer 1 is the float circuit: m_fuel_PM1 = total − Pt2 − Pt1 − PM2, and φ_PM1 is back-solved."/>
     </AssumptionsGroup>
@@ -13279,6 +13370,8 @@ function EngineAmbientSidebar({
   const _loadStep=Math.max(1,Math.min(50,Math.round(+loadStepPct||5)));
   const units=useContext(UnitCtx);
   const isLMS=engine==="LMS100PB+";
+  // Admin-gate the engine-specific calibration disclosure in the tooltip.
+  const {isAdminEmail}=useAuth();
   const dim=!accurate;
   // Wrap the whole card in a fieldset-style dim. Inputs still render so the
   // user can SEE the engine inputs even on the free tier (per spec) but
@@ -13405,7 +13498,9 @@ function EngineAmbientSidebar({
     <div style={sec}>Engine & Ambient {dim&&<span style={{fontSize:9,color:C.warm,fontWeight:600,letterSpacing:".4px",textTransform:"none",marginLeft:6}}>(Accurate Mode required)</span>}</div>
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
       <div>
-        <label style={lbl} title="Engine deck. Currently calibrated for the Simulated IC Engine (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives engine-specific calibration constants (η_isen, MW cap, T4 firing temp, combustor bypass).">Engine</label>
+        <label style={lbl} title={isAdminEmail
+          ? "Engine deck. Currently calibrated for the Simulated IC Engine (intercooled, 107.5 MW @ 44 °F / 80% RH). Drives engine-specific calibration constants (η_isen, MW cap, T4 firing temp, combustor bypass)."
+          : "Engine deck. Drives engine-specific calibration constants (η_isen, MW cap, T4 firing temp, combustor bypass). Specific anchor values are proprietary and not displayed."}>Engine</label>
         <select style={S.sel} value={engine} onChange={e=>setEngine(e.target.value)}
           title="Engine deck selector. Simulated IC Engine is the only deck currently shipping; additional engines are in development.">
           <option value="LMS100PB+">Simulated IC Engine</option>
@@ -14621,7 +14716,7 @@ export default function App(){
                 <option value="SI">SI (Metric)</option>
               </select>
             </label>
-            <BusyGuardedExportButton onExport={()=>exportToExcel(fuel,ox,phi,T0,P,units,panelState)}/>
+            <BusyGuardedExportButton onExport={()=>exportToExcel(fuel,ox,phi,T0,P,units,{...panelState, isAdminEmail: auth.isAdminEmail})}/>
           </div></div>
 
         {/* TABS */}
