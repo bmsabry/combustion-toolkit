@@ -837,83 +837,107 @@ const _MAPPING_LOCAL_VAR_IDS = [
   "mapFracIP", "mapFracOP", "mapFracIM", "mapFracOM",
 ];
 
-// Flame-output dependency on geometry vars. Encodes EVERY output the
-// JS-side runFlameForAutomation produces.
+// Per-output dep helpers — these now return the COMPLETE dep set (thermo
+// included where relevant, omitted where not). The main affectingVarIds()
+// no longer auto-adds thermo for these helpers' outputs; instead the
+// helper says exactly what matters.
 //
-// Rule: an output appears in the returned set iff varying that geometry
-// variable (with all others fixed) changes the output's numeric value.
-// Verified line-by-line against runFlameForAutomation source.
-function _flameGeometryDeps(outputId){
+// `wantThermo` is the standard thermo-state set used by panel calls. We
+// pass it in to avoid stringifying THERMO_VAR_IDS at every call site.
+function _flameOutputDepsFull(outputId, wantThermo){
   const out = new Set();
+  const addThermo = () => { for (const v of wantThermo) out.add(v); };
   switch (outputId){
-    // Pure backend / thermo (no geometry dep):
+    // Backend-pure thermo: SL, alpha_th, transport bundle, ignition delay.
     case "S_L_cms": case "tau_chem_ms": case "alpha_th": case "g_c":
     case "tau_ign_ms":
     case "Le_eff": case "Le_E": case "Le_D": case "Ma": case "Ze":
     case "delta_F": case "nu_u":
+      addThermo(); break;
+    // Lefebvre LBO band — depends on fuel + phi + T3 (thermo proxies).
     case "phi_LBO_low": case "phi_LBO_high": case "lbo_status":
-    case "lbo_safe_lefebvre": case "lbo_fuel_mult": case "Da_crit_x":
-    case "g_c_eff": case "shaffer_T_tip": case "civb_threshold":
-    case "pm_tau_hc_ms":
-      break;
-    // Single-geom-var:
-    case "tau_BO_ms":              out.add("Dfh"); break;
-    case "blowoff_velocity":       out.add("Lchar"); break;
-    case "ST_damkohler":           out.add("velocity"); break;
-    // velocity + Lchar (Bradley/Damköhler/Borghi/V_BO/PM ratio):
-    case "tau_flow_ms": case "Damkohler": case "stable":
+    case "lbo_safe_lefebvre": case "lbo_fuel_mult":
+      addThermo(); break;
+    case "Da_crit_x": case "civb_threshold":
+      addThermo(); break;   // depend on fuel via H2_frac
+    case "g_c_eff": case "shaffer_T_tip":
+      addThermo(); break;   // T_max + fuel composition
+    // Pure geometric — NO thermo dependency at all.
+    case "tau_flow_ms":
+      out.add("velocity"); out.add("Lchar"); break;
+    case "tau_res_ms":
+      out.add("Lpremix"); out.add("Vpremix"); break;
+    case "tau_res_99_ms":
+      out.add("Lpremix"); out.add("Vpremix"); break;
+    case "pm_tau_sl_ms":
+      out.add("velocity"); out.add("Lchar"); break;
+    // Geometric numerator over thermo denominator (or vice versa):
+    case "tau_BO_ms":
+      addThermo(); out.add("Dfh"); break;            // SL × Dfh
+    case "blowoff_velocity":
+      addThermo(); out.add("Lchar"); break;          // Lchar / tau_chem
+    case "ST_damkohler":
+      addThermo(); out.add("velocity"); break;       // SL × f(uPrime)
+    case "Damkohler": case "stable":
+      addThermo(); out.add("velocity"); out.add("Lchar"); break;
     case "ReT_diag": case "Ka_diag": case "Da_diag":
     case "ST_bradley": case "borghi_regime":
     case "V_BO_card2":
-    case "pm_tau_sl_ms": case "pm_ratio": case "pm_lbo_safe":
-      out.add("velocity"); out.add("Lchar"); break;
-    // Lpremix + Vpremix:
-    case "tau_res_ms": case "ignition_safe":
-    case "tau_res_99_ms": case "ign_margin_card3": case "gateD_pass":
-    case "premixer_safe":
-      out.add("Lpremix"); out.add("Vpremix"); break;
-    // Vpremix only:
+    case "pm_ratio": case "pm_lbo_safe":
+      addThermo(); out.add("velocity"); out.add("Lchar"); break;
+    case "pm_tau_hc_ms":
+      addThermo(); break;                            // T_max only
+    case "ignition_safe": case "premixer_safe":
+      addThermo(); out.add("Lpremix"); out.add("Vpremix"); break;
+    case "ign_margin_card3": case "gateD_pass":
+      addThermo(); out.add("Lpremix"); out.add("Vpremix"); break;
     case "flashback_margin":
+      addThermo(); out.add("Vpremix"); break;        // S_T_est × Vpremix
     case "gateA_pass": case "gateA_margin": case "Ka_flashback":
     case "piCIVB": case "gateB_pass":
     case "v_st_margin": case "gateC_pass":
-      out.add("Vpremix"); break;
-    // 4-gate composite uses Vpremix and Lpremix (gateD).
+      addThermo(); out.add("Vpremix"); break;
     case "card3_status":
-      out.add("Vpremix"); out.add("Lpremix"); break;
-    // Unknown: fail safe — assume EVERY geometry var affects.
+      addThermo(); out.add("Vpremix"); out.add("Lpremix"); break;
+    // Unknown — fail safe: thermo + every geometry var.
     default:
+      addThermo();
       out.add("velocity"); out.add("Lchar"); out.add("Dfh");
       out.add("Lpremix"); out.add("Vpremix");
   }
   return out;
 }
 
-// Combustor PSR/PFR dependency map. Verified against combustor.py:
-//   PSR-state outputs (T_psr, NOx/CO PSR, conv_psr): tau_psr + heat-loss.
-//   PFR-exit outputs (T_exit, NOx/CO exit, O2_dry): tau_psr + heat-loss + L_pfr + V_pfr.
-//   τ_pfr_ms = L_pfr / V_pfr only.
-//   τ_total = τ_psr + τ_pfr.
-//   T_ad_eq, T_ad_complete are reference equilibrium temps — independent of every
-//     combustor-local geometry var (they re-equilibrate from the inlet).
-function _combustorLocalDeps(outputId){
+// Combustor PSR/PFR dependency map (FULL, including thermo where it
+// matters). Verified against combustor.py:
+//   PSR-state outputs (T_psr, NOx/CO PSR, conv_psr): thermo + tau_psr + heat-loss.
+//   PFR-exit outputs (T_exit, NOx/CO exit, O2_dry): thermo + tau_psr + heat-loss + L_pfr + V_pfr.
+//   τ_pfr_ms = L_pfr / V_pfr — purely geometric, NO thermo.
+//   τ_total = τ_psr + τ_pfr — purely geometric, NO thermo.
+//   T_ad_eq, T_ad_complete: thermo only — independent of every combustor-
+//     local geometry var (re-equilibrate from the inlet).
+function _combustorOutputDepsFull(outputId, wantThermo){
   const out = new Set();
+  const addThermo = () => { for (const v of wantThermo) out.add(v); };
   switch (outputId){
     case "T_psr": case "psr_NO_ppm": case "psr_CO_ppm":
     case "NOx_15_psr": case "CO_15_psr": case "conv_psr_pct":
+      addThermo();
       out.add("tau_psr"); out.add("heatLossFrac"); break;
     case "T_exit": case "exit_NO_ppm": case "exit_CO_ppm":
     case "O2_dry_pct":
+      addThermo();
       out.add("tau_psr"); out.add("heatLossFrac");
       out.add("L_pfr"); out.add("V_pfr"); break;
     case "tau_pfr_ms":
-      out.add("L_pfr"); out.add("V_pfr"); break;
+      out.add("L_pfr"); out.add("V_pfr"); break;          // pure geometric
     case "tau_total_ms":
-      out.add("tau_psr"); out.add("L_pfr"); out.add("V_pfr"); break;
+      out.add("tau_psr"); out.add("L_pfr"); out.add("V_pfr"); break;  // pure geometric
     case "T_ad_equilibrium": case "T_ad_complete_comb":
-      break;
+      addThermo(); break;
     default:
       // Unknown combustor output — fail safe.
+      addThermo();
       out.add("tau_psr"); out.add("heatLossFrac");
       out.add("L_pfr"); out.add("V_pfr");
   }
@@ -1012,21 +1036,33 @@ export function affectingVarIds(outputId, selectedPanels){
     return s;
   }
 
-  // ── COMBUSTOR outputs: thermo state + per-output PSR/PFR-local deps.
-  //    Cycle-linkage included when cycle is on. ──
+  // ── COMBUSTOR outputs: per-output deps decide whether thermo applies
+  //    (e.g. tau_pfr_ms is purely geometric → no thermo dep, no cycle dep).
+  //    Cycle-linkage adds cycle-deck only for outputs that DO depend on
+  //    thermo (those would receive cycle.T3_K etc. via linkage). ──
   if (panel === "combustor"){
-    const s = new Set(_THERMO_VAR_IDS);
-    if (cycleOn) for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
-    for (const v of _combustorLocalDeps(outputId)) s.add(v);
+    const s = _combustorOutputDepsFull(outputId, _THERMO_VAR_IDS);
+    if (cycleOn){
+      // Adds cycle-deck transitively only if any thermo var is in s
+      // (otherwise the output is pure-geometric and cycle outputs can't
+      // reach it).
+      for (const t of _THERMO_VAR_IDS){ if (s.has(t)){
+        for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
+        break;
+      }}
+    }
     return s;
   }
 
-  // ── FLAME outputs: thermo state + per-output geometry deps.
-  //    Cycle-linkage included when cycle is on. ──
+  // ── FLAME outputs: same per-output thermo-or-not decision. ──
   if (panel === "flame"){
-    const s = new Set(_THERMO_VAR_IDS);
-    if (cycleOn) for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
-    for (const v of _flameGeometryDeps(outputId)) s.add(v);
+    const s = _flameOutputDepsFull(outputId, _THERMO_VAR_IDS);
+    if (cycleOn){
+      for (const t of _THERMO_VAR_IDS){ if (s.has(t)){
+        for (const v of _CYCLE_DECK_VAR_IDS) s.add(v);
+        break;
+      }}
+    }
     return s;
   }
 
@@ -1087,6 +1123,94 @@ function _readVarFromRow(row, varId){
   }
   if (Object.prototype.hasOwnProperty.call(row, varId)) return row[varId];
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  countPrunedSize / generatePrunedMatrix
+//
+//  Direct (no full-factorial enumeration) construction of the pruned row
+//  set. Critical when the user's full factorial is in the millions: we
+//  must NOT allocate 8 M JS objects only to throw 99 % away.
+//
+//  Algorithm: group selected outputs by their (sorted) dep signature.
+//  Each group becomes one sub-factorial — Cartesian product of just the
+//  varied vars in that group's deps. Take the union of all sub-factorials,
+//  deduped by a canonical signature over ALL varied vars (with absent
+//  entries normalized to "_b_" so two rows from different sub-factorials
+//  with the same effective values collapse).
+//
+//  countPrunedSize is an UPPER BOUND on the kept count: sum of sub-
+//  factorial cardinalities. The actual kept set is ≤ this (overlapping
+//  rows where vars happen to be at baseline get deduped). Used for
+//  cap-checking before enumeration runs.
+// ─────────────────────────────────────────────────────────────────────────
+export function countPrunedSize(varSpecs, selectedOutputs, selectedPanels){
+  if (!varSpecs || varSpecs.length === 0) return 0;
+  const variedSet = new Set(varSpecs.map(s => s.id));
+  const seenKey = new Set();
+  let total = 0;
+  for (const o of selectedOutputs){
+    const deps = [...affectingVarIds(o.id, selectedPanels)]
+      .filter(v => variedSet.has(v))
+      .sort();
+    const key = deps.join("|");
+    if (seenKey.has(key)) continue;     // identical dep set already counted
+    seenKey.add(key);
+    let n = 1;
+    for (const v of deps){
+      const spec = varSpecs.find(s => s.id === v);
+      if (!spec){ n = 0; break; }
+      n *= countValues(spec);
+    }
+    total += n;
+    // Bail before overflowing if the user has truly absurd ranges.
+    if (total > MAX_MATRIX_SIZE * 1000) return total;
+  }
+  return total;
+}
+
+export function generatePrunedMatrix(varSpecs, selectedOutputs, selectedPanels){
+  if (!varSpecs || varSpecs.length === 0) return [];
+  const variedSet = new Set(varSpecs.map(s => s.id));
+  const variedSorted = [...variedSet].sort();
+  // Group outputs by their (sorted) dep signature so we generate each
+  // unique sub-factorial just once.
+  const depGroups = new Map();   // depKey → { deps: string[] }
+  for (const o of selectedOutputs){
+    const deps = [...affectingVarIds(o.id, selectedPanels)]
+      .filter(v => variedSet.has(v))
+      .sort();
+    const key = deps.join("|");
+    if (!depGroups.has(key)) depGroups.set(key, { deps });
+  }
+  const seen = new Set();
+  const kept = [];
+  for (const { deps } of depGroups.values()){
+    // Build a sub-factorial of just the deps vars. Variables NOT in deps
+    // are NOT in subSpecs → resulting rows leave them unset → runner's
+    // override() falls back to baseline at runtime, which is exactly the
+    // semantics we need (those vars don't affect any output that this
+    // group covers).
+    const subSpecs = varSpecs.filter(s => deps.includes(s.id));
+    const subMatrix = subSpecs.length === 0
+      ? [{}]                              // empty deps → one all-baseline row
+      : generateMatrix(subSpecs);
+    for (const r of subMatrix){
+      // Canonical sig over EVERY varied var so cross-group duplicates
+      // (e.g. an L_PFR-set row at L_PFR=baseline and a V_ref-set row at
+      // V_ref=baseline both reduce to the all-baseline row when their
+      // varied var equals the baseline) collapse to one entry.
+      const sig = variedSorted.map(v => {
+        const val = _readVarFromRow(r, v);
+        return val === null ? "_b_" : String(val);
+      }).join("|");
+      if (!seen.has(sig)){
+        seen.add(sig);
+        kept.push(r);
+      }
+    }
+  }
+  return kept;
 }
 
 export function pruneFullFactorial(rows, varSpecs, selectedOutputs, selectedPanels){
@@ -1223,7 +1347,7 @@ export function generateMatrix(varSpecs){
   return rows;
 }
 
-function enumerateValues(spec){
+export function enumerateValues(spec){
   if (spec.kind === "enum" || spec.kind === "bool"){
     return Array.isArray(spec.list) && spec.list.length ? spec.list : [];
   }

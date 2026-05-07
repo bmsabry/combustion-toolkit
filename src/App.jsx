@@ -12,6 +12,7 @@ import {
   unitFor, toDisplay, toSi, toDisplayDelta, toSiDelta,
   outputUnitFor, outputDisplayValue,
   affectingVarIds, pruneFullFactorial,
+  countPrunedSize, generatePrunedMatrix, enumerateValues,
 } from "./automation";
 import { useAuth, AuthModal } from "./auth.jsx";
 import { AccountPanel } from "./AccountPanel.jsx";
@@ -12134,46 +12135,64 @@ function AutomatePanel(props){
     });
   }, [selectedVarIds, varSpecs]);
 
-  // Compute the matrix size FIRST (cheap — just multiplies per-var counts).
-  // The actual matrix is only enumerated if the size is reasonable. Without
-  // this guard, picking 4 variables with default ranges generates millions
-  // of rows synchronously and freezes the tab.
+  // Full-factorial size — cheap multiplier-only count (never enumerates
+  // anything). Used for the "you'd run X if you didn't prune" callout
+  // and for nothing else: the cap is on the PRUNED size, not this.
   const matrixSize = useMemo(
     () => countMatrixSize(activeVarSpecs),
     [activeVarSpecs],
   );
-  const matrixOversized = matrixSize > MAX_MATRIX_SIZE;
-  // Reorder varSpecs for cache locality before generating the matrix.
-  // The factorial cross-product puts FIRST-listed var as slowest-varying;
-  // reordering Tier-1 (Cycle) vars to the front maximizes cache hits for
-  // the heavy Cycle backend call when downstream vars sweep. Display order
-  // (preview table, Excel headers) still uses activeVarSpecs (user order).
+
+  // Pruned-size upper bound — also cheap (sum of per-dep-group sub-
+  // factorial cardinalities). This is what the runner will execute.
+  // Going from full→pruned can collapse millions of redundant rows so
+  // we MUST cap on this number, not on matrixSize, otherwise a 10 M-row
+  // full factorial whose pruned set is 200 rows is wrongly refused.
+  const prunedSizeUB = useMemo(
+    () => countPrunedSize(activeVarSpecs, effectiveOutputs, effectivePanels),
+    [activeVarSpecs, effectiveOutputs, effectivePanels],
+  );
+  const matrixOversized = prunedSizeUB > MAX_MATRIX_SIZE;
+
+  // Cache-locality reorder (panel-local vars to the inner loop) — used by
+  // any sub-factorial we generate.
   const matrixSpecs = useMemo(
     () => reorderForCacheLocality(activeVarSpecs),
     [activeVarSpecs],
   );
-  // Full factorial — built once. The pruner walks this set and drops rows
-  // whose every-selected-output projection duplicates an earlier kept row.
-  const fullMatrix = useMemo(
-    () => (matrixSpecs.length && !matrixOversized) ? generateMatrix(matrixSpecs) : [],
-    [matrixSpecs, matrixOversized],
-  );
-  // Dependency-pruned matrix — what the runner actually executes.
-  // Equivalent to the full factorial for every selected output (same
-  // {output, projection} space) but with provably redundant rows removed.
-  // Greedy single-pass over fullMatrix; per-output dependency map is
-  // hand-derived from the source-traced affectingVarIds() oracle.
-  const _pruneResult = useMemo(() => {
-    if (fullMatrix.length === 0){
-      return { rows: [], dropped: 0, perOutputDeps: new Map() };
+
+  // Build the pruned matrix DIRECTLY — union of per-output sub-factorials,
+  // deduped on a canonical signature over all varied vars. Avoids ever
+  // allocating the full factorial when it would be huge but the pruned set
+  // is small (e.g. 8 M full → 17 pruned for the user's screenshot case).
+  const matrix = useMemo(() => {
+    if (!matrixSpecs.length || matrixOversized) return [];
+    return generatePrunedMatrix(matrixSpecs, effectiveOutputs, effectivePanels);
+  }, [matrixSpecs, effectiveOutputs, effectivePanels, matrixOversized]);
+  const prunedDropped = Math.max(0, matrixSize - matrix.length);
+
+  // For diagnostics: the same per-output dep map the pruner used (so the
+  // UI can show "this output depends on X, Y, Z" if asked). Hooked off
+  // affectingVarIds so it stays consistent with the pruner.
+  const perOutputDeps = useMemo(() => {
+    const m = new Map();
+    const variedSet = new Set(activeVarSpecs.map(s => s.id));
+    for (const o of effectiveOutputs){
+      const deps = [...affectingVarIds(o.id, effectivePanels)]
+        .filter(v => variedSet.has(v))
+        .sort();
+      m.set(o.id, deps);
     }
-    return pruneFullFactorial(
-      fullMatrix, activeVarSpecs, effectiveOutputs, effectivePanels,
-    );
-  }, [fullMatrix, activeVarSpecs, effectiveOutputs, effectivePanels]);
-  const matrix = _pruneResult.rows;
-  const prunedDropped = _pruneResult.dropped;
-  const perOutputDeps = _pruneResult.perOutputDeps;
+    return m;
+  }, [activeVarSpecs, effectiveOutputs, effectivePanels]);
+
+  // For the baselineMismatches detector and the preview, we need a sample
+  // of "what the user configured" — not what the runner actually executes.
+  // Generating the FULL factorial for that purpose would defeat the whole
+  // pruning effort on huge designs, so we expose only the pruned set as
+  // fullMatrix. baselineMismatches uses the catalog's enumerateValues
+  // (per-spec) directly instead — see below.
+  const fullMatrix = matrix;
 
   // T_flame as an operating-condition variable triggers the per-row
   // /calc/solve-phi-for-tflame bisection — it adds non-trivial time
@@ -12272,40 +12291,30 @@ function AutomatePanel(props){
   //    after they've spent compute time only to see a fallback warning
   //    in the chart caption.
   const baselineMismatches = useMemo(() => {
-    // Read swept values from the FULL factorial — pruning may collapse
-    // a variable to a single value if it doesn't affect any selected
-    // output, which would falsely flag a baseline mismatch. The
-    // mismatch warning is about what the user CONFIGURED to sweep.
-    if (fullMatrix.length === 0) return [];
+    // Swept values come from the per-spec config (enumerateValues), NOT
+    // from the matrix — the pruner intentionally drops rows for vars that
+    // don't affect any selected output, so a varied-but-irrelevant var
+    // would appear "collapsed" in the matrix and falsely flag a mismatch.
+    // The user's CONFIGURED sweep is the correct reference.
+    if (activeVarSpecs.length === 0) return [];
     const out = [];
     for (const v of activeVarSpecs){
-      const colKey = v.id;
+      const sweptDisplay = enumerateValues(v);
+      if (sweptDisplay.length === 0) continue;
       const isFuelSp = v.kind === "fuel_species";
       const isOxSp   = v.kind === "ox_species";
-      const sweptSet = new Set();
-      const sweptDisplay = [];
-      for (const row of fullMatrix){
-        let val;
-        if (isFuelSp) val = row.fuel ? row.fuel[v.species] : (row[colKey]);
-        else if (isOxSp) val = row.ox ? row.ox[v.species] : (row[colKey]);
-        else val = row[colKey];
-        if (val == null) continue;
-        const k = (typeof val === "number") ? +val.toPrecision(8) : String(val);
-        if (!sweptSet.has(k)){ sweptSet.add(k); sweptDisplay.push(val); }
-      }
-      // Read baseline for this var.
       let baseRaw;
       if (isFuelSp) baseRaw = baseline?.fuel?.[v.species];
       else if (isOxSp) baseRaw = baseline?.ox?.[v.species];
       else baseRaw = baseline?.[v.id];
-      if (baseRaw == null) continue;  // no baseline to mismatch against
+      if (baseRaw == null) continue;
       const baseInSwept = sweptDisplay.some(s => _valuesMatch(s, baseRaw));
       if (!baseInSwept){
         out.push({ varSpec: v, baselineVal: baseRaw, sweptVals: sweptDisplay });
       }
     }
     return out;
-  }, [fullMatrix, activeVarSpecs, baseline]);
+  }, [activeVarSpecs, baseline]);
 
   // Modal state for the pre-run baseline warning. `pendingRun` set to
   // true when the user clicked Run but the warning is showing → after
@@ -12317,7 +12326,7 @@ function AutomatePanel(props){
   const _runMatrixNow = async () => {
     if (matrix.length === 0) return;
     if (matrixOversized){
-      setErrMsg(`Matrix size (${matrixSize.toLocaleString()}) exceeds the ${MAX_MATRIX_SIZE.toLocaleString()} cap. Narrow your ranges before running.`);
+      setErrMsg(`Pruned matrix size (~${prunedSizeUB.toLocaleString()}) exceeds the ${MAX_MATRIX_SIZE.toLocaleString()} cap. Full factorial would be ${matrixSize.toLocaleString()}. Narrow ranges of variables that affect selected outputs.`);
       return;
     }
     if (cycleRequiresAccurate){
@@ -12403,7 +12412,7 @@ function AutomatePanel(props){
   const startRun = () => {
     if (matrix.length === 0) return;
     if (matrixOversized){
-      setErrMsg(`Matrix size (${matrixSize.toLocaleString()}) exceeds the ${MAX_MATRIX_SIZE.toLocaleString()} cap. Narrow your ranges before running.`);
+      setErrMsg(`Pruned matrix size (~${prunedSizeUB.toLocaleString()}) exceeds the ${MAX_MATRIX_SIZE.toLocaleString()} cap. Full factorial would be ${matrixSize.toLocaleString()}. Narrow ranges of variables that affect selected outputs.`);
       return;
     }
     if (cycleRequiresAccurate){
@@ -12759,16 +12768,26 @@ function AutomatePanel(props){
           <div style={{fontSize:13, fontWeight:700, color:C.strong,
             fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px",
             marginBottom:4, textTransform:"uppercase"}}>
-            ⚠ MATRIX TOO LARGE — {matrixSize.toLocaleString()} ROWS
+            ⚠ MATRIX TOO LARGE — {prunedSizeUB.toLocaleString()} unique runs
           </div>
-          The full factorial of your variables would produce <strong>{matrixSize.toLocaleString()}</strong> runs.
-          The cap is <strong>{MAX_MATRIX_SIZE.toLocaleString()}</strong>. Even at a few seconds per row this would take days
-          and consume gigabytes of memory. Narrow the ranges (increase the
-          step size) or remove a variable, then come back to this step.
-          <div style={{marginTop:6, fontSize:11, color:C.txtMuted, fontFamily:"monospace"}}>
-            Tip: each variable contributes a multiplier. T_air at 250–900 K step 10
-            = 66 points; H₂ at 0–100 % step 5 = 21; tau_PSR at 0.5–20 ms step 0.5
-            = 40. The cross product is the product of these.
+          Full factorial: <strong>{matrixSize.toLocaleString()}</strong> rows.
+          After dependency pruning (rows that don't move any selected output
+          are dropped): <strong>~{prunedSizeUB.toLocaleString()}</strong> unique
+          runs. Cap: <strong>{MAX_MATRIX_SIZE.toLocaleString()}</strong>.
+          {prunedSizeUB < matrixSize && (
+            <span style={{color:C.good, fontWeight:700}}>
+              {" "}Pruning already saved you {(matrixSize - prunedSizeUB).toLocaleString()} rows
+              ({Math.round(100*(1 - prunedSizeUB/matrixSize))}%);
+            </span>
+          )}
+          {" "}narrow the highest-multiplier ranges further to fit under the cap.
+          <div style={{marginTop:8, fontSize:11, color:C.txtMuted, fontFamily:"monospace", lineHeight:1.5}}>
+            Cost driver: a variable that multiplies the unique-run count is
+            one that affects at least one selected output. Variables that
+            ONLY affect outputs you don't care about are already free —
+            they were pruned. To shrink further, increase the step size of
+            a high-cardinality dep variable (e.g. L_char at 0.01-0.1 ft
+            step 0.01 = 10 points; step 0.02 = 5 points cuts that axis 2×).
           </div>
         </div>
       )}
