@@ -6,6 +6,26 @@ const API_BASE =
   (typeof window !== "undefined" && window.__CTK_API_BASE__) ||
   "https://combustion-toolkit-api.onrender.com";
 
+// CTK_DEBUG: surface which backend the renderer is actually targeting.
+// Without this we can't tell whether the desktop preload's
+// window.__CTK_API_BASE__ override won, or the cloud fallback was used.
+// Visible in DevTools console + via window.__CTK_DEBUG__.
+if (typeof window !== "undefined") {
+  // Initialize the global debug bag (other modules append to it).
+  window.__CTK_DEBUG__ = window.__CTK_DEBUG__ || {};
+  window.__CTK_DEBUG__.apiBase = API_BASE;
+  window.__CTK_DEBUG__.apiBaseSource = (
+    (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE)
+      ? "VITE_API_BASE (build-time)"
+      : (window.__CTK_API_BASE__
+          ? "window.__CTK_API_BASE__ (Electron preload)"
+          : "fallback (cloud)"));
+  // eslint-disable-next-line no-console
+  console.log("[CTK_DEBUG] api.js API_BASE =", API_BASE,
+    "source =", window.__CTK_DEBUG__.apiBaseSource,
+    "window.__CTK_API_BASE__ =", window.__CTK_API_BASE__);
+}
+
 const TOKEN_KEY = "ctk_token";
 const REFRESH_KEY = "ctk_refresh";
 const USER_KEY = "ctk_user";

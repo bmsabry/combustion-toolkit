@@ -267,6 +267,10 @@ async function showActivationWindow() {
 }
 
 async function showMainWindow(licenseToken) {
+  // CTK_DEBUG: confirm we have a real port before composing the arg.
+  // If solverPort is null/undefined, the renderer's __CTK_API_BASE__
+  // gets "http://127.0.0.1:null" and every fetch fails silently.
+  console.log(`[CTK_DEBUG] showMainWindow: solverPort=${solverPort} licenseToken=${licenseToken ? 'present(len=' + licenseToken.length + ')' : 'NONE'}`);
   const extraArgs = [`--ctk-api-base=http://127.0.0.1:${solverPort}`];
   if (licenseToken) {
     // Renderer attaches this as X-License-Token on every /calc/* request — the
@@ -285,6 +289,8 @@ async function showMainWindow(licenseToken) {
       );
     }
   }
+  // CTK_DEBUG: dump the full extraArgs list right before BrowserWindow.
+  console.log("[CTK_DEBUG] showMainWindow extraArgs =", JSON.stringify(extraArgs));
   mainWin = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -296,6 +302,10 @@ async function showMainWindow(licenseToken) {
       additionalArguments: extraArgs,
     },
   });
+  // CTK_DEBUG: open DevTools automatically so the user (and future-me)
+  // can see the [CTK_DEBUG] logs from preload + renderer immediately.
+  // Removed once the boot path stabilizes.
+  mainWin.webContents.openDevTools({ mode: "detach" });
 
   const devUrl = process.env.CTK_DEV_UI;
   if (devUrl) {

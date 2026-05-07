@@ -5,11 +5,19 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
+// CTK_DEBUG: dump full argv so we can confirm Electron actually delivered
+// the --ctk-api-base= arg from main.js. If this list is missing it,
+// the additionalArguments wiring is broken.
+console.log("[CTK_DEBUG] preload process.argv =", JSON.stringify(process.argv));
+
 // Pluck --ctk-api-base=<url> out of additionalArguments.
 const arg = process.argv.find((a) => a.startsWith("--ctk-api-base="));
 if (arg) {
   const base = arg.slice("--ctk-api-base=".length);
   contextBridge.exposeInMainWorld("__CTK_API_BASE__", base);
+  console.log("[CTK_DEBUG] preload exposed __CTK_API_BASE__ =", base);
+} else {
+  console.log("[CTK_DEBUG] preload: NO --ctk-api-base arg found in argv");
 }
 
 // Pluck --ctk-license-token=<token>. Renderer attaches this as X-License-Token
@@ -19,6 +27,9 @@ const tokArg = process.argv.find((a) => a.startsWith("--ctk-license-token="));
 if (tokArg) {
   const tok = tokArg.slice("--ctk-license-token=".length);
   contextBridge.exposeInMainWorld("__CTK_LICENSE_TOKEN__", tok);
+  console.log("[CTK_DEBUG] preload exposed __CTK_LICENSE_TOKEN__ (len=" + tok.length + ")");
+} else {
+  console.log("[CTK_DEBUG] preload: NO --ctk-license-token arg found in argv");
 }
 
 // Verified license claims (already signature-checked in main.js) — expose

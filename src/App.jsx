@@ -14425,6 +14425,20 @@ export default function App(){
   },accurate&&hasOnline&&(mode==="gts"||mode==="advanced"));
   const cycleResult=bkCycle.data;
 
+  // CTK_DEBUG: log every input to the cycle-calc enable gate so we can see
+  // EXACTLY why it didn't fire. Watch console after switching tabs / modes.
+  if (typeof window !== "undefined") {
+    const _enabled = accurate && hasOnline && (mode === "gts" || mode === "advanced");
+    window.__CTK_DEBUG__ = window.__CTK_DEBUG__ || {};
+    window.__CTK_DEBUG__.cycleGate = {
+      accurate, hasOnline, mode, enabled: _enabled,
+      bkCycleLoading: bkCycle.loading, bkCycleErr: bkCycle.err && String(bkCycle.err),
+      cycleResultPresent: !!bkCycle.data,
+    };
+    // eslint-disable-next-line no-console
+    console.log("[CTK_DEBUG] cycle gate:", window.__CTK_DEBUG__.cycleGate);
+  }
+
   // Keep the emissions-staging closure's view of cycleResult fresh — the
   // closures below read MW_net via _cycleResultStagingRef.current to decide
   // whether to skip / stop-at-6 / run-full when the user clicks the toggle.

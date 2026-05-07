@@ -96,13 +96,32 @@ export function AuthProvider({ children }) {
   // on hasOnlineAccess (cycle, AFT, etc.) silently never fire on desktop
   // because the user activated a license but never logged into the cloud.
   const _isDesktop = typeof window !== "undefined" && !!window.__CTK_API_BASE__;
+  const _hasOnline = _isDesktop || _adminOverride || !!(subscription && subscription.has_online_access);
+  const _hasDownload = _isDesktop || _adminOverride || !!(subscription && subscription.has_download_access);
+  // CTK_DEBUG: emit the auth gate decision tree so we can see why
+  // hasOnlineAccess turned out true/false. Logs once per provider render.
+  if (typeof window !== "undefined") {
+    window.__CTK_DEBUG__ = window.__CTK_DEBUG__ || {};
+    window.__CTK_DEBUG__.auth = {
+      isDesktop: _isDesktop,
+      hasWindowApiBase: typeof window !== "undefined" && !!window.__CTK_API_BASE__,
+      windowApiBase: typeof window !== "undefined" ? window.__CTK_API_BASE__ : null,
+      adminOverride: _adminOverride,
+      userEmail: user?.email || null,
+      subscriptionHasOnline: !!(subscription && subscription.has_online_access),
+      hasOnlineAccess: _hasOnline,
+      hasDownloadAccess: _hasDownload,
+    };
+    // eslint-disable-next-line no-console
+    console.log("[CTK_DEBUG] auth =", window.__CTK_DEBUG__.auth);
+  }
   const value = {
     user, subscription, loading, error,
     signin, signup, signout, refresh,
     isAuthenticated: !!user,
     isAdminEmail: _adminOverride,
-    hasOnlineAccess:   _isDesktop || _adminOverride || !!(subscription && subscription.has_online_access),
-    hasDownloadAccess: _isDesktop || _adminOverride || !!(subscription && subscription.has_download_access),
+    hasOnlineAccess: _hasOnline,
+    hasDownloadAccess: _hasDownload,
   };
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
