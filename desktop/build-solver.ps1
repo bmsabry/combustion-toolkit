@@ -104,6 +104,25 @@ try {
   # PowerShell's line-continuation parsing). PyInstaller writes warnings
   # to stderr; with $ErrorActionPreference = Continue (set above) those
   # are fine. We check $LASTEXITCODE explicitly after.
+  # CRITICAL: --paths "$repo\api" so PyInstaller can resolve the
+  # `from app.desktop_main import main` import in the bootstrap. Without
+  # this, PyInstaller analyzes the bootstrap, can't find the `app` package
+  # (it's at api/app/, not at the repo root), still produces an EXE
+  # because there's no fail-fast on missing imports, and the EXE crashes
+  # at runtime with "ModuleNotFoundError: No module named 'app'" — exactly
+  # the error the May 7 build hit.
+  #
+  # --collect-submodules "app" tells PyInstaller to walk app/ and bundle
+  # every sub-module (routers/*, science/*, etc.) without us having to
+  # list each one as --hidden-import.
+  $apiPath = Join-Path $repo "api"
+  # Custom Cantera mechanisms (Glarborg etc.) live at api/app/mechanisms/.
+  # mixture.py loads them via os.path.dirname(__file__)/../mechanisms — in
+  # the frozen EXE that path resolves inside the PyInstaller temp dir, so
+  # the YAML files must be bundled there as data. Cantera's stock GRI-Mech
+  # comes from `--collect-all cantera` already.
+  $mechSrc = Join-Path $apiPath "app\mechanisms"
+  $mechSpec = "$mechSrc;app/mechanisms"
   $pyiArgs = @(
     "-m", "PyInstaller",
     "--clean", "--noconfirm", "--onefile",
@@ -111,6 +130,11 @@ try {
     "--distpath", $out,
     "--workpath", $workPath,
     "--specpath", $out,
+    "--paths", $apiPath,
+    "--collect-submodules", "app",
+    "--add-data", $mechSpec,
+    "--hidden-import", "app",
+    "--hidden-import", "app.desktop_main",
     "--hidden-import", "cantera",
     "--hidden-import", "uvicorn.logging",
     "--hidden-import", "uvicorn.loops",
