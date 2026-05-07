@@ -2674,6 +2674,42 @@ const _normalizeForCacheKey = (v) => {
 const _bkCacheKey = (kind, args) =>
   `${kind}:${JSON.stringify(_normalizeForCacheKey(args || {}))}`;
 
+// Retry-with-backoff wrapper. Used for transient failures only:
+//   - 429 Too Many Requests: backend rate-limited; honor Retry-After hint.
+//   - 5xx: server hiccup; backoff and retry.
+//   - Network/timeout errors with no `status` set.
+// 4xx other than 429 (e.g. 422 schema rejection) is NOT retried — those
+// are deterministic, retrying them just wastes the budget.
+async function _retryTransient(fn, { attempts = 3, baseDelayMs = 600 } = {}){
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++){
+    try {
+      return await fn();
+    } catch (e){
+      lastErr = e;
+      const status = e?.status;
+      const transient =
+        status === 429 ||
+        (typeof status === "number" && status >= 500) ||
+        (status == null && /timed out|network|fetch/i.test(e?.message || ""));
+      if (!transient || i === attempts - 1) throw e;
+      // Exponential backoff with jitter. For 429 with explicit
+      // Retry-After header, use that instead.
+      let delay = baseDelayMs * Math.pow(2, i) + Math.random() * 250;
+      const retryAfter = e?.data?.headers?.["retry-after"];
+      if (retryAfter){
+        const sec = parseFloat(retryAfter);
+        if (Number.isFinite(sec)) delay = Math.max(delay, sec * 1000);
+      } else if (status === 429){
+        // Backend cap is per-IP per-minute; back off ~1 s minimum.
+        delay = Math.max(delay, 1100);
+      }
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 async function bkCachedFetch(kind, args){
   const fn = {aft:api.calcAFT, flame:api.calcFlameSpeed, combustor:api.calcCombustor,
     exhaust:api.calcExhaust, props:api.calcProps, autoignition:api.calcAutoignition,
@@ -2685,7 +2721,10 @@ async function bkCachedFetch(kind, args){
   if(cached) return cached;
   let promise = __BK_INFLIGHT.get(cacheKey);
   if(!promise){
-    promise = fn(args);
+    // Wrap the underlying fetch in retry-with-backoff. Transient
+    // failures (429, 5xx, network) get up to 3 attempts; deterministic
+    // ones (4xx schema) propagate on the first try.
+    promise = _retryTransient(() => fn(args));
     __BK_INFLIGHT.set(cacheKey, promise);
     promise.finally(()=>{ __BK_INFLIGHT.delete(cacheKey); });
   }
@@ -8436,9 +8475,85 @@ function OperationsSummaryPanel({
         is varying them, in which case the user's swept values win).
      4. Collect the requested outputs into a flat row dict.
 
-   Errors are caught per-row, never abort the whole matrix. Failed rows go
-   into the Excel sheet with an `__error__` column populated.
+   Errors are caught PER-PANEL (not per-row). A failed panel leaves its
+   slot empty; the row keeps any panel data that did succeed. Rows are
+   only marked `__error__` if NO panel produced any output. Per-panel
+   error messages are stored in `__panelErrors__` for the aggregated
+   diagnostic card the UI shows after the run.
    ══════════════════════════════════════════════════════════════════════════ */
+
+// Classify an error from the bk*/api layer into a short human-readable
+// bucket label. Used by the UI's "Error breakdown" card to group rows by
+// cause instead of dumping 124 raw messages. Buckets the runner produces:
+//   - "Rate limited (429)"
+//   - "Bad request (422 schema)"
+//   - "Server error (5xx)"
+//   - "Network/timeout"
+//   - "<exception class>: <first 80 chars>" (catch-all)
+function _classifyAutomationError(e){
+  const status = e?.status;
+  const msg = e?.message || String(e);
+  if (status === 429) return "Rate limited (429) — backend cap";
+  if (status === 422) return `Bad request (422): ${msg.slice(0, 100)}`;
+  if (status === 401 || status === 403) return `Auth (${status})`;
+  if (typeof status === "number" && status >= 500) return `Server error (${status})`;
+  if (/timed out|timeout/i.test(msg)) return "Timeout";
+  if (/network|fetch|failed to fetch|load failed/i.test(msg)) return "Network";
+  return msg.slice(0, 120);
+}
+
+// Clamp inputs to the values the backend Pydantic schema actually accepts.
+// Keeps a 422 from blowing up an entire row when the user's matrix step
+// happens to land just outside a guard. The clamp is silent (no toast)
+// because the user already saw the values they asked for in the preview;
+// silently widening to "as close as the backend allows" is the safer
+// behaviour. Mirrors the `Field(ge=..., le=...)` constraints in
+// api/app/schemas.py CycleRequest / CombustorMappingRequest.
+function _clampCycleInputs(inp){
+  const c = { ...inp };
+  // load_pct: ge=20.0, le=100.0
+  if (Number.isFinite(c.load_pct)) c.load_pct = Math.min(100, Math.max(20, c.load_pct));
+  // RH: ge=0, le=100
+  if (Number.isFinite(c.RH)) c.RH = Math.min(100, Math.max(0, c.RH));
+  // WFR: ge=0, le=2
+  if (Number.isFinite(c.WFR)) c.WFR = Math.min(2, Math.max(0, c.WFR));
+  // com_air_frac: ge=0.30, le=1.00
+  if (Number.isFinite(c.com_air_frac)){
+    c.com_air_frac = Math.min(1.0, Math.max(0.30, c.com_air_frac));
+  }
+  // bleed_open_pct, bleed_valve_size_pct: 0..100 each. Bleed-air-frac
+  // = open × valve / 10000, capped at 0.5 in the runner already.
+  if (Number.isFinite(c.bleed_open_pct))
+    c.bleed_open_pct = Math.min(100, Math.max(0, c.bleed_open_pct));
+  if (Number.isFinite(c.bleed_valve_size_pct))
+    c.bleed_valve_size_pct = Math.min(100, Math.max(0, c.bleed_valve_size_pct));
+  return c;
+}
+
+// Clamp combustor-mapping inputs. Circuit air fractions must sum to 100;
+// if the matrix sweep puts one over 100 or makes the sum off, scale them
+// proportionally back to 100. phi_IP/OP/IM each le=20 in schema.
+function _clampMappingInputs(inp){
+  const c = { ...inp };
+  // W36 / W3: gt=0, le=1.0
+  if (Number.isFinite(c.mapW36w3)) c.mapW36w3 = Math.min(1.0, Math.max(0.001, c.mapW36w3));
+  // phi_IP/OP/IM: ge=0, le=20
+  for (const k of ["mapPhiIP", "mapPhiOP", "mapPhiIM"]){
+    if (Number.isFinite(c[k])) c[k] = Math.min(20, Math.max(0, c[k]));
+  }
+  // Circuit fractions: each ge=0, le=100; sum must be 100.
+  let fIP = Math.min(100, Math.max(0, +c.mapFracIP || 0));
+  let fOP = Math.min(100, Math.max(0, +c.mapFracOP || 0));
+  let fIM = Math.min(100, Math.max(0, +c.mapFracIM || 0));
+  let fOM = Math.min(100, Math.max(0, +c.mapFracOM || 0));
+  const sum = fIP + fOP + fIM + fOM;
+  if (sum > 0 && Math.abs(sum - 100) > 0.01){
+    const k = 100 / sum;
+    fIP *= k; fOP *= k; fIM *= k; fOM *= k;
+  }
+  c.mapFracIP = fIP; c.mapFracOP = fOP; c.mapFracIM = fIM; c.mapFracOM = fOM;
+  return c;
+}
 
 async function runAutomationMatrix({
   rows, selectedPanels, selectedOutputs, baseline, varSpecs,
@@ -8591,15 +8706,22 @@ async function runAutomationMatrix({
     }
 
     let rowState = {};
-    let rowError = null;
+    // Per-panel error map. Tracks WHICH panel failed and WHY, instead of
+    // letting one panel's failure kill the whole row. Used both for the
+    // post-run aggregated breakdown card and (by Excel writer) the
+    // optional Errors column. A row only gets `__error__` if EVERY
+    // panel that was supposed to produce data failed — i.e. there's
+    // genuinely nothing to plot.
+    const panelErrors = {};
 
-    try {
-      // ── Run Cycle (always, if it's in the panel set; auto-included
-      //   when Mapping is selected). ──
-      if (selectedPanels.includes("cycle")){
+    // ── Run Cycle (own try/catch) ──
+    // Cycle is the linkage source for T3/P3/phi_Bulk. If it fails, we
+    // SKIP the linkage overrides — downstream panels run with whatever
+    // sidebar T_air/P/phi the user supplied. The row stays valid for
+    // any panel that doesn't need cycle outputs (AFT, Flame, etc.).
+    if (selectedPanels.includes("cycle")){
+      try {
         rowState.cycle = await runCycleForAutomation(inputs, accurate);
-        // Override sidebar T_air, P from Cycle outputs UNLESS the user is
-        // varying those — that's the "auto-break linkage" behaviour.
         if (rowState.cycle){
           if (!breaksLinkT3 && Number.isFinite(rowState.cycle.T3_K)){
             inputs.T_air = rowState.cycle.T3_K;
@@ -8611,26 +8733,59 @@ async function runAutomationMatrix({
             inputs.phi = rowState.cycle.phi_Bulk;
           }
         }
+      } catch (e){
+        panelErrors.cycle = _classifyAutomationError(e);
+        console.warn(`[automation] row ${i+1} CYCLE failed:`, e?.message || e);
       }
+    }
 
-      // ── Post-Cycle panels: try ONE batch HTTP call for all selected
-      //   panels at once. Falls back to per-panel calls if the batch
-      //   endpoint errors (older backend). All adapter logic mirrors the
-      //   per-call functions exactly — same args in, same shape out.
-      const postCyclePanels = selectedPanels.filter(p =>
-        p === "mapping" || p === "aft" || p === "exhaust" ||
-        p === "combustor" || p === "flame"
-      );
-      const batchOutcome = await _runPostCycleBatch(
-        postCyclePanels, inputs, rowState.cycle, accurate
-      );
-      Object.assign(rowState, batchOutcome);
+    // ── Post-Cycle panels (one batch call, never fatal) ──
+    // _runPostCycleBatch already swallows per-panel batch failures
+    // internally; the only thing that throws to here is a global
+    // network/auth error. We wrap that path so it can't kill the row.
+    const postCyclePanels = selectedPanels.filter(p =>
+      p === "mapping" || p === "aft" || p === "exhaust" ||
+      p === "combustor" || p === "flame"
+    );
+    if (postCyclePanels.length > 0){
+      try {
+        const batchOutcome = await _runPostCycleBatch(
+          postCyclePanels, inputs, rowState.cycle, accurate
+        );
+        Object.assign(rowState, batchOutcome);
+        // Diagnose missing slots — these are the panels the batch
+        // endpoint reported failed (logged by _runPostCycleBatch). We
+        // can't read the original error message here (it lives in
+        // console only); flag the panel as silently unfilled so the
+        // aggregator counts it.
+        for (const p of postCyclePanels){
+          const slotName = p === "mapping" ? "map" :
+                           p === "exhaust" ? "exh_o2" :
+                           p === "combustor" ? "psr" :
+                           p === "flame" ? "flame" :
+                           p; // aft
+          if (!(slotName in rowState)){
+            panelErrors[p] = panelErrors[p] || "panel returned no data";
+          }
+        }
+      } catch (e){
+        // Whole batch + sequential fallback both threw. Mark every
+        // requested post-cycle panel as failed but DON'T error the
+        // row — the cycle slot may still have data.
+        const msg = _classifyAutomationError(e);
+        for (const p of postCyclePanels) panelErrors[p] = msg;
+        console.warn(`[automation] row ${i+1} POST-CYCLE batch failed:`, e?.message || e);
+      }
+    }
 
-      // Always compute fuel-property "derived" bundle for AFT outputs.
+    // Always compute fuel-property "derived" bundle for AFT outputs.
+    // Pure JS — never fails.
+    try {
       rowState.derived = calcFuelProps(inputs.fuel, inputs.ox, inputs.T_fuel);
     } catch (e){
-      rowError = e?.message || String(e);
-      console.warn(`[automation] row ${i+1} failed:`, e);
+      // Truly defensive — calcFuelProps shouldn't throw, but if it
+      // does, leave derived undefined.
+      console.warn(`[automation] row ${i+1} derived bundle:`, e?.message || e);
     }
 
     // ── Capture the per-row data ──
@@ -8640,16 +8795,40 @@ async function runAutomationMatrix({
     // this snapshot. That way the workbook is fully self-describing and
     // reproducible: a reader doesn't need the App's baseline state to know
     // what value was used for any input on any row.
+    //
+    // Each output is computed under its own try/catch so a buggy picker
+    // can't NaN-poison the whole row; failed pickers return null.
     const outputsForRow = {};
+    let producedAnyOutput = false;
     for (const out of selectedOutputs){
-      outputsForRow[out.id] = rowError ? null : out.pick(rowState);
+      try {
+        const v = out.pick(rowState);
+        outputsForRow[out.id] = v;
+        if (v != null && !Number.isNaN(v)) producedAnyOutput = true;
+      } catch (e){
+        outputsForRow[out.id] = null;
+        // Don't spam — picker errors are usually all-or-nothing for a
+        // given panel (its slot is missing). Already logged via
+        // panelErrors above.
+      }
     }
     const outRow = {
       __row__: i + 1,
       __inputs__: inputs,
       __outputs__: outputsForRow,
     };
-    if (rowError) outRow.__error__ = rowError;
+    if (Object.keys(panelErrors).length > 0){
+      outRow.__panelErrors__ = panelErrors;
+    }
+    // The row is `__error__` ONLY if no output came through at all.
+    // A row with cycle = ok and mapping = failed is still a valid row
+    // for the cycle outputs — don't paint it red.
+    if (!producedAnyOutput){
+      // Best human-readable message: pick the first panel error we
+      // collected (they're usually the same cause across panels).
+      const firstErr = Object.values(panelErrors)[0];
+      outRow.__error__ = firstErr || "no panel produced output";
+    }
     results.push(outRow);
 
     // Progress callback
@@ -9007,14 +9186,14 @@ async function _runPostCycleBatch(panels, inp, cycleResult, accurate){
 
   if (batchJobs.length === 0) return out;
 
-  // Fire ONE HTTP call. On any exception fall back to per-panel runners
-  // for the misses — the sequential path is the previous baseline so
-  // quality is preserved.
+  // Fire ONE HTTP call. Retries 429/5xx/network with backoff; on terminal
+  // exception falls back to per-panel runners for the misses — the
+  // sequential path preserves the previous baseline behaviour.
   let resp = null;
   try {
-    resp = await api.calcBatch({ jobs: batchJobs });
+    resp = await _retryTransient(() => api.calcBatch({ jobs: batchJobs }));
   } catch (e){
-    console.warn("[automation] batch endpoint failed, falling back to per-panel calls:", e);
+    console.warn("[automation] batch endpoint failed (after retries), falling back to per-panel calls:", e);
     return await _runPostCycleSequential(panels, inp, cycleResult, accurate, out);
   }
 
@@ -9087,26 +9266,26 @@ async function runCycleForAutomation(inp, accurate){
     // still work; the user is told in the UI that Cycle requires Accurate.
     return null;
   }
-  // Compute the actual bleed_air_frac the backend needs, from the user's
-  // open % and valve size %. Same formula the rest of the app uses
-  // (App.jsx ~4251). Clamped to the backend's [0, 0.5] range.
-  const bleed_open  = +inp.bleed_open_pct       || 0;
-  const bleed_valve = +inp.bleed_valve_size_pct || 0;
+  // Clamp inputs to backend schema acceptance window so a 422 doesn't
+  // kill an otherwise-valid row when a matrix step lands just outside.
+  const c = _clampCycleInputs(inp);
+  const bleed_open  = +c.bleed_open_pct       || 0;
+  const bleed_valve = +c.bleed_valve_size_pct || 0;
   const bleed_air_frac = Math.max(0, Math.min(0.50,
     (bleed_open / 100) * (bleed_valve / 100)
   ));
   return await bkCachedFetch("cycle", {
-    engine: inp.engine,
-    P_amb_bar: inp.P_amb,
-    T_amb_K:   inp.T_amb,
-    RH_pct:    inp.RH,
-    load_pct:  inp.load_pct,
-    T_cool_in_K: inp.T_cool,
-    fuel_pct:  nonzero(inp.fuel),
-    T_fuel_K:  inp.T_fuel,
-    combustor_air_frac: inp.com_air_frac,
-    WFR:       inp.WFR,
-    water_mode: inp.water_mode,
+    engine: c.engine,
+    P_amb_bar: c.P_amb,
+    T_amb_K:   c.T_amb,
+    RH_pct:    c.RH,
+    load_pct:  c.load_pct,
+    T_cool_in_K: c.T_cool,
+    fuel_pct:  nonzero(c.fuel),
+    T_fuel_K:  c.T_fuel,
+    combustor_air_frac: c.com_air_frac,
+    WFR:       c.WFR,
+    water_mode: c.water_mode,
     T_water_K: 288.15,
     bleed_air_frac,
   });
@@ -9114,29 +9293,32 @@ async function runCycleForAutomation(inp, accurate){
 
 async function runMappingForAutomation(inp, cycleResult, accurate){
   if (!accurate || !cycleResult) return null;
+  // Clamp inputs to backend schema acceptance window — circuit fractions
+  // re-normalize to sum=100, phi values clipped to [0, 20].
+  const c = _clampMappingInputs(inp);
   return await bkCachedFetch("combustor_mapping", {
-    fuel: nonzero(inp.fuel),
-    oxidizer: nonzero(cycleResult.oxidizer_humid_mol_pct || inp.ox),
+    fuel: nonzero(c.fuel),
+    oxidizer: nonzero(cycleResult.oxidizer_humid_mol_pct || c.ox),
     T3_K:    cycleResult.T3_K,
     P3_bar:  cycleResult.P3_bar,
-    T_fuel_K: inp.T_fuel,
+    T_fuel_K: c.T_fuel,
     W3_kg_s: cycleResult.mdot_air_post_bleed_kg_s || cycleResult.mdot_air_kg_s,
-    W36_over_W3: inp.mapW36w3,
-    com_air_frac: cycleResult.combustor_air_frac || inp.com_air_frac,
+    W36_over_W3: c.mapW36w3,
+    com_air_frac: cycleResult.combustor_air_frac || c.com_air_frac,
     // All four circuit air fractions are now driven by the user's baseline /
     // matrix overrides (previously frac_IM_pct was hardcoded to 39.9 and
     // frac_OM_pct was a derived remainder, so user variations of IM/OM had
     // no effect). The backend validates that they sum to 100.
-    frac_IP_pct: inp.mapFracIP,
-    frac_OP_pct: inp.mapFracOP,
-    frac_IM_pct: inp.mapFracIM,
-    frac_OM_pct: inp.mapFracOM,
-    phi_IP: inp.mapPhiIP,
-    phi_OP: inp.mapPhiOP,
-    phi_IM: inp.mapPhiIM,
+    frac_IP_pct: c.mapFracIP,
+    frac_OP_pct: c.mapFracOP,
+    frac_IM_pct: c.mapFracIM,
+    frac_OM_pct: c.mapFracOM,
+    phi_IP: c.mapPhiIP,
+    phi_OP: c.mapPhiOP,
+    phi_IM: c.mapPhiIM,
     m_fuel_total_kg_s: cycleResult.mdot_fuel_kg_s,
-    WFR: inp.WFR,
-    water_mode: inp.water_mode,
+    WFR: c.WFR,
+    water_mode: c.water_mode,
     nox_mult: 1.0, co_mult: 1.0, px36_mult: 1.0,
   });
 }
@@ -12716,6 +12898,99 @@ function AutomatePanel(props){
           </button>
         </div>
       )}
+      {/* Aggregated per-error-type breakdown card. Surfaces WHY rows
+          failed (rate-limit? schema rejection? convergence?) instead of
+          burying it in console. Shown only when there's something to
+          report. Two sections:
+            • Row-level errors: rows with no panel output at all.
+            • Per-panel partial failures: rows that produced SOME data
+              but had at least one panel return nothing.
+          Counts are clickable-style labels (no JS — kept minimal so
+          we can ship today) that tell the user the top causes. */}
+      {!running && results && (() => {
+        const errRows = results.filter(r => r.__error__);
+        // Aggregate row-level errors by classification bucket.
+        const rowErrCounts = new Map();
+        for (const r of errRows){
+          const k = _classifyAutomationError({
+            message: r.__error__,
+            // Status is lost by stringification, so just use the message.
+            status: undefined,
+          });
+          rowErrCounts.set(k, (rowErrCounts.get(k) || 0) + 1);
+        }
+        // Aggregate per-panel partial failures (rows that succeeded
+        // overall but had a specific panel error out).
+        const panelErrCounts = new Map();   // "panel: bucket" -> count
+        for (const r of results){
+          const pe = r.__panelErrors__;
+          if (!pe) continue;
+          for (const [panel, msg] of Object.entries(pe)){
+            const bucket = _classifyAutomationError({ message: msg });
+            const k = `${panel}: ${bucket}`;
+            panelErrCounts.set(k, (panelErrCounts.get(k) || 0) + 1);
+          }
+        }
+        if (errRows.length === 0 && panelErrCounts.size === 0) return null;
+        const sortedRow = [...rowErrCounts.entries()].sort((a, b) => b[1] - a[1]);
+        const sortedPan = [...panelErrCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+        return (
+          <div style={{marginTop:10, padding:"10px 12px", background:`${C.warm}10`,
+            border:`1px solid ${C.warm}55`, borderRadius:6, fontSize:11,
+            color:C.txt, fontFamily:"'Barlow',sans-serif", lineHeight:1.5}}>
+            <div style={{fontSize:12, fontWeight:700, color:C.warm,
+              fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:".5px",
+              marginBottom:6, textTransform:"uppercase"}}>
+              ⚠ Error breakdown — what failed and why
+            </div>
+            {errRows.length > 0 && (
+              <div style={{marginBottom: panelErrCounts.size ? 8 : 0}}>
+                <div style={{fontSize:10.5, color:C.txtMuted, marginBottom:4,
+                  fontFamily:"monospace", textTransform:"uppercase", letterSpacing:".5px"}}>
+                  Row-level failures ({errRows.length} of {results.length})
+                </div>
+                {sortedRow.map(([k, n]) => (
+                  <div key={k} style={{padding:"3px 0", fontFamily:"monospace", fontSize:11}}>
+                    <span style={{color:C.warm, fontWeight:700, marginRight:8,
+                      display:"inline-block", minWidth:36, textAlign:"right"}}>{n}×</span>
+                    <span style={{color:C.txtDim}}>{k}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {panelErrCounts.size > 0 && (
+              <div>
+                <div style={{fontSize:10.5, color:C.txtMuted, marginBottom:4,
+                  fontFamily:"monospace", textTransform:"uppercase", letterSpacing:".5px"}}>
+                  Per-panel partial failures (row still produced other data)
+                </div>
+                {sortedPan.map(([k, n]) => (
+                  <div key={k} style={{padding:"3px 0", fontFamily:"monospace", fontSize:11}}>
+                    <span style={{color:C.accent2, fontWeight:700, marginRight:8,
+                      display:"inline-block", minWidth:36, textAlign:"right"}}>{n}×</span>
+                    <span style={{color:C.txtDim}}>{k}</span>
+                  </div>
+                ))}
+                {panelErrCounts.size > 8 && (
+                  <div style={{padding:"3px 0", fontSize:10.5, color:C.txtMuted, fontStyle:"italic"}}>
+                    … {panelErrCounts.size - 8} more error types (open Excel for the per-row detail).
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{marginTop:8, padding:"6px 8px", background:C.bg3,
+              borderRadius:4, fontSize:10, color:C.txtMuted, lineHeight:1.5}}>
+              <strong style={{color:C.txtDim}}>What to do:</strong>{" "}
+              "Rate limited (429)" → wait a moment and re-run; the runner now retries
+              with backoff so this should be rare. "Bad request (422)" → a value in
+              your sweep is outside the backend schema; the runner already clamps
+              the common ones (load %, bleed, WFR, circuit fractions). Other
+              bucket → physics convergence at the matrix edge; narrow that
+              variable's range or remove the offending point.
+            </div>
+          </div>
+        );
+      })()}
       {errMsg && (
         <div style={{marginTop:8, padding:"6px 10px", background:`${C.warm}14`,
           border:`1px solid ${C.warm}60`, borderRadius:4, fontSize:11, color:C.warm,

@@ -138,7 +138,12 @@ def _rate_limit(endpoint: str, per_min: int, per_hour: int):
 _RL_FLAME      = _rate_limit("flame-speed",        per_min=30, per_hour=500)
 _RL_COMBUSTOR  = _rate_limit("combustor",          per_min=20, per_hour=300)
 _RL_AUTOIGN    = _rate_limit("autoignition",       per_min=30, per_hour=500)
-_RL_BATCH      = _rate_limit("batch",              per_min=60, per_hour=1000)
+# Batch is the matrix-automation hot path. A single 300-row matrix at
+# ~1 s/row produces ~300 batch calls in 5 min — the old 60/min cap
+# guaranteed dozens of 429 errors mid-run. Raised to 600/min, 12000/hr
+# so a 3000-row matrix finishes without ever hitting the limiter, but
+# we still cap runaway loops well below what would crash the backend.
+_RL_BATCH      = _rate_limit("batch",              per_min=600, per_hour=12000)
 _RL_SWEEP_POST = _rate_limit("sweep-submit",       per_min=3,  per_hour=20)
 _RL_SWEEP_POLL = _rate_limit("sweep-poll",         per_min=120, per_hour=3000)
 
