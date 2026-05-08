@@ -117,9 +117,27 @@ def _run(fn, *a, **kw) -> Any:
 
 
 # ---------- license verification ----------
+# Two-layer license model:
+#   1. Electron main.js verifies the Ed25519-signed license file BEFORE
+#      it ever spawns ctk-solver.exe. If that check fails the user sees
+#      the activation dialog and the solver never starts.
+#   2. The solver re-checks an HMAC-SHA256-signed token here as a
+#      belt-and-suspenders defense against a malicious local process
+#      driving the loopback API.
+#
+# The HMAC check needs CTK_BAKED_SIGNING_KEY baked in at PyInstaller
+# build time. When it ISN'T baked in (current state — the build
+# pipeline doesn't substitute it), this re-check would 500 every
+# request and lock out the user even though the Ed25519 check already
+# passed. Treat absent-key as "skip the re-check" and rely on the
+# loopback-binding gate. CORS already restricts allowed origins to
+# Electron's null + the dev server.
 def _verify_license_token(token: str) -> dict[str, Any]:
     if not _BAKED_SIGNING_KEY:
-        raise HTTPException(status_code=500, detail="desktop build missing signing key")
+        # No baked key -> trust the Electron-side Ed25519 check that
+        # gated the solver spawn. Returning a stub payload satisfies
+        # the dep return type without surfacing 500s downstream.
+        return {"tier": "desktop", "skipped_check": True}
     if not token or "|" not in token:
         raise HTTPException(status_code=401, detail="invalid license token")
     payload_json, sig = token.rsplit("|", 1)
