@@ -14071,21 +14071,21 @@ export default function App(){
   // editable in the sidebar; persisted to localStorage.
   const DEFAULT_EM_TF={
     7:{NOx:1.00,CO:1.00,PX36:1.00},  // BR=G
-    6:{NOx:1.25,CO:0.90,PX36:1.00},  // BR=F
-    4:{NOx:1.50,CO:0.85,PX36:1.00},  // BR=D
+    6:{NOx:1.00,CO:0.90,PX36:1.00},  // BR=F
+    4:{NOx:1.00,CO:0.85,PX36:1.00},  // BR=D
     2:{NOx:0.50,CO:0.25,PX36:1.50},  // BR=B
   };
-  // Bumped storage key v1->v2 because BR=4 and BR=2 PX36 defaults
-  // changed; v1 readers held cached prior values that would otherwise
-  // mask the new defaults for existing users.
+  // Storage key v3 — BR=F and BR=D NOx defaults were lowered from
+  // 1.25/1.50 to 1.00. Bumped to invalidate cached v2 values so
+  // existing users see the new defaults on next launch.
   const[emTfMults,setEmTfMults]=useState(()=>{
     try{
-      const s=localStorage.getItem("ctk.emTfMults.v2");
+      const s=localStorage.getItem("ctk.emTfMults.v3");
       if(s){const p=JSON.parse(s);if(p&&p[7]&&p[6]&&p[4]&&p[2])return p;}
     }catch(e){}
     return JSON.parse(JSON.stringify(DEFAULT_EM_TF));
   });
-  useEffect(()=>{try{localStorage.setItem("ctk.emTfMults.v2",JSON.stringify(emTfMults));}catch(e){}},[emTfMults]);
+  useEffect(()=>{try{localStorage.setItem("ctk.emTfMults.v3",JSON.stringify(emTfMults));}catch(e){}},[emTfMults]);
 
   // ── Mapping-table auto-fill (App-level so it fires on ANY cycle change,
   //    not just when the Mapping panel is mounted). The panel itself shows
