@@ -15,6 +15,7 @@
 const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
@@ -173,6 +174,20 @@ function startSolver(licenseToken) {
     };
     solverProc = spawn(bin, [], { env, stdio: ["ignore", "pipe", "pipe"] });
 
+    // CTK_DEBUG: also tee solver stdout/stderr to a visible log file in
+    // the user's home dir. The Python side writes detailed tracebacks to
+    // ctk-solver.log; this captures everything else (uvicorn lifecycle
+    // messages, Python warnings, hard crashes that bypass FastAPI's
+    // exception handler).
+    const logDir = os.homedir();
+    const stderrLogPath = path.join(logDir, "ctk-solver-stderr.log");
+    const stdoutLogPath = path.join(logDir, "ctk-solver-stdout.log");
+    const stderrLogStream = fs.createWriteStream(stderrLogPath, { flags: "a" });
+    const stdoutLogStream = fs.createWriteStream(stdoutLogPath, { flags: "a" });
+    stderrLogStream.write(`\n===== solver started @ ${new Date().toISOString()} =====\n`);
+    stdoutLogStream.write(`\n===== solver started @ ${new Date().toISOString()} =====\n`);
+    console.log(`[CTK_DEBUG] solver logs at ${stdoutLogPath} and ${stderrLogPath}`);
+
     // Capture every stdout/stderr line so we can surface a useful error
     // instead of the bare "failed to start within Ns" if the timeout fires.
     let resolved = false;
@@ -181,6 +196,7 @@ function startSolver(licenseToken) {
     solverProc.stdout.on("data", (buf) => {
       const s = buf.toString();
       stdoutBuf += s;
+      stdoutLogStream.write(s);
       process.stdout.write(`[solver] ${s}`);
       if (!resolved) {
         const m = s.match(/CTK_PORT=(\d+)/);
@@ -194,6 +210,7 @@ function startSolver(licenseToken) {
     solverProc.stderr.on("data", (buf) => {
       const s = buf.toString();
       stderrBuf += s;
+      stderrLogStream.write(s);
       process.stderr.write(`[solver-err] ${s}`);
     });
     solverProc.on("exit", (code) => {
