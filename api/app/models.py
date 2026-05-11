@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -181,3 +181,84 @@ class ApiUsage(Base):
     endpoint: Mapped[str] = mapped_column(String(64), nullable=False)
     date: Mapped[str] = mapped_column(String(10), nullable=False)  # YYYY-MM-DD
     count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+# ─── Learning-module access-control system ──────────────────────────────
+class ModuleInvitation(Base):
+    """One row per outstanding invitation. Tokens stored as SHA-256 hex
+    so a DB leak doesn't expose live links.
+    """
+    __tablename__ = "module_invitations"
+    __table_args__ = (
+        Index("ix_module_invitations_token_hash", "token_hash", unique=True),
+        Index("ix_module_invitations_module_email", "module_id", "email"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    module_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    created_by_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+    accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_by_user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ModuleEnrollment(Base):
+    """An active grant of access. One row per (user, module). Created when
+    a user accepts an invitation, or when an admin grants directly.
+    """
+    __tablename__ = "module_enrollments"
+    __table_args__ = (
+        UniqueConstraint("user_id", "module_id", name="uq_module_enrollments_user_module"),
+        Index("ix_module_enrollments_module", "module_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    module_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+    granted_by_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    invitation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("module_invitations.id"), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_active_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class ModuleProgress(Base):
+    """Per-user learning-state blob, JSON-serialised. The shape of the
+    payload is owned by the frontend; the server is just a key-value store
+    keyed on (user, module).
+    """
+    __tablename__ = "module_progress"
+    __table_args__ = (
+        UniqueConstraint("user_id", "module_id", name="uq_module_progress_user_module"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    module_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
+    )
+
+
+class ModuleAccessRequest(Base):
+    """A signed-in user (no invitation) hit the gated module and requested
+    access. Admin sees these in the dashboard and can grant or ignore.
+    """
+    __tablename__ = "module_access_requests"
+    __table_args__ = (
+        UniqueConstraint("user_id", "module_id", name="uq_module_access_requests_user_module"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    module_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # 'granted' | 'denied'

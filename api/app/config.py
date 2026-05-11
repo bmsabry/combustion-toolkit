@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     admin_emails: str = Field(default="")  # comma-separated list; auto-promoted on signup/login
     admin_secret: str = Field(default="")  # shared secret for /admin/promote runtime endpoint
 
+
+    # Transactional email (Resend) — used for learning-module invitations
+    resend_api_key: str = Field(default="")
+    resend_from_email: str = Field(default="ProReadyEngineer <noreply@proreadyengineer.com>")
+    instructor_contact_email: str = Field(default="info@proreadyengineer.com")
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [o.strip() for o in self.backend_cors_origins.split(",") if o.strip()]

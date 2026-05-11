@@ -37,6 +37,7 @@ class UserOut(BaseModel):
     email: str
     full_name: Optional[str]
     is_verified: bool
+    is_admin: bool = False
     created_at: datetime
 
 

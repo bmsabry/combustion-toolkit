@@ -12,7 +12,7 @@ from sqlalchemy import text
 
 from .config import get_settings
 from .db import Base, engine
-from .routers import admin, auth, billing, calc, desktop
+from .routers import admin, auth, billing, calc, desktop, learning
 from .schemas import HealthResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -83,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(calc.router)
     app.include_router(desktop.router)
     app.include_router(admin.router)
+    app.include_router(learning.router)
 
     @app.get("/", response_model=HealthResponse)
     def root() -> HealthResponse:

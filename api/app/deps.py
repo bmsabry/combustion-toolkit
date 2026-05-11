@@ -100,3 +100,15 @@ def require_any_paid(user: User = Depends(get_current_user)) -> User:
             detail="An active subscription is required.",
         )
     return user
+
+
+
+def get_admin_user(user: User = Depends(get_current_user)) -> User:
+    """Gate an endpoint to admins only (is_admin=True). Used by the learning
+    instructor panel and any other admin-facing routes."""
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    return user
