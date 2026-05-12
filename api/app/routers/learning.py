@@ -41,6 +41,18 @@ _MODULES = {
         "subtitle": "Aerodynamics, Design & Performance Map",
         "url_base": "https://smallgasturbine.gt-05.proreadyengineer.com",
     },
+    "gt-06": {
+        "title": "GT-06 — Evaporative Tube Combustor",
+        "subtitle": "Design Principles & Fuel Delivery",
+        "url_base": "https://smallgasturbine.gt-06.proreadyengineer.com",
+    },
+}
+
+# When a user accepts an invitation OR is granted access to module X, also
+# auto-create enrollments for these modules. One-way: granting GT-05 → also
+# grants GT-06. Granting GT-06 alone does NOT grant GT-05.
+_AUTO_GRANT_ON_ACCEPT = {
+    "gt-05": ["gt-06"],
 }
 
 
@@ -216,6 +228,33 @@ def _send_invite_email(invitation: ModuleInvitation, plaintext_token: str, invit
     )
 
 
+
+def _ensure_linked_enrollments(user, source_module_id: str, granted_by_user_id: str, db: Session) -> int:
+    """When user gets enrolled in source_module_id, auto-create enrollments for
+    any modules listed in _AUTO_GRANT_ON_ACCEPT[source_module_id]. Returns count
+    of new enrollments created."""
+    created = 0
+    for linked_id in _AUTO_GRANT_ON_ACCEPT.get(source_module_id, []):
+        existing = (
+            db.query(ModuleEnrollment)
+            .filter(ModuleEnrollment.user_id == user.id, ModuleEnrollment.module_id == linked_id)
+            .first()
+        )
+        if existing:
+            if existing.revoked_at is not None:
+                existing.revoked_at = None
+                existing.granted_at = _now()
+                existing.granted_by_user_id = granted_by_user_id
+        else:
+            db.add(ModuleEnrollment(
+                user_id=user.id,
+                module_id=linked_id,
+                granted_by_user_id=granted_by_user_id,
+            ))
+            created += 1
+    return created
+
+
 # ─── student endpoints ─────────────────────────────────────────────────
 @router.get("/{module_id}/access", response_model=AccessOut)
 def get_access(
@@ -349,6 +388,8 @@ def accept_invitation(
     if pending:
         pending.resolved_at = _now()
         pending.resolution = "granted"
+    # Auto-grant linked modules (e.g. GT-05 → GT-06)
+    _ensure_linked_enrollments(user, inv.module_id, inv.created_by_user_id, db)
     db.commit()
     return {"ok": True, "already_accepted": False, "module_id": inv.module_id}
 
@@ -416,6 +457,82 @@ def put_progress(
     db.commit()
     db.refresh(row)
     return ProgressOut(payload=row.payload, updated_at=row.updated_at)
+
+
+
+
+class ModuleAccessOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    module_id: str
+    title: str
+    subtitle: str
+    url_base: str
+    enrolled: bool
+    granted_at: Optional[datetime] = None
+    last_active_at: Optional[datetime] = None
+    progress_summary: dict[str, Any] = {}
+    via_admin: bool = False
+
+
+@router.get("/my-modules", response_model=list[ModuleAccessOut])
+def my_modules(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ModuleAccessOut]:
+    """List all modules this user has access to. Used by the cross-module
+    directory page. Admins additionally see modules they're not enrolled in
+    (with via_admin=True) so they can preview/manage them."""
+    enrollments = (
+        db.query(ModuleEnrollment)
+        .filter(
+            ModuleEnrollment.user_id == user.id,
+            ModuleEnrollment.revoked_at.is_(None),
+        )
+        .all()
+    )
+    enrolled_ids = {e.module_id for e in enrollments}
+    progress_rows = (
+        db.query(ModuleProgress)
+        .filter(ModuleProgress.user_id == user.id)
+        .all()
+    )
+    progress_by_module = {p.module_id: p.payload for p in progress_rows}
+    enrollment_by_module = {e.module_id: e for e in enrollments}
+    out: list[ModuleAccessOut] = []
+    # First: all real enrollments, in module-id order
+    for mid in sorted(enrolled_ids):
+        info = _MODULES.get(mid)
+        if not info:
+            continue
+        e = enrollment_by_module[mid]
+        out.append(ModuleAccessOut(
+            module_id=mid,
+            title=info["title"],
+            subtitle=info["subtitle"],
+            url_base=info["url_base"],
+            enrolled=True,
+            granted_at=e.granted_at,
+            last_active_at=e.last_active_at,
+            progress_summary=_progress_summary(progress_by_module.get(mid, {})),
+            via_admin=False,
+        ))
+    # Then: any other known modules, visible only to admins for management
+    if user.is_admin:
+        for mid, info in _MODULES.items():
+            if mid in enrolled_ids:
+                continue
+            out.append(ModuleAccessOut(
+                module_id=mid,
+                title=info["title"],
+                subtitle=info["subtitle"],
+                url_base=info["url_base"],
+                enrolled=False,
+                granted_at=None,
+                last_active_at=None,
+                progress_summary=_progress_summary(progress_by_module.get(mid, {})),
+                via_admin=True,
+            ))
+    return out
 
 
 # ─── admin endpoints ───────────────────────────────────────────────────
@@ -713,6 +830,9 @@ def grant_access_request(
             module_id=module_id,
             granted_by_user_id=admin.id,
         ))
+    _student = db.query(User).filter(User.id == user_id).first()
+    if _student:
+        _ensure_linked_enrollments(_student, module_id, admin.id, db)
     req.resolved_at = _now()
     req.resolution = "granted"
     db.commit()
