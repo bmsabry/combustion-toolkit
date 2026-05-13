@@ -271,6 +271,34 @@ def _ensure_linked_enrollments(user, source_module_id: str, granted_by_user_id: 
     return created
 
 
+def _revoke_linked_enrollments(user_id: str, source_module_id: str, db: Session, _visited: set | None = None) -> int:
+    """Mirror of _ensure_linked_enrollments. When a user's enrollment in
+    source_module_id is revoked, also revoke any active downstream
+    enrollments granted by the cascade. Idempotent — already-revoked
+    rows are left untouched. Returns count of new revocations.
+    """
+    if _visited is None:
+        _visited = set()
+    if source_module_id in _visited:
+        return 0
+    _visited.add(source_module_id)
+    revoked = 0
+    for linked_id in _AUTO_GRANT_ON_ACCEPT.get(source_module_id, []):
+        existing = (
+            db.query(ModuleEnrollment)
+            .filter(ModuleEnrollment.user_id == user_id, ModuleEnrollment.module_id == linked_id)
+            .first()
+        )
+        if existing and existing.revoked_at is None:
+            existing.revoked_at = _now()
+            revoked += 1
+        # Recurse downstream regardless — even if this hop was already revoked,
+        # there might be further downstream rows that still need revoking.
+        revoked += _revoke_linked_enrollments(user_id, linked_id, db, _visited)
+    return revoked
+
+
+
 # ─── student endpoints ─────────────────────────────────────────────────
 @router.get("/{module_id}/access", response_model=AccessOut)
 def get_access(
@@ -757,10 +785,14 @@ def revoke_enrollment(
     if not enr:
         raise HTTPException(status_code=404, detail="Enrollment not found")
     if enr.revoked_at:
-        return {"ok": True, "already_revoked": True}
+        return {"ok": True, "already_revoked": True, "cascade_revoked": 0}
     enr.revoked_at = _now()
+    # Cascade: also revoke any downstream modules granted to this user via
+    # _AUTO_GRANT_ON_ACCEPT. Mirrors the grant cascade so revocation is a
+    # single atomic decision per upstream module.
+    cascade_revoked = _revoke_linked_enrollments(user_id, module_id, db)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "cascade_revoked": cascade_revoked}
 
 
 @router.post("/{module_id}/enrollments/{user_id}/restore")
@@ -779,12 +811,16 @@ def restore_enrollment(
     if not enr:
         raise HTTPException(status_code=404, detail="Enrollment not found")
     if not enr.revoked_at:
-        return {"ok": True, "already_active": True}
+        return {"ok": True, "already_active": True, "cascade_restored": 0}
     enr.revoked_at = None
     enr.granted_at = _now()
     enr.granted_by_user_id = admin.id
+    # Cascade: also restore (or create) downstream modules that should be
+    # granted by virtue of having this upstream module back.
+    user = db.query(User).filter(User.id == user_id).first()
+    cascade_restored = _ensure_linked_enrollments(user, module_id, admin.id, db) if user else 0
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "cascade_restored": cascade_restored}
 
 
 @router.get("/{module_id}/access-requests", response_model=list[AccessRequestOut])
