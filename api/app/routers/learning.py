@@ -878,3 +878,54 @@ def deny_access_request(
     req.resolution = "denied"
     db.commit()
     return {"ok": True}
+
+
+# ─── cross-module admin: cascade backfill ─────────────────────────────
+@router.post("/admin/backfill-cascade")
+def backfill_cascade(
+    admin: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Re-apply _AUTO_GRANT_ON_ACCEPT to every existing active enrollment.
+
+    Run this once after registering a new module + extending the cascade
+    map. For each existing active enrollment row, this calls
+    `_ensure_linked_enrollments`, which recursively walks the cascade map
+    and creates any missing downstream enrollment rows (or un-revokes
+    previously revoked ones). Idempotent — running twice does nothing
+    the second time. Returns a per-source-module breakdown of how many
+    new rows were created so the operator can sanity-check the result.
+    """
+    rows_per_source: dict[str, int] = {}
+    total_created = 0
+
+    active_enrollments = (
+        db.query(ModuleEnrollment)
+        .filter(ModuleEnrollment.revoked_at.is_(None))
+        .all()
+    )
+    # Group by (user_id, module_id) — we only need to seed the cascade once
+    # per active source enrollment.
+    seen_seeds: set[tuple[str, str]] = set()
+    for enr in active_enrollments:
+        seed = (enr.user_id, enr.module_id)
+        if seed in seen_seeds:
+            continue
+        seen_seeds.add(seed)
+        user = db.query(User).filter(User.id == enr.user_id).first()
+        if not user:
+            continue
+        created = _ensure_linked_enrollments(user, enr.module_id, admin.id, db)
+        if created > 0:
+            rows_per_source[enr.module_id] = rows_per_source.get(enr.module_id, 0) + created
+            total_created += created
+    db.commit()
+
+    return {
+        "ok": True,
+        "total_new_enrollments": total_created,
+        "by_source_module": rows_per_source,
+        "seeds_processed": len(seen_seeds),
+        "cascade_map": _AUTO_GRANT_ON_ACCEPT,
+        "registered_modules": list(_MODULES.keys()),
+    }
