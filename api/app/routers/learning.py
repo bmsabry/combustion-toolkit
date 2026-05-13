@@ -46,6 +46,11 @@ _MODULES = {
         "subtitle": "Design Principles & Fuel Delivery",
         "url_base": "https://smallgasturbine.gt-06.proreadyengineer.com",
     },
+    "gt-07": {
+        "title": "GT-07 — Axial Turbine",
+        "subtitle": "Aerodynamics, Blade Loading & Structural Integrity",
+        "url_base": "https://smallgasturbine.gt-07.proreadyengineer.com",
+    },
 }
 
 # When a user accepts an invitation OR is granted access to module X, also
@@ -53,6 +58,7 @@ _MODULES = {
 # grants GT-06. Granting GT-06 alone does NOT grant GT-05.
 _AUTO_GRANT_ON_ACCEPT = {
     "gt-05": ["gt-06"],
+    "gt-06": ["gt-07"],
 }
 
 
@@ -229,10 +235,18 @@ def _send_invite_email(invitation: ModuleInvitation, plaintext_token: str, invit
 
 
 
-def _ensure_linked_enrollments(user, source_module_id: str, granted_by_user_id: str, db: Session) -> int:
+def _ensure_linked_enrollments(user, source_module_id: str, granted_by_user_id: str, db: Session, _visited: set | None = None) -> int:
     """When user gets enrolled in source_module_id, auto-create enrollments for
-    any modules listed in _AUTO_GRANT_ON_ACCEPT[source_module_id]. Returns count
-    of new enrollments created."""
+    any modules listed in _AUTO_GRANT_ON_ACCEPT[source_module_id], AND
+    recursively cascade through their links too. Returns count of new
+    enrollments created. The _visited set prevents infinite loops if the
+    cascade map ever has a cycle.
+    """
+    if _visited is None:
+        _visited = set()
+    if source_module_id in _visited:
+        return 0
+    _visited.add(source_module_id)
     created = 0
     for linked_id in _AUTO_GRANT_ON_ACCEPT.get(source_module_id, []):
         existing = (
@@ -252,6 +266,8 @@ def _ensure_linked_enrollments(user, source_module_id: str, granted_by_user_id: 
                 granted_by_user_id=granted_by_user_id,
             ))
             created += 1
+        # Recurse: linked module may itself link to further modules
+        created += _ensure_linked_enrollments(user, linked_id, granted_by_user_id, db, _visited)
     return created
 
 
